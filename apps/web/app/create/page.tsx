@@ -1,0 +1,357 @@
+'use client';
+
+import Link from 'next/link';
+import { useMemo, useState } from 'react';
+
+type Theme = {
+  id: string;
+  slug: string;
+  name: string;
+  description: string;
+};
+
+type GeneratedScript = {
+  id: string;
+  version: number;
+  script_json: {
+    title: string;
+    narration: string[];
+    shots: Array<{
+      shotNumber: number;
+      durationSec: number;
+      action: string;
+      dialogue: string;
+    }>;
+  };
+};
+
+const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000';
+
+async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(`${apiBase}${path}`, {
+    ...init,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(init?.headers ?? {})
+    }
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `Request failed: ${response.status}`);
+  }
+
+  return (await response.json()) as T;
+}
+
+export default function CreateOrderPage(): JSX.Element {
+  const [themes, setThemes] = useState<Theme[]>([]);
+  const [email, setEmail] = useState('');
+  const [childName, setChildName] = useState('');
+  const [themeSlug, setThemeSlug] = useState('');
+  const [userId, setUserId] = useState('');
+  const [orderId, setOrderId] = useState('');
+  const [script, setScript] = useState<GeneratedScript | null>(null);
+  const [statusMessage, setStatusMessage] = useState('');
+  const [photoFiles, setPhotoFiles] = useState<FileList | null>(null);
+  const [voiceFile, setVoiceFile] = useState<File | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const canCreateUser = useMemo(() => email.length > 3, [email]);
+  const canCreateOrder = useMemo(() => userId.length > 0 && themeSlug.length > 0, [themeSlug, userId]);
+  const canGenerateScript = useMemo(
+    () => orderId.length > 0 && childName.length > 0 && photoFiles?.length && voiceFile,
+    [orderId, childName, photoFiles, voiceFile]
+  );
+
+  async function loadThemes(): Promise<void> {
+    setLoading(true);
+    try {
+      const data = await apiFetch<Theme[]>('/themes');
+      setThemes(data);
+      if (!themeSlug && data[0]) {
+        setThemeSlug(data[0].slug);
+      }
+      setStatusMessage(`Loaded ${data.length} active themes.`);
+    } catch (error) {
+      setStatusMessage((error as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function upsertUser(): Promise<void> {
+    setLoading(true);
+    try {
+      const user = await apiFetch<{ id: string }>('/users/upsert', {
+        method: 'POST',
+        body: JSON.stringify({ email })
+      });
+
+      setUserId(user.id);
+      setStatusMessage(`User ready: ${user.id}`);
+    } catch (error) {
+      setStatusMessage((error as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function createOrder(): Promise<void> {
+    setLoading(true);
+    try {
+      const order = await apiFetch<{ id: string }>('/orders', {
+        method: 'POST',
+        body: JSON.stringify({
+          userId,
+          themeSlug,
+          amountCents: 1999,
+          currency: 'usd'
+        })
+      });
+
+      setOrderId(order.id);
+
+      await apiFetch(`/orders/${order.id}/consent`, {
+        method: 'POST',
+        body: JSON.stringify({
+          userId,
+          version: 'mvp-v1',
+          userAgent: window.navigator.userAgent
+        })
+      });
+
+      setStatusMessage(`Order created + consent captured: ${order.id}`);
+    } catch (error) {
+      setStatusMessage((error as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function signUploads(): Promise<void> {
+    if (!orderId) return;
+
+    setLoading(true);
+    try {
+      const photoCount = photoFiles?.length ?? 0;
+      if (photoCount < 5 || photoCount > 15) {
+        throw new Error('Please select 5-15 photos before signing uploads.');
+      }
+
+      if (!voiceFile) {
+        throw new Error('Please select one voice sample (30-60 seconds) before signing uploads.');
+      }
+
+      for (const file of Array.from(photoFiles ?? [])) {
+        await apiFetch(`/orders/${orderId}/uploads/sign`, {
+          method: 'POST',
+          body: JSON.stringify({
+            kind: 'photo',
+            contentType: file.type || 'image/jpeg',
+            bytes: file.size,
+            sha256: `stub-${file.name}`
+          })
+        });
+      }
+
+      await apiFetch(`/orders/${orderId}/uploads/sign`, {
+        method: 'POST',
+        body: JSON.stringify({
+          kind: 'voice',
+          contentType: voiceFile.type || 'audio/wav',
+          bytes: voiceFile.size,
+          sha256: `stub-${voiceFile.name}`
+        })
+      });
+
+      setStatusMessage(`Signed ${photoCount + 1} upload intents.`);
+    } catch (error) {
+      setStatusMessage((error as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function generateAndPreviewScript(): Promise<void> {
+    if (!orderId) return;
+
+    setLoading(true);
+    try {
+      const generated = await apiFetch<GeneratedScript>(`/orders/${orderId}/script/generate`, {
+        method: 'POST',
+        body: JSON.stringify({
+          childName,
+          keywords: ['cinematic', 'keepsake']
+        })
+      });
+
+      setScript(generated);
+      setStatusMessage(`Generated script v${generated.version}.`);
+    } catch (error) {
+      setStatusMessage((error as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function approveScript(): Promise<void> {
+    if (!script || !orderId) return;
+
+    setLoading(true);
+    try {
+      await apiFetch(`/orders/${orderId}/script/approve`, {
+        method: 'POST',
+        body: JSON.stringify({ version: script.version })
+      });
+
+      setStatusMessage(`Approved script version ${script.version}.`);
+    } catch (error) {
+      setStatusMessage((error as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function payAndRender(): Promise<void> {
+    if (!orderId) return;
+
+    setLoading(true);
+    try {
+      await apiFetch(`/orders/${orderId}/pay`, {
+        method: 'POST',
+        body: JSON.stringify({})
+      });
+
+      setStatusMessage('Payment captured (stub). Async render started.');
+    } catch (error) {
+      setStatusMessage((error as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <main>
+      <h1>Create Keepsake Order</h1>
+      <p>
+        Guided MVP intake matching your spec: photos + voice upload intent, theme selection, script approval, payment,
+        and async delivery.
+      </p>
+
+      <section className="grid two">
+        <article className="card">
+          <h2>1. Parent Identity</h2>
+          <label htmlFor="email">Parent Email</label>
+          <input
+            id="email"
+            type="email"
+            placeholder="parent@example.com"
+            value={email}
+            onChange={(event) => setEmail(event.target.value)}
+          />
+          <button disabled={!canCreateUser || loading} onClick={upsertUser}>
+            Create/Load Parent
+          </button>
+          {userId ? <p className="mono">user_id: {userId}</p> : null}
+        </article>
+
+        <article className="card">
+          <h2>2. Theme + Child</h2>
+          <button disabled={loading} onClick={loadThemes}>
+            Load Themes
+          </button>
+          <label htmlFor="theme">Theme</label>
+          <select id="theme" value={themeSlug} onChange={(event) => setThemeSlug(event.target.value)}>
+            <option value="">Select theme</option>
+            {themes.map((theme) => (
+              <option key={theme.id} value={theme.slug}>
+                {theme.name}
+              </option>
+            ))}
+          </select>
+
+          <label htmlFor="childName">Child Name</label>
+          <input
+            id="childName"
+            placeholder="Avery"
+            value={childName}
+            onChange={(event) => setChildName(event.target.value)}
+          />
+
+          <button disabled={!canCreateOrder || loading} onClick={createOrder}>
+            Create Order + Capture Consent
+          </button>
+          {orderId ? <p className="mono">order_id: {orderId}</p> : null}
+        </article>
+      </section>
+
+      <section className="grid two">
+        <article className="card">
+          <h2>3. Upload Intake</h2>
+          <p>Photos: 5-15 JPG/PNG. Voice: one 30-60 second WAV/M4A sample.</p>
+
+          <label htmlFor="photos">Child Photos</label>
+          <input
+            id="photos"
+            type="file"
+            accept="image/png,image/jpeg"
+            multiple
+            onChange={(event) => setPhotoFiles(event.target.files)}
+          />
+
+          <label htmlFor="voice">Voice Sample</label>
+          <input
+            id="voice"
+            type="file"
+            accept="audio/wav,audio/m4a"
+            onChange={(event) => setVoiceFile(event.target.files?.[0] ?? null)}
+          />
+
+          <button disabled={!orderId || loading} onClick={signUploads}>
+            Sign Upload Intents
+          </button>
+        </article>
+
+        <article className="card">
+          <h2>4. Script, Approve, Pay</h2>
+          <button disabled={!canGenerateScript || loading} onClick={generateAndPreviewScript}>
+            Generate Script Preview
+          </button>
+          <button disabled={!script || loading} onClick={approveScript}>
+            Approve Script
+          </button>
+          <button disabled={!script || loading} onClick={payAndRender}>
+            Pay + Start Render
+          </button>
+          {orderId ? <Link href={`/orders/${orderId}`}>Open live order status</Link> : null}
+        </article>
+      </section>
+
+      {script ? (
+        <section className="card">
+          <h3>{script.script_json.title}</h3>
+          <p>Narration:</p>
+          <ul>
+            {script.script_json.narration.map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
+          <p>Shot Plan:</p>
+          <ul>
+            {script.script_json.shots.map((shot) => (
+              <li key={shot.shotNumber}>
+                Shot {shot.shotNumber} ({shot.durationSec}s): {shot.action} / {shot.dialogue}
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
+      <section className="card">
+        <span className="status-chip">Status</span>
+        <p>{statusMessage || 'No actions yet.'}</p>
+      </section>
+    </main>
+  );
+}

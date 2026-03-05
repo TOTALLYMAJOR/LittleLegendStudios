@@ -70,6 +70,25 @@ interface OrderStatusResponse {
   jobs: JobRow[];
   artifacts: ArtifactRow[];
   providerTasks: ProviderTaskRow[];
+  scenePlanThemeName: string | null;
+  scenePlanError: string | null;
+  scenePlan: Array<{
+    shotNumber: number;
+    shotType: 'narration' | 'dialogue';
+    durationSec: number;
+    sceneFallbackUsed: boolean;
+    sceneRenderSpec: {
+      sceneId: string;
+      sceneName: string;
+      sceneArchitecture: string;
+      camera: string;
+      lighting: string;
+      modelProfile: {
+        avatarModel: string;
+        compositorModel: string;
+      };
+    };
+  }>;
 }
 
 interface LifecycleStep {
@@ -278,6 +297,30 @@ export default async function OrderStatusPage({ params }: StatusPageProps): Prom
           <p>No provider tasks recorded yet.</p>
         ) : (
           <pre className="mono">{JSON.stringify(data.providerTasks, null, 2)}</pre>
+        )}
+      </section>
+
+      <section className="card">
+        <h2>Scene Plan + Models</h2>
+        {data.scenePlanError ? <p>{data.scenePlanError}</p> : null}
+        {data.scenePlan.length === 0 ? (
+          <p>No scene plan yet. Generate a script to see per-shot scene specs.</p>
+        ) : (
+          <>
+            <p>
+              Theme: <strong>{data.scenePlanThemeName ?? 'Unknown'}</strong>
+            </p>
+            <ul>
+              {data.scenePlan.map((entry) => (
+                <li key={`${entry.shotNumber}-${entry.sceneRenderSpec.sceneId}`}>
+                  Shot {entry.shotNumber} ({entry.shotType}, {entry.durationSec}s): {entry.sceneRenderSpec.sceneName}{' '}
+                  [{entry.sceneRenderSpec.camera} / {entry.sceneRenderSpec.lighting}] model=
+                  {entry.sceneRenderSpec.modelProfile.avatarModel} + {entry.sceneRenderSpec.modelProfile.compositorModel}
+                  {entry.sceneFallbackUsed ? ' (fallback scene match)' : ''}
+                </li>
+              ))}
+            </ul>
+          </>
         )}
       </section>
     </main>

@@ -68,6 +68,7 @@ npm run dev
 - Provider task admin routes for monitoring/retry (`GET /provider-tasks`, `POST /provider-tasks/:id/retry`)
 - Order status now includes provider task rows for live visibility in the status page
 - Order status/create UI surfaces latest watermarked preview links when available
+- Order status now includes computed per-shot scene plans with model profile tags (camera/lighting/assets/anchors) for render introspection
 - Admin order retry endpoint: `POST /admin/orders/:orderId/retry` (token-gated via `ADMIN_API_TOKEN`)
 - Status polling + final artifact link stub
 

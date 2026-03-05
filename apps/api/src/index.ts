@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import cors from '@fastify/cors';
-import { assertOrderTransition, type OrderStatus } from '@little/shared';
+import { assertOrderTransition, type OrderStatus, type SceneRenderSpec, type ScriptPayload, type ThemeManifest } from '@little/shared';
 import fastifyRawBody from 'fastify-raw-body';
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import type Stripe from 'stripe';
@@ -77,6 +77,22 @@ interface ProviderTaskStatusRow {
   last_polled_at: string | null;
   created_at: string;
   updated_at: string;
+}
+
+interface LatestScriptRow {
+  id: string;
+  version: number;
+  script_json: ScriptPayload;
+  approved_at: string | null;
+  created_at: string;
+}
+
+interface ScenePlanEntry {
+  shotNumber: number;
+  shotType: 'narration' | 'dialogue';
+  durationSec: number;
+  sceneFallbackUsed: boolean;
+  sceneRenderSpec: SceneRenderSpec;
 }
 
 const LAUNCH_PRICE_CENTS = 3900;
@@ -352,6 +368,54 @@ async function validateIntakeReadiness(order: OrderRow): Promise<string | null> 
   }
 
   return null;
+}
+
+function parseThemeManifest(value: unknown): ThemeManifest {
+  if (!value || typeof value !== 'object') {
+    throw new Error('Theme manifest is missing.');
+  }
+
+  const manifest = value as ThemeManifest;
+  if (!Array.isArray(manifest.scenes) || manifest.scenes.length === 0) {
+    throw new Error('Theme manifest must include at least one scene.');
+  }
+
+  return manifest;
+}
+
+function buildScenePlan(args: { script: ScriptPayload; manifest: ThemeManifest }): ScenePlanEntry[] {
+  const shots = [...args.script.shots].sort((a, b) => a.shotNumber - b.shotNumber);
+
+  return shots.map((shot, index) => {
+    const fallbackScene = args.manifest.scenes[index % args.manifest.scenes.length];
+    const matchedScene = args.manifest.scenes.find((scene) => scene.id === shot.sceneId);
+    const scene = matchedScene ?? fallbackScene;
+
+    const sceneRenderSpec: SceneRenderSpec = {
+      shotNumber: shot.shotNumber,
+      sceneId: scene.id,
+      sceneName: scene.name,
+      sceneArchitecture: args.manifest.sceneArchitecture,
+      camera: shot.camera || scene.cameraPreset,
+      lighting: shot.lighting || scene.lightingPreset,
+      environmentMotion: shot.environmentMotion.length > 0 ? shot.environmentMotion : scene.environmentMotionDefaults,
+      soundBed: scene.soundBed,
+      assets: scene.assets,
+      anchors: scene.anchors,
+      modelProfile: {
+        avatarModel: shot.shotType === 'dialogue' ? 'avatar_speech_v1' : 'avatar_idle_v1',
+        compositorModel: env.PROVIDER_INTEGRATION_MODE === 'stub' ? 'scene_parallax_compositor_v1_stub' : 'provider_scene_compositor_v1'
+      }
+    };
+
+    return {
+      shotNumber: shot.shotNumber,
+      shotType: shot.shotType,
+      durationSec: shot.durationSec,
+      sceneFallbackUsed: !matchedScene,
+      sceneRenderSpec
+    };
+  });
 }
 
 async function buildServer(): Promise<FastifyInstance> {
@@ -812,7 +876,7 @@ async function buildServer(): Promise<FastifyInstance> {
       return reply.status(404).send({ message: 'Order not found' });
     }
 
-    const latestScriptRows = await query(
+    const latestScriptRows = await query<LatestScriptRow>(
       `
       SELECT *
       FROM scripts
@@ -822,6 +886,38 @@ async function buildServer(): Promise<FastifyInstance> {
       `,
       [params.orderId]
     );
+    const latestScript = latestScriptRows[0] ?? null;
+
+    let scenePlanThemeName: string | null = null;
+    let scenePlan: ScenePlanEntry[] = [];
+    let scenePlanError: string | null = null;
+
+    if (latestScript) {
+      const themeRows = await query<Pick<ThemeRow, 'name' | 'template_manifest_json'>>(
+        `
+        SELECT name, template_manifest_json
+        FROM themes
+        WHERE id = $1
+        LIMIT 1
+        `,
+        [order.theme_id]
+      );
+
+      const theme = themeRows[0];
+      if (!theme) {
+        scenePlanError = 'Theme not found for order.';
+      } else {
+        scenePlanThemeName = theme.name;
+        try {
+          scenePlan = buildScenePlan({
+            script: latestScript.script_json,
+            manifest: parseThemeManifest(theme.template_manifest_json)
+          });
+        } catch (error) {
+          scenePlanError = (error as Error).message;
+        }
+      }
+    }
 
     const jobRows = await query(
       `
@@ -866,10 +962,13 @@ async function buildServer(): Promise<FastifyInstance> {
 
     return reply.send({
       order,
-      latestScript: latestScriptRows[0] ?? null,
+      latestScript,
       jobs: jobRows,
       artifacts: artifactsRows,
-      providerTasks: providerTaskRows
+      providerTasks: providerTaskRows,
+      scenePlanThemeName,
+      scenePlan,
+      scenePlanError
     });
   });
 

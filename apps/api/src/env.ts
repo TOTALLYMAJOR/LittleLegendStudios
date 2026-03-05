@@ -15,7 +15,16 @@ const schema = z.object({
   REDIS_URL: z.string().url(),
   API_PORT: z.coerce.number().int().positive().default(4000),
   NEXT_PUBLIC_API_BASE_URL: z.string().url().default('http://localhost:4000'),
+  WEB_APP_BASE_URL: z.string().url().default('http://localhost:3000'),
   PUBLIC_ASSET_BASE_URL: z.string().url().default('http://localhost:4000/assets'),
+  STRIPE_SECRET_KEY: z
+    .string()
+    .optional()
+    .transform((value) => (value && value.trim().length > 0 ? value : undefined)),
+  STRIPE_WEBHOOK_SECRET: z
+    .string()
+    .optional()
+    .transform((value) => (value && value.trim().length > 0 ? value : undefined)),
   AUTO_REFUND_ON_FAILURE: z
     .string()
     .optional()

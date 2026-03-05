@@ -30,7 +30,25 @@ CREATE TABLE IF NOT EXISTS orders (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES users(id),
   theme_id UUID NOT NULL REFERENCES themes(id),
-  status TEXT NOT NULL CHECK (status IN ('draft', 'awaiting_script_approval', 'paid', 'running', 'delivered', 'failed', 'refunded')),
+  status TEXT NOT NULL CHECK (
+    status IN (
+      'draft',
+      'intake_validating',
+      'needs_user_fix',
+      'awaiting_script_approval',
+      'script_regenerate',
+      'payment_pending',
+      'paid',
+      'running',
+      'failed_soft',
+      'failed_hard',
+      'refund_queued',
+      'manual_review',
+      'delivered',
+      'refunded',
+      'expired'
+    )
+  ),
   currency TEXT NOT NULL DEFAULT 'usd',
   amount_cents INT NOT NULL,
   stripe_payment_intent_id TEXT,
@@ -62,7 +80,9 @@ CREATE TABLE IF NOT EXISTS scripts (
 CREATE TABLE IF NOT EXISTS jobs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   order_id UUID NOT NULL REFERENCES orders(id),
-  type TEXT NOT NULL CHECK (type IN ('moderation', 'voice_clone', 'voice_render', 'character_pack', 'shot_render', 'final_render')),
+  type TEXT NOT NULL CHECK (
+    type IN ('moderation', 'voice_clone', 'voice_render', 'character_pack', 'shot_render', 'final_render', 'refund')
+  ),
   status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'succeeded', 'failed')),
   attempt INT NOT NULL DEFAULT 1,
   provider TEXT NOT NULL,
@@ -81,6 +101,42 @@ CREATE TABLE IF NOT EXISTS artifacts (
   s3_key TEXT NOT NULL,
   meta_json JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+UPDATE orders
+SET status = 'failed_hard'
+WHERE status = 'failed';
+
+ALTER TABLE orders
+DROP CONSTRAINT IF EXISTS orders_status_check;
+
+ALTER TABLE orders
+ADD CONSTRAINT orders_status_check CHECK (
+  status IN (
+    'draft',
+    'intake_validating',
+    'needs_user_fix',
+    'awaiting_script_approval',
+    'script_regenerate',
+    'payment_pending',
+    'paid',
+    'running',
+    'failed_soft',
+    'failed_hard',
+    'refund_queued',
+    'manual_review',
+    'delivered',
+    'refunded',
+    'expired'
+  )
+);
+
+ALTER TABLE jobs
+DROP CONSTRAINT IF EXISTS jobs_type_check;
+
+ALTER TABLE jobs
+ADD CONSTRAINT jobs_type_check CHECK (
+  type IN ('moderation', 'voice_clone', 'voice_render', 'character_pack', 'shot_render', 'final_render', 'refund')
 );
 
 CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders(user_id);

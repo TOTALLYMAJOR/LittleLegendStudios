@@ -14,6 +14,10 @@ const schema = z.object({
   DATABASE_URL: z.string().url(),
   REDIS_URL: z.string().url(),
   PUBLIC_ASSET_BASE_URL: z.string().url().default('http://localhost:4000/assets'),
+  STRIPE_SECRET_KEY: z
+    .string()
+    .optional()
+    .transform((value) => (value && value.trim().length > 0 ? value : undefined)),
   AUTO_REFUND_ON_FAILURE: z
     .string()
     .optional()

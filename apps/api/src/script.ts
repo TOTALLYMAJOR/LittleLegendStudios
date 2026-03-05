@@ -1,37 +1,55 @@
-import type { ScriptPayload } from '@little/shared';
+import type { ScriptPayload, ThemeManifest } from '@little/shared';
+import { z } from 'zod';
+
+import { compileCinematicShotPlan } from './prompt-engine.js';
 
 interface ScriptInput {
   childName: string;
   themeName: string;
+  keywords?: string[];
+  templateManifest: unknown;
 }
 
-export function generateScript({ childName, themeName }: ScriptInput): ScriptPayload {
-  return {
-    title: `${childName}'s ${themeName} Adventure`,
-    narration: [
-      `${childName} steps into the ${themeName} world with courage and wonder.`,
-      `Every glowing path reveals a new challenge and a little laugh.`,
-      `${childName} returns home proud, with a story to tell forever.`
-    ],
-    shots: [
-      {
-        shotNumber: 1,
-        durationSec: 10,
-        action: `Cinematic reveal of ${childName} entering the world`,
-        dialogue: `Wow... this place is amazing!`
-      },
-      {
-        shotNumber: 2,
-        durationSec: 12,
-        action: `${childName} faces a playful obstacle with confidence`,
-        dialogue: `I can do this. Let's go!`
-      },
-      {
-        shotNumber: 3,
-        durationSec: 10,
-        action: `${childName} celebrates and waves as camera pulls back`,
-        dialogue: `Best adventure ever!`
-      }
-    ]
-  };
+const themeManifestSchema = z.object({
+  heroShotTemplates: z.number().int().positive(),
+  environmentCount: z.number().int().positive(),
+  style: z.string().min(1),
+  sceneArchitecture: z.string().min(1),
+  durationMinSec: z.number().int().positive(),
+  durationMaxSec: z.number().int().positive(),
+  scenes: z
+    .array(
+      z.object({
+        id: z.string().min(1),
+        name: z.string().min(1),
+        cameraPreset: z.string().min(1),
+        lightingPreset: z.string().min(1),
+        environmentMotionDefaults: z.array(z.string()).default([]),
+        soundBed: z.string().min(1),
+        anchors: z.object({
+          child: z.object({
+            x: z.number(),
+            y: z.number(),
+            scale: z.number().positive()
+          })
+        }),
+        assets: z.object({
+          bgLoop: z.string().min(1),
+          particlesOverlay: z.string().min(1),
+          lut: z.string().min(1)
+        })
+      })
+    )
+    .min(1)
+});
+
+export function generateScript({ childName, themeName, keywords, templateManifest }: ScriptInput): ScriptPayload {
+  const manifest = themeManifestSchema.parse(templateManifest) as ThemeManifest;
+
+  return compileCinematicShotPlan({
+    childName,
+    themeName,
+    keywords,
+    manifest
+  });
 }

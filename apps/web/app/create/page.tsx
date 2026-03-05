@@ -25,7 +25,14 @@ type GeneratedScript = {
   };
 };
 
+type PayResponse = {
+  provider: 'stripe' | 'stripe_stub';
+  checkoutUrl?: string;
+  paymentIntentId?: string;
+};
+
 const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000';
+const launchPriceLabel = '$39';
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${apiBase}${path}`, {
@@ -52,6 +59,7 @@ export default function CreateOrderPage(): JSX.Element {
   const [userId, setUserId] = useState('');
   const [orderId, setOrderId] = useState('');
   const [script, setScript] = useState<GeneratedScript | null>(null);
+  const [isScriptApproved, setIsScriptApproved] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
   const [photoFiles, setPhotoFiles] = useState<FileList | null>(null);
   const [voiceFile, setVoiceFile] = useState<File | null>(null);
@@ -59,10 +67,11 @@ export default function CreateOrderPage(): JSX.Element {
 
   const canCreateUser = useMemo(() => email.length > 3, [email]);
   const canCreateOrder = useMemo(() => userId.length > 0 && themeSlug.length > 0, [themeSlug, userId]);
-  const canGenerateScript = useMemo(
-    () => orderId.length > 0 && childName.length > 0 && photoFiles?.length && voiceFile,
-    [orderId, childName, photoFiles, voiceFile]
-  );
+  const canGenerateScript = useMemo(() => {
+    const photoCount = photoFiles?.length ?? 0;
+    return Boolean(orderId.length > 0 && childName.length > 0 && photoCount >= 5 && photoCount <= 15 && voiceFile);
+  }, [orderId, childName, photoFiles, voiceFile]);
+  const canPay = useMemo(() => orderId.length > 0 && Boolean(script) && isScriptApproved, [isScriptApproved, orderId, script]);
 
   async function loadThemes(): Promise<void> {
     setLoading(true);
@@ -105,7 +114,6 @@ export default function CreateOrderPage(): JSX.Element {
         body: JSON.stringify({
           userId,
           themeSlug,
-          amountCents: 1999,
           currency: 'usd'
         })
       });
@@ -122,6 +130,8 @@ export default function CreateOrderPage(): JSX.Element {
       });
 
       setStatusMessage(`Order created + consent captured: ${order.id}`);
+      setScript(null);
+      setIsScriptApproved(false);
     } catch (error) {
       setStatusMessage((error as Error).message);
     } finally {
@@ -187,6 +197,7 @@ export default function CreateOrderPage(): JSX.Element {
       });
 
       setScript(generated);
+      setIsScriptApproved(false);
       setStatusMessage(`Generated script v${generated.version}.`);
     } catch (error) {
       setStatusMessage((error as Error).message);
@@ -206,6 +217,7 @@ export default function CreateOrderPage(): JSX.Element {
       });
 
       setStatusMessage(`Approved script version ${script.version}.`);
+      setIsScriptApproved(true);
     } catch (error) {
       setStatusMessage((error as Error).message);
     } finally {
@@ -218,10 +230,15 @@ export default function CreateOrderPage(): JSX.Element {
 
     setLoading(true);
     try {
-      await apiFetch(`/orders/${orderId}/pay`, {
+      const payResponse = await apiFetch<PayResponse>(`/orders/${orderId}/pay`, {
         method: 'POST',
         body: JSON.stringify({})
       });
+
+      if (payResponse.provider === 'stripe' && payResponse.checkoutUrl) {
+        window.location.href = payResponse.checkoutUrl;
+        return;
+      }
 
       setStatusMessage('Payment captured (stub). Async render started.');
     } catch (error) {
@@ -235,8 +252,8 @@ export default function CreateOrderPage(): JSX.Element {
     <main>
       <h1>Create Keepsake Order</h1>
       <p>
-        Guided MVP intake matching your spec: photos + voice upload intent, theme selection, script approval, payment,
-        and async delivery.
+        Guided MVP intake matching your spec: photos + voice upload intent, theme selection, script approval, {launchPriceLabel}{' '}
+        checkout, and async delivery.
       </p>
 
       <section className="grid two">
@@ -316,13 +333,13 @@ export default function CreateOrderPage(): JSX.Element {
         <article className="card">
           <h2>4. Script, Approve, Pay</h2>
           <button disabled={!canGenerateScript || loading} onClick={generateAndPreviewScript}>
-            Generate Script Preview
+            Generate / Regenerate Script
           </button>
           <button disabled={!script || loading} onClick={approveScript}>
             Approve Script
           </button>
-          <button disabled={!script || loading} onClick={payAndRender}>
-            Pay + Start Render
+          <button disabled={!canPay || loading} onClick={payAndRender}>
+            Pay {launchPriceLabel} + Start Render
           </button>
           {orderId ? <Link href={`/orders/${orderId}`}>Open live order status</Link> : null}
         </article>
@@ -345,6 +362,7 @@ export default function CreateOrderPage(): JSX.Element {
               </li>
             ))}
           </ul>
+          <p className="mono">Script approved: {isScriptApproved ? 'yes' : 'no'}</p>
         </section>
       ) : null}
 

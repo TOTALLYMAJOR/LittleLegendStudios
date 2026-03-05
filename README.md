@@ -46,12 +46,19 @@ npm run dev
 
 - Create user + order
 - Upload metadata intake (photo/voice signed URL stub)
-- Script generation + approval
-- Payment simulation and async queue kickoff
-- Worker mock pipeline to delivered/failure
+- Intake gating before script generation:
+  - parental consent required
+  - 5-15 photos (JPEG/PNG)
+  - exactly 1 voice sample (WAV/M4A)
+- Script generation + approval (deterministic 4-shot, 20-40s structure, max 3 versions/order)
+- Cinematic Prompt Engine scaffold (scene-aware shot plan with camera/lighting/environment cues)
+- Theme scene packs in template manifests (10 scenes per launch theme with anchors and asset pointers)
+- Expanded lifecycle states for retries/refunds (`failed_soft`, `failed_hard`, `refund_queued`, `manual_review`)
+- Stripe checkout + webhook path (real when Stripe env vars are set, stub fallback otherwise)
+- Worker pipeline consumes shot plans and writes per-shot `shot_video` artifacts
 - Status polling + final artifact link stub
 
 ## Notes
 
-- Stripe, S3 signed URLs, email provider, and AI providers are currently mocked behind deterministic stubs.
+- Stripe is integrated with optional real mode (`STRIPE_SECRET_KEY` + `STRIPE_WEBHOOK_SECRET`); storage/email/AI providers remain mocked.
 - This is a foundation for Milestones M1-M3 from the product spec.

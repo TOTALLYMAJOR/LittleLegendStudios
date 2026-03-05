@@ -116,8 +116,58 @@ button:disabled {
   font-weight: 700;
 }
 
+.status-chip.warning {
+  background: #f8e7d0;
+  color: #7d3e15;
+}
+
+.status-chip.success {
+  background: #d9f0df;
+  color: #1f5b2f;
+}
+
 .mono {
   font-family: "Courier New", monospace;
   font-size: 0.9rem;
   word-break: break-all;
+}
+
+.timeline {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.timeline-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0.55rem 0.65rem;
+  color: var(--muted);
+  background: #fff;
+}
+
+.timeline-row.current {
+  border-color: var(--accent);
+  color: var(--ink);
+}
+
+.timeline-row.done {
+  border-color: #9ec3aa;
+  color: #2d6540;
+  background: #f4faf6;
+}
+
+.timeline-index {
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  font-weight: 700;
+  background: var(--accent-soft);
+  color: #68351b;
 }

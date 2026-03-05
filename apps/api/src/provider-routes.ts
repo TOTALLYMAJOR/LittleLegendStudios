@@ -137,6 +137,13 @@ const providerTaskWebhookSchema = z.object({
   errorText: z.string().optional()
 });
 
+const providerTaskListQuerySchema = z.object({
+  status: providerTaskStatusSchema.optional(),
+  orderId: z.string().uuid().optional(),
+  provider: z.string().min(1).optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(50)
+});
+
 type ProviderUpload = z.infer<typeof providerUploadSchema>;
 
 type CharacterProfile = z.infer<typeof characterProfileSchema>;
@@ -1094,6 +1101,75 @@ function buildFallbackFinalCompose(args: {
 }
 
 export function registerProviderRoutes(app: FastifyInstance): void {
+  app.get('/provider-tasks', async (request, reply) => {
+    if (!hasProviderAuth(request)) {
+      return reply.status(401).send({ message: 'Unauthorized provider task request.' });
+    }
+
+    try {
+      const queryParams = providerTaskListQuerySchema.parse(request.query);
+
+      const whereClauses: string[] = [];
+      const values: unknown[] = [];
+
+      if (queryParams.status) {
+        values.push(queryParams.status);
+        whereClauses.push(`status = $${values.length}`);
+      }
+
+      if (queryParams.orderId) {
+        values.push(queryParams.orderId);
+        whereClauses.push(`order_id = $${values.length}`);
+      }
+
+      if (queryParams.provider) {
+        values.push(queryParams.provider);
+        whereClauses.push(`provider = $${values.length}`);
+      }
+
+      values.push(queryParams.limit);
+      const sql = `
+        SELECT
+          provider_task_id,
+          provider,
+          order_id,
+          job_type,
+          status,
+          artifact_key,
+          input_json,
+          output_json,
+          error_text,
+          last_polled_at,
+          created_at,
+          updated_at
+        FROM provider_tasks
+        ${whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : ''}
+        ORDER BY updated_at DESC
+        LIMIT $${values.length}
+      `;
+
+      const rows = await query<ProviderTaskRow>(sql, values);
+      return reply.send({
+        count: rows.length,
+        tasks: rows.map((task) => ({
+          providerTaskId: task.provider_task_id,
+          provider: task.provider,
+          orderId: task.order_id,
+          jobType: task.job_type,
+          status: task.status,
+          artifactKey: task.artifact_key,
+          output: task.output_json,
+          errorText: task.error_text,
+          lastPolledAt: task.last_polled_at,
+          createdAt: task.created_at,
+          updatedAt: task.updated_at
+        }))
+      });
+    } catch (error) {
+      return sendProviderError(reply, request, error);
+    }
+  });
+
   app.get('/provider-tasks/:providerTaskId', async (request, reply) => {
     if (!hasProviderAuth(request)) {
       return reply.status(401).send({ message: 'Unauthorized provider task request.' });
@@ -1107,6 +1183,61 @@ export function registerProviderRoutes(app: FastifyInstance): void {
       }
 
       const refreshed = await refreshProviderTask(task);
+      return reply.send({
+        providerTaskId: refreshed.provider_task_id,
+        provider: refreshed.provider,
+        orderId: refreshed.order_id,
+        jobType: refreshed.job_type,
+        status: refreshed.status,
+        artifactKey: refreshed.artifact_key,
+        output: refreshed.output_json,
+        errorText: refreshed.error_text,
+        lastPolledAt: refreshed.last_polled_at,
+        createdAt: refreshed.created_at,
+        updatedAt: refreshed.updated_at
+      });
+    } catch (error) {
+      return sendProviderError(reply, request, error);
+    }
+  });
+
+  app.post('/provider-tasks/:providerTaskId/retry', async (request, reply) => {
+    if (!hasProviderAuth(request)) {
+      return reply.status(401).send({ message: 'Unauthorized provider task request.' });
+    }
+
+    try {
+      const params = z.object({ providerTaskId: z.string().min(1) }).parse(request.params);
+      const task = await getProviderTask(params.providerTaskId);
+      if (!task) {
+        return reply.status(404).send({ message: 'Provider task not found.' });
+      }
+
+      if (task.status !== 'failed') {
+        return reply.status(409).send({
+          message: `Only failed tasks can be retried. Current status is ${task.status}.`
+        });
+      }
+
+      await query(
+        `
+        UPDATE provider_tasks
+        SET
+          status = 'queued',
+          error_text = NULL,
+          output_json = output_json || jsonb_build_object('retryRequestedAt', to_jsonb(now()::text)),
+          last_polled_at = NULL,
+          updated_at = now()
+        WHERE provider_task_id = $1
+        `,
+        [params.providerTaskId]
+      );
+
+      const refreshed = await getProviderTask(params.providerTaskId);
+      if (!refreshed) {
+        return reply.status(500).send({ message: 'Provider task missing after retry update.' });
+      }
+
       return reply.send({
         providerTaskId: refreshed.provider_task_id,
         provider: refreshed.provider,

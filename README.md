@@ -63,6 +63,7 @@ npm run dev
 - API now exposes internal provider endpoints for model + scene generation (`/voice/clone`, `/voice/render`, `/scene/*`)
 - API provider endpoints support real integration attempts for ElevenLabs (voice), HeyGen (shot generation), and Shotstack (final compose) with fallback behavior.
 - Provider task tracking with polling/webhook endpoints (`GET /provider-tasks/:id`, `POST /provider-tasks/webhook`) and DB persistence
+- Provider task admin routes for monitoring/retry (`GET /provider-tasks`, `POST /provider-tasks/:id/retry`)
 - Status polling + final artifact link stub
 
 ## Notes

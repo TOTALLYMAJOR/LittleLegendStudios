@@ -1,6 +1,7 @@
 import { type JobType, type ScriptPayload, assertOrderTransition, type OrderStatus } from '@little/shared';
 import { QueueEvents, Worker } from 'bullmq';
 
+import { createSignedDownloadUrl } from './assets.js';
 import { query } from './db.js';
 import { env } from './env.js';
 import type { WorkerUpload } from './providers.js';
@@ -416,7 +417,7 @@ async function runPipeline(orderId: string, attempt: number): Promise<void> {
 
   await createArtifact(orderId, 'voice_clone_meta', voiceClone.voiceCloneArtifactKey, {
     ...voiceClone.voiceCloneMeta,
-    signedDownloadUrl: `${env.PUBLIC_ASSET_BASE_URL}/download/${encodeURIComponent(voiceClone.voiceCloneArtifactKey)}?token=dev`
+    signedDownloadUrl: createSignedDownloadUrl(voiceClone.voiceCloneArtifactKey)
   });
 
   const voiceTracks = await providers.voice.renderVoiceTracks({
@@ -448,12 +449,12 @@ async function runPipeline(orderId: string, attempt: number): Promise<void> {
 
   await createArtifact(orderId, 'audio_narration', voiceTracks.narrationArtifactKey, {
     ...voiceTracks.narrationMeta,
-    signedDownloadUrl: `${env.PUBLIC_ASSET_BASE_URL}/download/${encodeURIComponent(voiceTracks.narrationArtifactKey)}?token=dev`
+    signedDownloadUrl: createSignedDownloadUrl(voiceTracks.narrationArtifactKey)
   });
 
   await createArtifact(orderId, 'audio_dialogue', voiceTracks.dialogueArtifactKey, {
     ...voiceTracks.dialogueMeta,
-    signedDownloadUrl: `${env.PUBLIC_ASSET_BASE_URL}/download/${encodeURIComponent(voiceTracks.dialogueArtifactKey)}?token=dev`
+    signedDownloadUrl: createSignedDownloadUrl(voiceTracks.dialogueArtifactKey)
   });
 
   const characterPack = await providers.scene.createCharacterPack({
@@ -484,7 +485,7 @@ async function runPipeline(orderId: string, attempt: number): Promise<void> {
 
   await createArtifact(orderId, 'character_refs', characterPack.refsArtifactKey, {
     ...characterPack.refsMeta,
-    signedDownloadUrl: `${env.PUBLIC_ASSET_BASE_URL}/download/${encodeURIComponent(characterPack.refsArtifactKey)}?token=dev`
+    signedDownloadUrl: createSignedDownloadUrl(characterPack.refsArtifactKey)
   });
 
   const shotArtifactKeys: string[] = [];
@@ -511,7 +512,7 @@ async function runPipeline(orderId: string, attempt: number): Promise<void> {
     shotArtifactKeys.push(shotRender.shotArtifactKey);
     await createArtifact(orderId, 'shot_video', shotRender.shotArtifactKey, {
       ...shotRender.shotMeta,
-      signedDownloadUrl: `${env.PUBLIC_ASSET_BASE_URL}/download/${encodeURIComponent(shotRender.shotArtifactKey)}?token=dev`
+      signedDownloadUrl: createSignedDownloadUrl(shotRender.shotArtifactKey)
     });
   }
 
@@ -537,11 +538,11 @@ async function runPipeline(orderId: string, attempt: number): Promise<void> {
 
   await createArtifact(orderId, 'final_video', finalCompose.finalVideoArtifactKey, {
     ...finalCompose.finalVideoMeta,
-    signedDownloadUrl: `${env.PUBLIC_ASSET_BASE_URL}/download/${encodeURIComponent(finalCompose.finalVideoArtifactKey)}?token=dev`
+    signedDownloadUrl: createSignedDownloadUrl(finalCompose.finalVideoArtifactKey)
   });
   await createArtifact(orderId, 'thumbnail', finalCompose.thumbnailArtifactKey, {
     ...finalCompose.thumbnailMeta,
-    signedDownloadUrl: `${env.PUBLIC_ASSET_BASE_URL}/download/${encodeURIComponent(finalCompose.thumbnailArtifactKey)}?token=dev`
+    signedDownloadUrl: createSignedDownloadUrl(finalCompose.thumbnailArtifactKey)
   });
 
   await setOrderStatus(orderId, 'delivered');

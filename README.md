@@ -45,7 +45,7 @@ npm run dev
 ## Current Vertical Slice
 
 - Create user + order
-- Upload metadata intake (photo/voice signed URL stub)
+- Signed upload/download URL flow with local binary asset store (`/assets/upload/*`, `/assets/download/*`)
 - Intake gating before script generation:
   - parental consent required
   - 5-15 photos (JPEG/PNG)
@@ -65,6 +65,7 @@ npm run dev
 ## Notes
 
 - Stripe is integrated with optional real mode (`STRIPE_SECRET_KEY` + `STRIPE_WEBHOOK_SECRET`); storage/email/AI providers remain mocked.
+- Asset URLs are HMAC-signed (`ASSET_SIGNING_SECRET`) with TTL controls and stored under `ASSET_LOCAL_ROOT` for local dev.
 - To run model + scene generation through local API provider routes, set worker envs:
   - `VOICE_PROVIDER_MODE=http`
   - `VOICE_PROVIDER_BASE_URL=http://localhost:4000`

@@ -14,6 +14,8 @@ const schema = z.object({
   DATABASE_URL: z.string().url(),
   REDIS_URL: z.string().url(),
   PUBLIC_ASSET_BASE_URL: z.string().url().default('http://localhost:4000/assets'),
+  ASSET_SIGNING_SECRET: z.string().min(16).default('dev_asset_signing_secret_change_me'),
+  ASSET_DOWNLOAD_URL_TTL_SEC: z.coerce.number().int().positive().default(3600),
   VOICE_PROVIDER_MODE: z.enum(['stub', 'http']).default('stub'),
   VOICE_PROVIDER_BASE_URL: z
     .string()

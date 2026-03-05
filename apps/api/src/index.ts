@@ -7,6 +7,8 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import type Stripe from 'stripe';
 import { z } from 'zod';
 
+import { createSignedUploadUrl, registerAssetRoutes } from './asset-routes.js';
+import { deleteAssetByKey } from './asset-store.js';
 import { query } from './db.js';
 import { env } from './env.js';
 import { registerProviderRoutes } from './provider-routes.js';
@@ -57,6 +59,10 @@ interface UploadKindSummaryRow {
   kind: 'photo' | 'voice';
   count: number;
   normalized_content_types: string[] | null;
+}
+
+interface AssetKeyRow {
+  s3_key: string;
 }
 
 const LAUNCH_PRICE_CENTS = 3900;
@@ -261,6 +267,7 @@ async function buildServer(): Promise<FastifyInstance> {
   await seedThemes();
 
   app.get('/health', async () => ({ ok: true }));
+  registerAssetRoutes(app);
   registerProviderRoutes(app);
 
   app.post('/payments/stripe/webhook', async (request, reply) => {
@@ -417,6 +424,12 @@ async function buildServer(): Promise<FastifyInstance> {
       return reply.status(400).send({ message: expectedTypeMessage });
     }
 
+    if (payload.bytes > env.ASSET_MAX_UPLOAD_BYTES) {
+      return reply.status(400).send({
+        message: `Upload exceeds max allowed size of ${env.ASSET_MAX_UPLOAD_BYTES} bytes.`
+      });
+    }
+
     const [uploadCountRow] = await query<UploadCountRow>(
       'SELECT COUNT(*)::int AS count FROM uploads WHERE order_id = $1 AND kind = $2',
       [params.orderId, payload.kind]
@@ -445,13 +458,13 @@ async function buildServer(): Promise<FastifyInstance> {
       [uploadId, params.orderId, payload.kind, s3Key, normalizedContentType, payload.bytes, payload.sha256 ?? null]
     );
 
-    const signedUploadUrl = `${env.PUBLIC_ASSET_BASE_URL}/upload/${encodeURIComponent(s3Key)}?token=dev`;
+    const signedUploadUrl = createSignedUploadUrl(s3Key);
 
     return reply.send({
       uploadId,
       s3Key,
       signedUploadUrl,
-      expiresInSec: 900
+      expiresInSec: env.ASSET_UPLOAD_URL_TTL_SEC
     });
   });
 
@@ -684,6 +697,12 @@ async function buildServer(): Promise<FastifyInstance> {
     if (!order) {
       return reply.status(404).send({ message: 'Order not found' });
     }
+
+    const uploadRows = await query<AssetKeyRow>('SELECT s3_key FROM uploads WHERE order_id = $1', [params.orderId]);
+    const artifactRows = await query<AssetKeyRow>('SELECT s3_key FROM artifacts WHERE order_id = $1', [params.orderId]);
+
+    const assetKeys = [...uploadRows, ...artifactRows].map((row) => row.s3_key);
+    await Promise.all(assetKeys.map((assetKey) => deleteAssetByKey(assetKey).catch(() => undefined)));
 
     await query('DELETE FROM uploads WHERE order_id = $1', [params.orderId]);
     await query('DELETE FROM artifacts WHERE order_id = $1', [params.orderId]);

@@ -31,6 +31,13 @@ type PayResponse = {
   paymentIntentId?: string;
 };
 
+type UploadSignResponse = {
+  uploadId: string;
+  s3Key: string;
+  signedUploadUrl: string;
+  expiresInSec: number;
+};
+
 const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000';
 const launchPriceLabel = '$39';
 
@@ -49,6 +56,33 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   return (await response.json()) as T;
+}
+
+async function fileSha256(file: File): Promise<string> {
+  const bytes = await file.arrayBuffer();
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(digest))
+    .map((value) => value.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+async function uploadFileToSignedUrl(args: {
+  signedUploadUrl: string;
+  contentType: string;
+  file: File;
+}): Promise<void> {
+  const response = await fetch(args.signedUploadUrl, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': args.contentType
+    },
+    body: args.file
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `Signed upload failed (${response.status}).`);
+  }
 }
 
 export default function CreateOrderPage(): JSX.Element {
@@ -154,28 +188,44 @@ export default function CreateOrderPage(): JSX.Element {
       }
 
       for (const file of Array.from(photoFiles ?? [])) {
-        await apiFetch(`/orders/${orderId}/uploads/sign`, {
+        const contentType = file.type || 'image/jpeg';
+        const sha256 = await fileSha256(file);
+        const signed = await apiFetch<UploadSignResponse>(`/orders/${orderId}/uploads/sign`, {
           method: 'POST',
           body: JSON.stringify({
             kind: 'photo',
-            contentType: file.type || 'image/jpeg',
+            contentType,
             bytes: file.size,
-            sha256: `stub-${file.name}`
+            sha256
           })
+        });
+
+        await uploadFileToSignedUrl({
+          signedUploadUrl: signed.signedUploadUrl,
+          contentType,
+          file
         });
       }
 
-      await apiFetch(`/orders/${orderId}/uploads/sign`, {
+      const voiceContentType = voiceFile.type || 'audio/wav';
+      const voiceSha256 = await fileSha256(voiceFile);
+      const signedVoice = await apiFetch<UploadSignResponse>(`/orders/${orderId}/uploads/sign`, {
         method: 'POST',
         body: JSON.stringify({
           kind: 'voice',
-          contentType: voiceFile.type || 'audio/wav',
+          contentType: voiceContentType,
           bytes: voiceFile.size,
-          sha256: `stub-${voiceFile.name}`
+          sha256: voiceSha256
         })
       });
 
-      setStatusMessage(`Signed ${photoCount + 1} upload intents.`);
+      await uploadFileToSignedUrl({
+        signedUploadUrl: signedVoice.signedUploadUrl,
+        contentType: voiceContentType,
+        file: voiceFile
+      });
+
+      setStatusMessage(`Uploaded ${photoCount + 1} files to signed asset URLs.`);
     } catch (error) {
       setStatusMessage((error as Error).message);
     } finally {

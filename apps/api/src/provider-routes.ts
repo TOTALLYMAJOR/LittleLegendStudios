@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 
-import type { ScriptPayload, ThemeManifest } from '@little/shared';
+import { buildSignedAssetUrl, type ScriptPayload, type ThemeManifest } from '@little/shared';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 
@@ -282,8 +282,14 @@ async function postJson(args: {
 }
 
 function buildAssetDownloadUrl(s3Key: string): string {
-  const base = normalizeBaseUrl(env.PROVIDER_SOURCE_ASSET_BASE_URL ?? env.PUBLIC_ASSET_BASE_URL);
-  return `${base}/download/${encodeURIComponent(s3Key)}?token=dev`;
+  const base = env.PROVIDER_SOURCE_ASSET_BASE_URL ?? env.PUBLIC_ASSET_BASE_URL;
+  return buildSignedAssetUrl({
+    baseUrl: normalizeBaseUrl(base),
+    purpose: 'download',
+    key: s3Key,
+    expiresInSec: env.ASSET_DOWNLOAD_URL_TTL_SEC,
+    secret: env.ASSET_SIGNING_SECRET
+  });
 }
 
 async function fetchSourceAssetBytes(upload: ProviderUpload): Promise<{ contentType: string; bytes: ArrayBuffer; sourceUrl: string }> {

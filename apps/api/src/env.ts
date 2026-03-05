@@ -17,6 +17,11 @@ const schema = z.object({
   NEXT_PUBLIC_API_BASE_URL: z.string().url().default('http://localhost:4000'),
   WEB_APP_BASE_URL: z.string().url().default('http://localhost:3000'),
   PUBLIC_ASSET_BASE_URL: z.string().url().default('http://localhost:4000/assets'),
+  ASSET_SIGNING_SECRET: z.string().min(16).default('dev_asset_signing_secret_change_me'),
+  ASSET_UPLOAD_URL_TTL_SEC: z.coerce.number().int().positive().default(900),
+  ASSET_DOWNLOAD_URL_TTL_SEC: z.coerce.number().int().positive().default(3600),
+  ASSET_MAX_UPLOAD_BYTES: z.coerce.number().int().positive().default(26214400),
+  ASSET_LOCAL_ROOT: z.string().min(1).default('/tmp/little-legend-assets'),
   PROVIDER_INTEGRATION_MODE: z.enum(['stub', 'hybrid', 'strict']).default('stub'),
   PROVIDER_HTTP_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
   PROVIDER_SOURCE_ASSET_BASE_URL: z

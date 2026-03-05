@@ -28,9 +28,9 @@ const allowedTransitions: Record<OrderStatus, OrderStatus[]> = {
   paid: ['running'],
   running: ['delivered', 'failed_soft', 'failed_hard'],
   failed_soft: ['running', 'failed_hard'],
-  failed_hard: ['refund_queued'],
+  failed_hard: ['refund_queued', 'failed_soft'],
   refund_queued: ['refunded', 'manual_review'],
-  manual_review: ['refunded'],
+  manual_review: ['refunded', 'failed_soft'],
   delivered: ['expired'],
   refunded: [],
   expired: []

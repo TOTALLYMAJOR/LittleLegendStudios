@@ -41,6 +41,10 @@ const schema = z.object({
     .string()
     .optional()
     .transform((value) => (value && value.trim().length > 0 ? value : undefined)),
+  ADMIN_API_TOKEN: z
+    .string()
+    .optional()
+    .transform((value) => (value && value.trim().length > 0 ? value : undefined)),
   PROVIDER_TASK_POLL_MIN_INTERVAL_MS: z.coerce.number().int().positive().default(5000),
   PROVIDER_TASK_ASSUME_SUCCESS_AFTER_SEC: z.coerce.number().int().positive().default(45),
   ELEVENLABS_API_KEY: z

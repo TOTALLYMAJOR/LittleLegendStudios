@@ -65,6 +65,7 @@ npm run dev
 - Provider task tracking with polling/webhook endpoints (`GET /provider-tasks/:id`, `POST /provider-tasks/webhook`) and DB persistence
 - Provider task admin routes for monitoring/retry (`GET /provider-tasks`, `POST /provider-tasks/:id/retry`)
 - Order status now includes provider task rows for live visibility in the status page
+- Admin order retry endpoint: `POST /admin/orders/:orderId/retry` (token-gated via `ADMIN_API_TOKEN`)
 - Status polling + final artifact link stub
 
 ## Notes

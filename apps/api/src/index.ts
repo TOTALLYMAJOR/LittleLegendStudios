@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import cors from '@fastify/cors';
 import { assertOrderTransition, type OrderStatus } from '@little/shared';
 import fastifyRawBody from 'fastify-raw-body';
-import Fastify, { type FastifyInstance } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import type Stripe from 'stripe';
 import { z } from 'zod';
 
@@ -120,6 +120,37 @@ const approveScriptSchema = z.object({
   version: z.number().int().positive()
 });
 
+const adminRetrySchema = z.object({
+  reason: z.string().min(1).max(500).optional()
+});
+
+function parseBearerToken(value: string | string[] | undefined): string | null {
+  if (!value || Array.isArray(value)) {
+    return null;
+  }
+
+  const [scheme, token] = value.split(' ', 2);
+  if (scheme?.toLowerCase() !== 'bearer' || !token) {
+    return null;
+  }
+
+  return token.trim();
+}
+
+function hasAdminAccess(request: FastifyRequest): boolean {
+  if (!env.ADMIN_API_TOKEN) {
+    return false;
+  }
+
+  const bearerToken = parseBearerToken(request.headers.authorization);
+  if (bearerToken && bearerToken === env.ADMIN_API_TOKEN) {
+    return true;
+  }
+
+  const headerToken = request.headers['x-admin-api-token'];
+  return typeof headerToken === 'string' && headerToken === env.ADMIN_API_TOKEN;
+}
+
 async function getOrder(orderId: string): Promise<OrderRow | null> {
   const rows = await query<OrderRow>('SELECT * FROM orders WHERE id = $1', [orderId]);
   return rows[0] ?? null;
@@ -141,7 +172,7 @@ async function setOrderStatus(orderId: string, nextStatus: OrderStatus): Promise
   return rows[0];
 }
 
-async function queueRenderOrder(orderId: string, paymentIntentId: string): Promise<void> {
+async function queueRenderOrder(orderId: string, paymentIntentId: string, jobId = `render:${orderId}`): Promise<void> {
   await renderQueue.add(
     'render-order',
     {
@@ -149,7 +180,7 @@ async function queueRenderOrder(orderId: string, paymentIntentId: string): Promi
       paymentIntentId
     },
     {
-      jobId: `render:${orderId}`
+      jobId
     }
   );
 }
@@ -654,6 +685,51 @@ async function buildServer(): Promise<FastifyInstance> {
       order: paidOrder,
       paymentIntentId,
       provider: 'stripe_stub'
+    });
+  });
+
+  app.post('/admin/orders/:orderId/retry', async (request, reply) => {
+    if (!hasAdminAccess(request)) {
+      return reply.status(401).send({ message: 'Unauthorized admin request.' });
+    }
+
+    const params = z.object({ orderId: z.string().uuid() }).parse(request.params);
+    const payload = adminRetrySchema.parse(request.body ?? {});
+
+    const order = await getOrder(params.orderId);
+    if (!order) {
+      return reply.status(404).send({ message: 'Order not found' });
+    }
+
+    const retryableStatuses: OrderStatus[] = ['failed_soft', 'failed_hard', 'manual_review'];
+    if (!retryableStatuses.includes(order.status)) {
+      return reply.status(409).send({
+        message: `Order in status ${order.status} cannot be retried. Allowed statuses: ${retryableStatuses.join(', ')}.`
+      });
+    }
+
+    if (!order.stripe_payment_intent_id) {
+      return reply.status(409).send({
+        message: 'Cannot retry order without a captured payment intent.'
+      });
+    }
+
+    let updatedOrder = order;
+    if (order.status === 'failed_hard' || order.status === 'manual_review') {
+      updatedOrder = await setOrderStatus(params.orderId, 'failed_soft');
+    }
+
+    const retryJobId = `render:${params.orderId}:admin-retry:${Date.now()}`;
+    await queueRenderOrder(params.orderId, order.stripe_payment_intent_id, retryJobId);
+
+    return reply.send({
+      queued: true,
+      orderId: params.orderId,
+      fromStatus: order.status,
+      currentStatus: updatedOrder.status,
+      retryJobId,
+      paymentIntentId: order.stripe_payment_intent_id,
+      reason: payload.reason ?? null
     });
   });
 

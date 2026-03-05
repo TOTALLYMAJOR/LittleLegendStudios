@@ -57,6 +57,7 @@ npm run dev
 - Expanded lifecycle states for retries/refunds (`failed_soft`, `failed_hard`, `refund_queued`, `manual_review`)
 - Stripe checkout + webhook path (real when Stripe env vars are set, stub fallback otherwise)
 - Worker pipeline consumes shot plans and writes `voice_clone_meta`, `audio_*`, `character_refs`, `shot_video`, and final artifacts
+- Worker now materializes binary placeholder files for generated artifact keys so signed download links resolve immediately
 - Worker provider adapters support `stub` and `http` modes for voice + scene generation services
 - API now exposes internal provider endpoints for model + scene generation (`/voice/clone`, `/voice/render`, `/scene/*`)
 - API provider endpoints support real integration attempts for ElevenLabs (voice), HeyGen (shot generation), and Shotstack (final compose) with fallback behavior.

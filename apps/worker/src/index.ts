@@ -1,7 +1,14 @@
 import { type JobType, type ScriptPayload, assertOrderTransition, type OrderStatus } from '@little/shared';
 import { QueueEvents, Worker } from 'bullmq';
 
-import { createSignedDownloadUrl } from './assets.js';
+import {
+  buildJsonBytes,
+  buildStubJpegBytes,
+  buildStubMp3Bytes,
+  buildStubMp4Bytes,
+  createSignedDownloadUrl,
+  uploadAssetBytes
+} from './assets.js';
 import { query } from './db.js';
 import { env } from './env.js';
 import type { WorkerUpload } from './providers.js';
@@ -143,6 +150,70 @@ async function createArtifact(
     `,
     [orderId, kind, s3Key, JSON.stringify(meta)]
   );
+}
+
+async function materializeArtifactFile(args: {
+  kind: ArtifactKind;
+  assetKey: string;
+  payload: Record<string, unknown>;
+}): Promise<{ contentType: string; bytesWritten: number; placeholderAsset: boolean; materializedAt: string }> {
+  let contentType: string;
+  let bytes: Uint8Array;
+
+  switch (args.kind) {
+    case 'voice_clone_meta':
+    case 'character_refs': {
+      contentType = 'application/json';
+      bytes = buildJsonBytes(args.payload);
+      break;
+    }
+    case 'audio_narration':
+    case 'audio_dialogue': {
+      contentType = 'audio/mpeg';
+      const label = JSON.stringify({
+        kind: args.kind,
+        key: args.assetKey,
+        summary: String(args.payload.scriptTitle ?? args.payload.voiceCloneId ?? '')
+      });
+      bytes = buildStubMp3Bytes(label);
+      break;
+    }
+    case 'shot_video':
+    case 'final_video': {
+      contentType = 'video/mp4';
+      const label = JSON.stringify({
+        kind: args.kind,
+        key: args.assetKey,
+        shot: args.payload.shotNumber ?? null,
+        characterId: args.payload.characterId ?? null
+      });
+      bytes = buildStubMp4Bytes(label);
+      break;
+    }
+    case 'thumbnail': {
+      contentType = 'image/jpeg';
+      bytes = buildStubJpegBytes();
+      break;
+    }
+    default: {
+      contentType = 'application/octet-stream';
+      bytes = buildJsonBytes(args.payload);
+      break;
+    }
+  }
+
+  await uploadAssetBytes({
+    assetKey: args.assetKey,
+    contentType,
+    bytes
+  });
+
+  return {
+    contentType,
+    bytesWritten: bytes.byteLength,
+    placeholderAsset: true,
+    materializedAt: new Date().toISOString()
+  };
 }
 
 function fallbackShotPlan(): ScriptPayload['shots'] {
@@ -415,8 +486,19 @@ async function runPipeline(orderId: string, attempt: number): Promise<void> {
     voiceClone.provider
   );
 
+  const voiceCloneMaterialization = await materializeArtifactFile({
+    kind: 'voice_clone_meta',
+    assetKey: voiceClone.voiceCloneArtifactKey,
+    payload: {
+      ...voiceClone.voiceCloneMeta,
+      provider: voiceClone.provider,
+      voiceCloneId: voiceClone.voiceCloneId
+    }
+  });
+
   await createArtifact(orderId, 'voice_clone_meta', voiceClone.voiceCloneArtifactKey, {
     ...voiceClone.voiceCloneMeta,
+    ...voiceCloneMaterialization,
     signedDownloadUrl: createSignedDownloadUrl(voiceClone.voiceCloneArtifactKey)
   });
 
@@ -447,13 +529,35 @@ async function runPipeline(orderId: string, attempt: number): Promise<void> {
     voiceTracks.provider
   );
 
+  const narrationMaterialization = await materializeArtifactFile({
+    kind: 'audio_narration',
+    assetKey: voiceTracks.narrationArtifactKey,
+    payload: {
+      ...voiceTracks.narrationMeta,
+      provider: voiceTracks.provider,
+      scriptTitle: scriptPayload.title
+    }
+  });
+
   await createArtifact(orderId, 'audio_narration', voiceTracks.narrationArtifactKey, {
     ...voiceTracks.narrationMeta,
+    ...narrationMaterialization,
     signedDownloadUrl: createSignedDownloadUrl(voiceTracks.narrationArtifactKey)
+  });
+
+  const dialogueMaterialization = await materializeArtifactFile({
+    kind: 'audio_dialogue',
+    assetKey: voiceTracks.dialogueArtifactKey,
+    payload: {
+      ...voiceTracks.dialogueMeta,
+      provider: voiceTracks.provider,
+      voiceCloneId: voiceClone.voiceCloneId
+    }
   });
 
   await createArtifact(orderId, 'audio_dialogue', voiceTracks.dialogueArtifactKey, {
     ...voiceTracks.dialogueMeta,
+    ...dialogueMaterialization,
     signedDownloadUrl: createSignedDownloadUrl(voiceTracks.dialogueArtifactKey)
   });
 
@@ -483,8 +587,19 @@ async function runPipeline(orderId: string, attempt: number): Promise<void> {
     characterPack.provider
   );
 
+  const characterMaterialization = await materializeArtifactFile({
+    kind: 'character_refs',
+    assetKey: characterPack.refsArtifactKey,
+    payload: {
+      ...characterPack.refsMeta,
+      provider: characterPack.provider,
+      characterId: characterProfile.characterId
+    }
+  });
+
   await createArtifact(orderId, 'character_refs', characterPack.refsArtifactKey, {
     ...characterPack.refsMeta,
+    ...characterMaterialization,
     signedDownloadUrl: createSignedDownloadUrl(characterPack.refsArtifactKey)
   });
 
@@ -509,9 +624,19 @@ async function runPipeline(orderId: string, attempt: number): Promise<void> {
       shotArtifactKey: shotRender.shotArtifactKey
     }, shotRender.provider);
 
+    const shotMaterialization = await materializeArtifactFile({
+      kind: 'shot_video',
+      assetKey: shotRender.shotArtifactKey,
+      payload: {
+        ...shotRender.shotMeta,
+        provider: shotRender.provider
+      }
+    });
+
     shotArtifactKeys.push(shotRender.shotArtifactKey);
     await createArtifact(orderId, 'shot_video', shotRender.shotArtifactKey, {
       ...shotRender.shotMeta,
+      ...shotMaterialization,
       signedDownloadUrl: createSignedDownloadUrl(shotRender.shotArtifactKey)
     });
   }
@@ -536,12 +661,32 @@ async function runPipeline(orderId: string, attempt: number): Promise<void> {
     thumbnailArtifactKey: finalCompose.thumbnailArtifactKey
   }, finalCompose.provider);
 
+  const finalVideoMaterialization = await materializeArtifactFile({
+    kind: 'final_video',
+    assetKey: finalCompose.finalVideoArtifactKey,
+    payload: {
+      ...finalCompose.finalVideoMeta,
+      provider: finalCompose.provider
+    }
+  });
+
+  const thumbnailMaterialization = await materializeArtifactFile({
+    kind: 'thumbnail',
+    assetKey: finalCompose.thumbnailArtifactKey,
+    payload: {
+      ...finalCompose.thumbnailMeta,
+      provider: finalCompose.provider
+    }
+  });
+
   await createArtifact(orderId, 'final_video', finalCompose.finalVideoArtifactKey, {
     ...finalCompose.finalVideoMeta,
+    ...finalVideoMaterialization,
     signedDownloadUrl: createSignedDownloadUrl(finalCompose.finalVideoArtifactKey)
   });
   await createArtifact(orderId, 'thumbnail', finalCompose.thumbnailArtifactKey, {
     ...finalCompose.thumbnailMeta,
+    ...thumbnailMaterialization,
     signedDownloadUrl: createSignedDownloadUrl(finalCompose.thumbnailArtifactKey)
   });
 

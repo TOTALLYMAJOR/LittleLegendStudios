@@ -115,19 +115,10 @@ export function registerAssetRoutes(app: FastifyInstance): void {
       );
 
       const uploadMeta = rows[0];
-      if (!uploadMeta) {
-        return reply.status(404).send({ message: 'Upload key not found.' });
-      }
 
       const requestContentType = normalizeContentType(String(request.headers['content-type'] ?? ''));
       if (!requestContentType) {
         return reply.status(400).send({ message: 'Content-Type header is required.' });
-      }
-
-      if (requestContentType !== uploadMeta.content_type) {
-        return reply.status(400).send({
-          message: `Content-Type mismatch. Expected ${uploadMeta.content_type}, got ${requestContentType}.`
-        });
       }
 
       const body = request.body;
@@ -136,16 +127,24 @@ export function registerAssetRoutes(app: FastifyInstance): void {
         return reply.status(400).send({ message: 'Upload body is empty.' });
       }
 
-      if (buffer.length !== uploadMeta.bytes) {
-        return reply.status(400).send({
-          message: `Upload size mismatch. Expected ${uploadMeta.bytes} bytes, got ${buffer.length}.`
-        });
-      }
+      if (uploadMeta) {
+        if (requestContentType !== uploadMeta.content_type) {
+          return reply.status(400).send({
+            message: `Content-Type mismatch. Expected ${uploadMeta.content_type}, got ${requestContentType}.`
+          });
+        }
 
-      if (isSha256Hex(uploadMeta.sha256)) {
-        const actualHash = sha256Hex(buffer);
-        if (actualHash !== uploadMeta.sha256.toLowerCase()) {
-          return reply.status(400).send({ message: 'Upload checksum mismatch.' });
+        if (buffer.length !== uploadMeta.bytes) {
+          return reply.status(400).send({
+            message: `Upload size mismatch. Expected ${uploadMeta.bytes} bytes, got ${buffer.length}.`
+          });
+        }
+
+        if (isSha256Hex(uploadMeta.sha256)) {
+          const actualHash = sha256Hex(buffer);
+          if (actualHash !== uploadMeta.sha256.toLowerCase()) {
+            return reply.status(400).send({ message: 'Upload checksum mismatch.' });
+          }
         }
       }
 

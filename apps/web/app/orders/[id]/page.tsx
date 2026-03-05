@@ -1,5 +1,7 @@
 import Link from 'next/link';
 
+import { OrderActions } from './OrderActions';
+
 const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000';
 
 type OrderStatus =
@@ -70,6 +72,24 @@ interface OrderStatusResponse {
   jobs: JobRow[];
   artifacts: ArtifactRow[];
   providerTasks: ProviderTaskRow[];
+  parentRetryPolicy: {
+    limit: number;
+    used: number;
+    remaining: number;
+    canRetry: boolean;
+    reason: string | null;
+  };
+  latestGiftLink: {
+    id: string;
+    recipientEmail: string;
+    senderName: string | null;
+    giftMessage: string | null;
+    tokenHint: string;
+    status: 'pending' | 'redeemed' | 'expired' | 'revoked';
+    expiresAt: string;
+    redeemedAt: string | null;
+    createdAt: string;
+  } | null;
   scenePlanThemeName: string | null;
   scenePlanError: string | null;
   scenePlan: Array<{
@@ -281,6 +301,12 @@ export default async function OrderStatusPage({ params }: StatusPageProps): Prom
           )}
         </article>
       </section>
+
+      <OrderActions
+        orderId={data.order.id}
+        parentRetryPolicy={data.parentRetryPolicy}
+        latestGiftLink={data.latestGiftLink}
+      />
 
       <section className="card">
         <h2>Job Summary</h2>

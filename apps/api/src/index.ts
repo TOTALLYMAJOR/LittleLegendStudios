@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 
 import cors from '@fastify/cors';
 import { assertOrderTransition, type OrderStatus, type SceneRenderSpec, type ScriptPayload, type ThemeManifest } from '@little/shared';
@@ -10,6 +10,7 @@ import { z } from 'zod';
 import { createSignedDownloadUrl, createSignedUploadUrl, registerAssetRoutes } from './asset-routes.js';
 import { deleteAssetByKey, writeAssetBytes } from './asset-store.js';
 import { query } from './db.js';
+import { sendTransactionalEmail } from './email.js';
 import { env } from './env.js';
 import { registerProviderRoutes } from './provider-routes.js';
 import { renderQueue } from './queue.js';
@@ -87,6 +88,32 @@ interface LatestScriptRow {
   created_at: string;
 }
 
+interface RetryUsageRow {
+  used: number;
+}
+
+interface GiftLinkRow {
+  id: string;
+  order_id: string;
+  recipient_email: string;
+  sender_name: string | null;
+  gift_message: string | null;
+  token_hash: string;
+  token_hint: string;
+  status: 'pending' | 'redeemed' | 'expired' | 'revoked';
+  redeemed_by_user_id: string | null;
+  redeemed_at: string | null;
+  expires_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface GiftRedeemOrderRow {
+  id: string;
+  status: OrderStatus;
+  theme_name: string;
+}
+
 interface ScenePlanEntry {
   shotNumber: number;
   shotType: 'narration' | 'dialogue';
@@ -100,6 +127,7 @@ const MIN_PHOTO_UPLOADS = 5;
 const MAX_PHOTO_UPLOADS = 15;
 const REQUIRED_VOICE_UPLOADS = 1;
 const MAX_SCRIPT_VERSIONS_PER_ORDER = 3;
+const parentRetryableStatuses: OrderStatus[] = ['failed_soft', 'failed_hard', 'manual_review'];
 const photoContentTypes = new Set(['image/jpeg', 'image/png']);
 const voiceContentTypes = new Set(['audio/wav', 'audio/x-wav', 'audio/m4a', 'audio/x-m4a', 'audio/mp4']);
 
@@ -140,6 +168,26 @@ const adminRetrySchema = z.object({
   reason: z.string().min(1).max(500).optional()
 });
 
+const parentRetrySchema = z.object({
+  reason: z.string().min(1).max(500).optional()
+});
+
+const giftLinkCreateSchema = z.object({
+  recipientEmail: z.string().email(),
+  senderName: z.string().trim().min(1).max(120).optional(),
+  giftMessage: z.string().trim().min(1).max(500).optional(),
+  expiresInDays: z.number().int().min(1).max(365).optional(),
+  sendEmail: z.boolean().optional().default(true)
+});
+
+const giftRedeemParamsSchema = z.object({
+  token: z.string().min(24).max(200)
+});
+
+const giftRedeemSchema = z.object({
+  parentEmail: z.string().email()
+});
+
 function parseBearerToken(value: string | string[] | undefined): string | null {
   if (!value || Array.isArray(value)) {
     return null;
@@ -167,9 +215,133 @@ function hasAdminAccess(request: FastifyRequest): boolean {
   return typeof headerToken === 'string' && headerToken === env.ADMIN_API_TOKEN;
 }
 
+function hashToken(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+function buildGiftRedemptionUrl(token: string): string {
+  return `${env.WEB_APP_BASE_URL}/gift/redeem/${token}`;
+}
+
+function buildGiftTokenHint(token: string): string {
+  return token.slice(-6);
+}
+
+function createGiftToken(): string {
+  return randomBytes(24).toString('hex');
+}
+
+function isGiftLinkExpired(link: Pick<GiftLinkRow, 'expires_at'>): boolean {
+  return Date.parse(link.expires_at) <= Date.now();
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
 async function getOrder(orderId: string): Promise<OrderRow | null> {
   const rows = await query<OrderRow>('SELECT * FROM orders WHERE id = $1', [orderId]);
   return rows[0] ?? null;
+}
+
+async function getGiftLinkByToken(token: string): Promise<GiftLinkRow | null> {
+  const rows = await query<GiftLinkRow>(
+    `
+    SELECT *
+    FROM gift_redemption_links
+    WHERE token_hash = $1
+    LIMIT 1
+    `,
+    [hashToken(token)]
+  );
+  return rows[0] ?? null;
+}
+
+async function markGiftLinkExpired(linkId: string): Promise<void> {
+  await query(
+    `
+    UPDATE gift_redemption_links
+    SET status = 'expired', updated_at = now()
+    WHERE id = $1 AND status = 'pending'
+    `,
+    [linkId]
+  );
+}
+
+async function getParentRetryUsage(orderId: string): Promise<number> {
+  const rows = await query<RetryUsageRow>(
+    `
+    SELECT COUNT(*)::int AS used
+    FROM order_retry_requests
+    WHERE order_id = $1
+      AND actor = 'parent'
+      AND accepted = true
+    `,
+    [orderId]
+  );
+
+  return rows[0]?.used ?? 0;
+}
+
+async function recordRetryRequest(args: {
+  orderId: string;
+  actor: 'parent' | 'admin';
+  requestedStatus: OrderStatus;
+  accepted: boolean;
+  reason?: string;
+}): Promise<void> {
+  await query(
+    `
+    INSERT INTO order_retry_requests (order_id, actor, requested_status, accepted, reason)
+    VALUES ($1, $2, $3, $4, $5)
+    `,
+    [args.orderId, args.actor, args.requestedStatus, args.accepted, args.reason ?? null]
+  );
+}
+
+async function recordEmailNotification(args: {
+  orderId: string;
+  recipientEmail: string;
+  notificationType: 'delivery_ready' | 'render_failed' | 'gift_redeem_link';
+  provider: string;
+  providerMessageId: string | null;
+  status: 'sent' | 'failed' | 'stub';
+  subject: string;
+  errorText: string | null;
+  payload: Record<string, unknown>;
+}): Promise<void> {
+  await query(
+    `
+    INSERT INTO email_notifications (
+      order_id,
+      recipient_email,
+      notification_type,
+      provider,
+      provider_message_id,
+      status,
+      subject,
+      error_text,
+      payload_json
+    )
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
+    `,
+    [
+      args.orderId,
+      args.recipientEmail,
+      args.notificationType,
+      args.provider,
+      args.providerMessageId,
+      args.status,
+      args.subject,
+      args.errorText,
+      JSON.stringify(args.payload)
+    ]
+  );
 }
 
 async function setOrderStatus(orderId: string, nextStatus: OrderStatus): Promise<OrderRow> {
@@ -188,7 +360,7 @@ async function setOrderStatus(orderId: string, nextStatus: OrderStatus): Promise
   return rows[0];
 }
 
-async function queueRenderOrder(orderId: string, paymentIntentId: string, jobId = `render:${orderId}`): Promise<void> {
+async function queueRenderOrder(orderId: string, paymentIntentId: string, jobId = `render-${orderId}`): Promise<void> {
   await renderQueue.add(
     'render-order',
     {
@@ -416,6 +588,55 @@ function buildScenePlan(args: { script: ScriptPayload; manifest: ThemeManifest }
       sceneRenderSpec
     };
   });
+}
+
+async function buildParentRetryPolicy(order: OrderRow): Promise<{
+  limit: number;
+  used: number;
+  remaining: number;
+  canRetry: boolean;
+  reason: string | null;
+}> {
+  const used = await getParentRetryUsage(order.id);
+  const remaining = Math.max(0, env.PARENT_MAX_RETRY_REQUESTS - used);
+
+  if (!parentRetryableStatuses.includes(order.status)) {
+    return {
+      limit: env.PARENT_MAX_RETRY_REQUESTS,
+      used,
+      remaining,
+      canRetry: false,
+      reason: `Order status ${order.status} is not retryable.`
+    };
+  }
+
+  if (!order.stripe_payment_intent_id) {
+    return {
+      limit: env.PARENT_MAX_RETRY_REQUESTS,
+      used,
+      remaining,
+      canRetry: false,
+      reason: 'No captured payment intent is linked to this order.'
+    };
+  }
+
+  if (remaining <= 0) {
+    return {
+      limit: env.PARENT_MAX_RETRY_REQUESTS,
+      used,
+      remaining,
+      canRetry: false,
+      reason: 'Parent retry limit reached for this order.'
+    };
+  }
+
+  return {
+    limit: env.PARENT_MAX_RETRY_REQUESTS,
+    used,
+    remaining,
+    canRetry: true,
+    reason: null
+  };
 }
 
 async function buildServer(): Promise<FastifyInstance> {
@@ -823,6 +1044,90 @@ async function buildServer(): Promise<FastifyInstance> {
     });
   });
 
+  app.post('/orders/:orderId/retry', async (request, reply) => {
+    const params = z.object({ orderId: z.string().uuid() }).parse(request.params);
+    const payload = parentRetrySchema.parse(request.body ?? {});
+
+    const order = await getOrder(params.orderId);
+    if (!order) {
+      return reply.status(404).send({ message: 'Order not found' });
+    }
+
+    if (!parentRetryableStatuses.includes(order.status)) {
+      await recordRetryRequest({
+        orderId: params.orderId,
+        actor: 'parent',
+        requestedStatus: order.status,
+        accepted: false,
+        reason: payload.reason
+      });
+
+      return reply.status(409).send({
+        message: `Order in status ${order.status} cannot be retried. Allowed statuses: ${parentRetryableStatuses.join(', ')}.`
+      });
+    }
+
+    if (!order.stripe_payment_intent_id) {
+      await recordRetryRequest({
+        orderId: params.orderId,
+        actor: 'parent',
+        requestedStatus: order.status,
+        accepted: false,
+        reason: payload.reason
+      });
+
+      return reply.status(409).send({
+        message: 'Cannot retry order without a captured payment intent.'
+      });
+    }
+
+    const parentRetryUsed = await getParentRetryUsage(params.orderId);
+    if (parentRetryUsed >= env.PARENT_MAX_RETRY_REQUESTS) {
+      await recordRetryRequest({
+        orderId: params.orderId,
+        actor: 'parent',
+        requestedStatus: order.status,
+        accepted: false,
+        reason: payload.reason
+      });
+
+      return reply.status(429).send({
+        message: `Retry limit reached (${env.PARENT_MAX_RETRY_REQUESTS} parent retries per order).`,
+        parentRetryUsed,
+        parentRetryLimit: env.PARENT_MAX_RETRY_REQUESTS
+      });
+    }
+
+    let updatedOrder = order;
+    if (order.status === 'failed_hard' || order.status === 'manual_review') {
+      updatedOrder = await setOrderStatus(params.orderId, 'failed_soft');
+    }
+
+    const retryJobId = `render-${params.orderId}-parent-retry-${Date.now()}`;
+    await queueRenderOrder(params.orderId, order.stripe_payment_intent_id, retryJobId);
+    await recordRetryRequest({
+      orderId: params.orderId,
+      actor: 'parent',
+      requestedStatus: order.status,
+      accepted: true,
+      reason: payload.reason
+    });
+
+    const nextUsed = parentRetryUsed + 1;
+    return reply.send({
+      queued: true,
+      orderId: params.orderId,
+      fromStatus: order.status,
+      currentStatus: updatedOrder.status,
+      retryJobId,
+      paymentIntentId: order.stripe_payment_intent_id,
+      reason: payload.reason ?? null,
+      parentRetryUsed: nextUsed,
+      parentRetryLimit: env.PARENT_MAX_RETRY_REQUESTS,
+      parentRetryRemaining: Math.max(0, env.PARENT_MAX_RETRY_REQUESTS - nextUsed)
+    });
+  });
+
   app.post('/admin/orders/:orderId/retry', async (request, reply) => {
     if (!hasAdminAccess(request)) {
       return reply.status(401).send({ message: 'Unauthorized admin request.' });
@@ -836,14 +1141,29 @@ async function buildServer(): Promise<FastifyInstance> {
       return reply.status(404).send({ message: 'Order not found' });
     }
 
-    const retryableStatuses: OrderStatus[] = ['failed_soft', 'failed_hard', 'manual_review'];
-    if (!retryableStatuses.includes(order.status)) {
+    if (!parentRetryableStatuses.includes(order.status)) {
+      await recordRetryRequest({
+        orderId: params.orderId,
+        actor: 'admin',
+        requestedStatus: order.status,
+        accepted: false,
+        reason: payload.reason
+      });
+
       return reply.status(409).send({
-        message: `Order in status ${order.status} cannot be retried. Allowed statuses: ${retryableStatuses.join(', ')}.`
+        message: `Order in status ${order.status} cannot be retried. Allowed statuses: ${parentRetryableStatuses.join(', ')}.`
       });
     }
 
     if (!order.stripe_payment_intent_id) {
+      await recordRetryRequest({
+        orderId: params.orderId,
+        actor: 'admin',
+        requestedStatus: order.status,
+        accepted: false,
+        reason: payload.reason
+      });
+
       return reply.status(409).send({
         message: 'Cannot retry order without a captured payment intent.'
       });
@@ -854,8 +1174,15 @@ async function buildServer(): Promise<FastifyInstance> {
       updatedOrder = await setOrderStatus(params.orderId, 'failed_soft');
     }
 
-    const retryJobId = `render:${params.orderId}:admin-retry:${Date.now()}`;
+    const retryJobId = `render-${params.orderId}-admin-retry-${Date.now()}`;
     await queueRenderOrder(params.orderId, order.stripe_payment_intent_id, retryJobId);
+    await recordRetryRequest({
+      orderId: params.orderId,
+      actor: 'admin',
+      requestedStatus: order.status,
+      accepted: true,
+      reason: payload.reason
+    });
 
     return reply.send({
       queued: true,
@@ -865,6 +1192,273 @@ async function buildServer(): Promise<FastifyInstance> {
       retryJobId,
       paymentIntentId: order.stripe_payment_intent_id,
       reason: payload.reason ?? null
+    });
+  });
+
+  app.post('/orders/:orderId/gift-link', async (request, reply) => {
+    const params = z.object({ orderId: z.string().uuid() }).parse(request.params);
+    const payload = giftLinkCreateSchema.parse(request.body ?? {});
+
+    const order = await getOrder(params.orderId);
+    if (!order) {
+      return reply.status(404).send({ message: 'Order not found' });
+    }
+
+    if (order.status === 'refunded' || order.status === 'expired') {
+      return reply.status(409).send({ message: `Cannot create gift links for order in status ${order.status}.` });
+    }
+
+    const normalizedRecipientEmail = payload.recipientEmail.toLowerCase();
+    const giftToken = createGiftToken();
+    const tokenHash = hashToken(giftToken);
+    const tokenHint = buildGiftTokenHint(giftToken);
+    const expiresInDays = payload.expiresInDays ?? env.GIFT_REDEMPTION_TTL_DAYS;
+
+    await query(
+      `
+      UPDATE gift_redemption_links
+      SET status = 'revoked',
+          updated_at = now()
+      WHERE order_id = $1
+        AND status = 'pending'
+      `,
+      [params.orderId]
+    );
+
+    const insertedRows = await query<GiftLinkRow>(
+      `
+      INSERT INTO gift_redemption_links (
+        order_id,
+        recipient_email,
+        sender_name,
+        gift_message,
+        token_hash,
+        token_hint,
+        status,
+        expires_at
+      )
+      VALUES (
+        $1,
+        $2,
+        $3,
+        $4,
+        $5,
+        $6,
+        'pending',
+        now() + ($7::text || ' days')::interval
+      )
+      RETURNING *
+      `,
+      [
+        params.orderId,
+        normalizedRecipientEmail,
+        payload.senderName ?? null,
+        payload.giftMessage ?? null,
+        tokenHash,
+        tokenHint,
+        String(expiresInDays)
+      ]
+    );
+
+    const giftLink = insertedRows[0];
+    if (!giftLink) {
+      return reply.status(500).send({ message: 'Failed to create gift redemption link.' });
+    }
+    const redemptionUrl = buildGiftRedemptionUrl(giftToken);
+    let emailDelivery: {
+      status: 'sent' | 'failed' | 'stub' | 'skipped';
+      provider: 'resend' | 'stub' | 'none';
+      errorText: string | null;
+    } = {
+      status: 'skipped',
+      provider: 'none',
+      errorText: null
+    };
+
+    if (payload.sendEmail) {
+      const subject = `Your Little Legend gift is ready to redeem`;
+      const senderLine = payload.senderName ? `${payload.senderName} sent you a Little Legend gift.` : `A Little Legend gift was sent to you.`;
+      const messageLine = payload.giftMessage ? `Message: "${payload.giftMessage}"` : 'Open the redemption link to claim your order.';
+      const safeSenderLine = escapeHtml(senderLine);
+      const safeMessageLine = escapeHtml(messageLine);
+      const html = `
+        <p>${safeSenderLine}</p>
+        <p>${safeMessageLine}</p>
+        <p><a href="${redemptionUrl}">Redeem gift</a></p>
+        <p>If the button does not work, copy this URL into your browser:</p>
+        <p>${redemptionUrl}</p>
+      `;
+      const text = `${senderLine}\n${messageLine}\nRedeem gift: ${redemptionUrl}`;
+      const sendResult = await sendTransactionalEmail({
+        to: normalizedRecipientEmail,
+        subject,
+        html,
+        text
+      });
+
+      emailDelivery = {
+        status: sendResult.status,
+        provider: sendResult.provider,
+        errorText: sendResult.errorText
+      };
+
+      await recordEmailNotification({
+        orderId: params.orderId,
+        recipientEmail: normalizedRecipientEmail,
+        notificationType: 'gift_redeem_link',
+        provider: sendResult.provider,
+        providerMessageId: sendResult.providerMessageId,
+        status: sendResult.status,
+        subject,
+        errorText: sendResult.errorText,
+        payload: {
+          giftLinkId: giftLink.id,
+          tokenHint
+        }
+      });
+    }
+
+    return reply.send({
+      giftLink: {
+        id: giftLink.id,
+        orderId: giftLink.order_id,
+        recipientEmail: giftLink.recipient_email,
+        senderName: giftLink.sender_name,
+        giftMessage: giftLink.gift_message,
+        status: giftLink.status,
+        tokenHint: giftLink.token_hint,
+        expiresAt: giftLink.expires_at,
+        createdAt: giftLink.created_at
+      },
+      redemptionUrl,
+      emailDelivery
+    });
+  });
+
+  app.get('/gift/redeem/:token', async (request, reply) => {
+    const params = giftRedeemParamsSchema.parse(request.params);
+    const link = await getGiftLinkByToken(params.token);
+    if (!link) {
+      return reply.status(404).send({ message: 'Gift redemption link not found.' });
+    }
+
+    if (link.status === 'pending' && isGiftLinkExpired(link)) {
+      await markGiftLinkExpired(link.id);
+      return reply.status(410).send({ message: 'Gift redemption link has expired.' });
+    }
+
+    const orderRows = await query<GiftRedeemOrderRow>(
+      `
+      SELECT
+        o.id,
+        o.status,
+        t.name AS theme_name
+      FROM orders o
+      JOIN themes t ON t.id = o.theme_id
+      WHERE o.id = $1
+      LIMIT 1
+      `,
+      [link.order_id]
+    );
+    const order = orderRows[0];
+    if (!order) {
+      return reply.status(404).send({ message: 'Gift order not found.' });
+    }
+
+    return reply.send({
+      giftLink: {
+        id: link.id,
+        orderId: link.order_id,
+        recipientEmail: link.recipient_email,
+        senderName: link.sender_name,
+        giftMessage: link.gift_message,
+        status: link.status,
+        tokenHint: link.token_hint,
+        expiresAt: link.expires_at,
+        redeemedAt: link.redeemed_at,
+        createdAt: link.created_at
+      },
+      order: {
+        id: order.id,
+        status: order.status,
+        themeName: order.theme_name
+      }
+    });
+  });
+
+  app.post('/gift/redeem/:token', async (request, reply) => {
+    const params = giftRedeemParamsSchema.parse(request.params);
+    const payload = giftRedeemSchema.parse(request.body ?? {});
+
+    const link = await getGiftLinkByToken(params.token);
+    if (!link) {
+      return reply.status(404).send({ message: 'Gift redemption link not found.' });
+    }
+
+    if (link.status === 'pending' && isGiftLinkExpired(link)) {
+      await markGiftLinkExpired(link.id);
+      return reply.status(410).send({ message: 'Gift redemption link has expired.' });
+    }
+
+    if (link.status !== 'pending') {
+      return reply.status(409).send({
+        message: `Gift redemption link cannot be redeemed in status ${link.status}.`
+      });
+    }
+
+    const normalizedParentEmail = payload.parentEmail.toLowerCase();
+    if (normalizedParentEmail !== link.recipient_email.toLowerCase()) {
+      return reply.status(403).send({ message: 'Gift redemption email does not match recipient email.' });
+    }
+
+    const [user] = await query<UserRow>(
+      `
+      INSERT INTO users (email)
+      VALUES ($1)
+      ON CONFLICT (email)
+      DO UPDATE SET email = EXCLUDED.email
+      RETURNING *
+      `,
+      [normalizedParentEmail]
+    );
+
+    await query(
+      `
+      UPDATE orders
+      SET user_id = $2,
+          updated_at = now()
+      WHERE id = $1
+      `,
+      [link.order_id, user.id]
+    );
+
+    const [updatedLink] = await query<GiftLinkRow>(
+      `
+      UPDATE gift_redemption_links
+      SET status = 'redeemed',
+          redeemed_by_user_id = $2,
+          redeemed_at = now(),
+          updated_at = now()
+      WHERE id = $1
+      RETURNING *
+      `,
+      [link.id, user.id]
+    );
+    if (!updatedLink) {
+      return reply.status(500).send({ message: 'Gift redemption update failed.' });
+    }
+
+    return reply.send({
+      redeemed: true,
+      orderId: link.order_id,
+      userId: user.id,
+      parentEmail: user.email,
+      giftLink: {
+        id: updatedLink.id,
+        status: updatedLink.status,
+        redeemedAt: updatedLink.redeemed_at
+      },
+      orderStatusUrl: `${env.WEB_APP_BASE_URL}/orders/${link.order_id}`
     });
   });
 
@@ -960,12 +1554,39 @@ async function buildServer(): Promise<FastifyInstance> {
       [params.orderId]
     );
 
+    const parentRetryPolicy = await buildParentRetryPolicy(order);
+    const latestGiftLinkRows = await query<GiftLinkRow>(
+      `
+      SELECT *
+      FROM gift_redemption_links
+      WHERE order_id = $1
+      ORDER BY created_at DESC
+      LIMIT 1
+      `,
+      [params.orderId]
+    );
+    const latestGiftLink = latestGiftLinkRows[0] ?? null;
+
     return reply.send({
       order,
       latestScript,
       jobs: jobRows,
       artifacts: artifactsRows,
       providerTasks: providerTaskRows,
+      parentRetryPolicy,
+      latestGiftLink: latestGiftLink
+        ? {
+            id: latestGiftLink.id,
+            recipientEmail: latestGiftLink.recipient_email,
+            senderName: latestGiftLink.sender_name,
+            giftMessage: latestGiftLink.gift_message,
+            tokenHint: latestGiftLink.token_hint,
+            status: latestGiftLink.status,
+            expiresAt: latestGiftLink.expires_at,
+            redeemedAt: latestGiftLink.redeemed_at,
+            createdAt: latestGiftLink.created_at
+          }
+        : null,
       scenePlanThemeName,
       scenePlan,
       scenePlanError

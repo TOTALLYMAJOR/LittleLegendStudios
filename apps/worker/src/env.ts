@@ -36,6 +36,14 @@ const schema = z.object({
     .optional()
     .transform((value) => (value && value.trim().length > 0 ? value : undefined)),
   PROVIDER_HTTP_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
+  WEB_APP_BASE_URL: z.string().url().default('http://localhost:3000'),
+  EMAIL_PROVIDER_MODE: z.enum(['stub', 'resend']).default('stub'),
+  RESEND_API_KEY: z
+    .string()
+    .optional()
+    .transform((value) => (value && value.trim().length > 0 ? value : undefined)),
+  EMAIL_FROM: z.string().min(3).default('Little Legend Studios <no-reply@example.com>'),
+  SUPPORT_EMAIL: z.string().email().default('support@example.com'),
   STRIPE_SECRET_KEY: z
     .string()
     .optional()

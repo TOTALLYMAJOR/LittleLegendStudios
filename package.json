@@ -8,6 +8,8 @@
   ],
   "scripts": {
     "postinstall": "npm --workspace @little/shared run build",
+    "dev:boot": "bash ./scripts/dev-up.sh",
+    "smoke": "node ./scripts/smoke.mjs",
     "dev": "concurrently -n SHARED,API,WORKER,WEB -c cyan,blue,magenta,green \"npm:dev:shared\" \"npm:dev:api\" \"npm:dev:worker\" \"npm:dev:web\"",
     "dev:shared": "npm --workspace @little/shared run dev",
     "dev:api": "npm --workspace @little/api run dev",

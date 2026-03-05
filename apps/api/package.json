@@ -15,7 +15,7 @@
     "bullmq": "^5.46.1",
     "dotenv": "^16.4.7",
     "fastify": "^4.29.0",
-    "fastify-raw-body": "^5.0.0",
+    "fastify-raw-body": "^4.3.0",
     "ioredis": "^5.6.1",
     "pg": "^8.13.3",
     "stripe": "^20.4.0",

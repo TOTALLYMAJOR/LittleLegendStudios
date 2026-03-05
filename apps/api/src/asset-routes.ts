@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { buildSignedAssetUrl, verifyAssetToken } from '@little/shared';
 
@@ -16,7 +16,7 @@ import { env } from './env.js';
 interface UploadMetaRow {
   id: string;
   content_type: string;
-  bytes: number;
+  bytes: number | string;
   sha256: string | null;
 }
 
@@ -24,8 +24,12 @@ interface UploadContentTypeRow {
   content_type: string;
 }
 
-const assetPathSchema = z.object({
+const namedAssetPathSchema = z.object({
   assetKey: z.string().min(1)
+});
+
+const wildcardAssetPathSchema = z.object({
+  '*': z.string().min(1)
 });
 
 const tokenQuerySchema = z.object({
@@ -38,6 +42,16 @@ function decodeAssetKey(value: string): string {
   } catch {
     return value;
   }
+}
+
+function parseAssetKey(params: unknown): string {
+  const named = namedAssetPathSchema.safeParse(params);
+  if (named.success) {
+    return decodeAssetKey(named.data.assetKey);
+  }
+
+  const wildcard = wildcardAssetPathSchema.parse(params);
+  return decodeAssetKey(wildcard['*']);
 }
 
 function assertValidToken(args: {
@@ -84,84 +98,89 @@ export function registerAssetRoutes(app: FastifyInstance): void {
     done(null, body);
   });
 
+  const handleSignedUpload = async (request: FastifyRequest, reply: FastifyReply) => {
+    const queryParams = tokenQuerySchema.parse(request.query);
+    const assetKey = parseAssetKey(request.params);
+
+    const tokenValidation = assertValidToken({
+      token: queryParams.token,
+      expectedPurpose: 'upload',
+      expectedKey: assetKey
+    });
+
+    if (!tokenValidation.ok) {
+      return reply.status(403).send({ message: `Invalid upload token: ${tokenValidation.reason}` });
+    }
+
+    const rows = await query<UploadMetaRow>(
+      `
+      SELECT id, content_type, bytes, sha256
+      FROM uploads
+      WHERE s3_key = $1
+      LIMIT 1
+      `,
+      [assetKey]
+    );
+
+    const uploadMeta = rows[0];
+
+    const requestContentType = normalizeContentType(String(request.headers['content-type'] ?? ''));
+    if (!requestContentType) {
+      return reply.status(400).send({ message: 'Content-Type header is required.' });
+    }
+
+    const body = request.body;
+    const buffer = Buffer.isBuffer(body) ? body : Buffer.from(typeof body === 'string' ? body : '');
+    if (buffer.length === 0) {
+      return reply.status(400).send({ message: 'Upload body is empty.' });
+    }
+
+    if (uploadMeta) {
+      const expectedBytes = Number(uploadMeta.bytes);
+      if (!Number.isFinite(expectedBytes)) {
+        return reply.status(500).send({ message: 'Upload metadata bytes value is invalid.' });
+      }
+
+      if (requestContentType !== uploadMeta.content_type) {
+        return reply.status(400).send({
+          message: `Content-Type mismatch. Expected ${uploadMeta.content_type}, got ${requestContentType}.`
+        });
+      }
+
+      if (buffer.length !== expectedBytes) {
+        return reply.status(400).send({
+          message: `Upload size mismatch. Expected ${expectedBytes} bytes, got ${buffer.length}.`
+        });
+      }
+
+      if (isSha256Hex(uploadMeta.sha256)) {
+        const actualHash = sha256Hex(buffer);
+        if (actualHash !== uploadMeta.sha256.toLowerCase()) {
+          return reply.status(400).send({ message: 'Upload checksum mismatch.' });
+        }
+      }
+    }
+
+    await writeAssetBytes(assetKey, buffer);
+
+    return reply.send({
+      uploaded: true,
+      assetKey,
+      bytes: buffer.length
+    });
+  };
+
   app.put(
-    '/assets/upload/:assetKey',
+    '/assets/upload/*',
     {
       bodyLimit: env.ASSET_MAX_UPLOAD_BYTES
     },
-    async (request, reply) => {
-      const params = assetPathSchema.parse(request.params);
-      const queryParams = tokenQuerySchema.parse(request.query);
-      const assetKey = decodeAssetKey(params.assetKey);
-
-      const tokenValidation = assertValidToken({
-        token: queryParams.token,
-        expectedPurpose: 'upload',
-        expectedKey: assetKey
-      });
-
-      if (!tokenValidation.ok) {
-        return reply.status(403).send({ message: `Invalid upload token: ${tokenValidation.reason}` });
-      }
-
-      const rows = await query<UploadMetaRow>(
-        `
-        SELECT id, content_type, bytes, sha256
-        FROM uploads
-        WHERE s3_key = $1
-        LIMIT 1
-        `,
-        [assetKey]
-      );
-
-      const uploadMeta = rows[0];
-
-      const requestContentType = normalizeContentType(String(request.headers['content-type'] ?? ''));
-      if (!requestContentType) {
-        return reply.status(400).send({ message: 'Content-Type header is required.' });
-      }
-
-      const body = request.body;
-      const buffer = Buffer.isBuffer(body) ? body : Buffer.from(typeof body === 'string' ? body : '');
-      if (buffer.length === 0) {
-        return reply.status(400).send({ message: 'Upload body is empty.' });
-      }
-
-      if (uploadMeta) {
-        if (requestContentType !== uploadMeta.content_type) {
-          return reply.status(400).send({
-            message: `Content-Type mismatch. Expected ${uploadMeta.content_type}, got ${requestContentType}.`
-          });
-        }
-
-        if (buffer.length !== uploadMeta.bytes) {
-          return reply.status(400).send({
-            message: `Upload size mismatch. Expected ${uploadMeta.bytes} bytes, got ${buffer.length}.`
-          });
-        }
-
-        if (isSha256Hex(uploadMeta.sha256)) {
-          const actualHash = sha256Hex(buffer);
-          if (actualHash !== uploadMeta.sha256.toLowerCase()) {
-            return reply.status(400).send({ message: 'Upload checksum mismatch.' });
-          }
-        }
-      }
-
-      await writeAssetBytes(assetKey, buffer);
-
-      return reply.send({
-        uploaded: true,
-        assetKey,
-        bytes: buffer.length
-      });
-    }
+    handleSignedUpload
   );
 
-  app.get('/assets/download/:assetKey', async (request, reply) => {
-    const params = assetPathSchema.parse(request.params);
+  const handleSignedDownload = async (request: FastifyRequest, reply: FastifyReply) => {
     const queryParams = tokenQuerySchema.parse(request.query);
-    const assetKey = decodeAssetKey(params.assetKey);
+    const assetKey = parseAssetKey(request.params);
 
     const tokenValidation = assertValidToken({
       token: queryParams.token,
@@ -194,5 +213,7 @@ export function registerAssetRoutes(app: FastifyInstance): void {
     reply.header('Content-Type', contentType);
     reply.header('Cache-Control', 'private, max-age=60');
     return reply.send(bytes);
-  });
+  };
+
+  app.get('/assets/download/*', handleSignedDownload);
 }

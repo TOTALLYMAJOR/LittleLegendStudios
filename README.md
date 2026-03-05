@@ -12,6 +12,29 @@ Template-first MVP scaffold for personalized cinematic child story videos.
 
 ## Quick Start
 
+### One-command boot (recommended)
+
+```bash
+npm run dev:boot
+```
+
+This command will:
+- create `.env` from `.env.example` if missing
+- start Postgres + Redis via `infra/docker-compose.yml`
+- run `npm install`
+- run API DB migration
+- start all services (`shared`, `api`, `worker`, `web`)
+
+Optional flags:
+- `SKIP_INFRA=1 npm run dev:boot`
+- `SKIP_INSTALL=1 npm run dev:boot`
+- `SKIP_MIGRATE=1 npm run dev:boot`
+
+If you already run local Postgres/Redis and Docker reports `port is already allocated`, use:
+- `SKIP_INFRA=1 npm run dev:boot`
+
+### Manual boot
+
 1. Copy env values:
 
 ```bash
@@ -42,6 +65,28 @@ npm --workspace @little/api run migrate
 npm run dev
 ```
 
+## Smoke Test
+
+Run the end-to-end API smoke flow:
+
+```bash
+npm run smoke
+```
+
+What it validates:
+- health check + theme fetch
+- user/order creation + consent
+- upload signing + binary uploads (5 photos, 1 voice)
+- script generate + approve + pay (requires stub payment mode)
+- async render completion polling
+- parent-facing retry endpoint
+- gift link create + redeem flow
+- email notification rows persisted in `email_notifications`
+
+Notes:
+- Start API + worker first (`npm run dev:boot` in a separate terminal).
+- If `STRIPE_SECRET_KEY` is set, `/pay` uses live checkout and smoke exits by design. Use stub mode for automation.
+
 ## Current Vertical Slice
 
 - Create user + order
@@ -70,12 +115,22 @@ npm run dev
 - Order status/create UI surfaces latest watermarked preview links when available
 - Order status now includes computed per-shot scene plans with model profile tags (camera/lighting/assets/anchors) for render introspection
 - Admin order retry endpoint: `POST /admin/orders/:orderId/retry` (token-gated via `ADMIN_API_TOKEN`)
+- Parent-facing retry endpoint with limits: `POST /orders/:orderId/retry` (limit from `PARENT_MAX_RETRY_REQUESTS`)
+- Gift redemption link flow:
+  - create link: `POST /orders/:orderId/gift-link`
+  - inspect link: `GET /gift/redeem/:token`
+  - redeem link: `POST /gift/redeem/:token`
+- Worker now sends delivery-ready and render-failure emails, and logs outcomes in `email_notifications`
 - Status polling + final artifact link stub
 
 ## Notes
 
-- Stripe is integrated with optional real mode (`STRIPE_SECRET_KEY` + `STRIPE_WEBHOOK_SECRET`); storage/email/AI providers remain mocked.
+- Stripe is integrated with optional real mode (`STRIPE_SECRET_KEY` + `STRIPE_WEBHOOK_SECRET`).
 - Asset URLs are HMAC-signed (`ASSET_SIGNING_SECRET`) with TTL controls and stored under `ASSET_LOCAL_ROOT` for local dev.
+- Email provider modes:
+  - `EMAIL_PROVIDER_MODE=stub` (default, logs to stdout)
+  - `EMAIL_PROVIDER_MODE=resend` + `RESEND_API_KEY` (real delivery)
+  - `EMAIL_FROM` controls sender identity.
 - To run model + scene generation through local API provider routes, set worker envs:
   - `VOICE_PROVIDER_MODE=http`
   - `VOICE_PROVIDER_BASE_URL=http://localhost:4000`

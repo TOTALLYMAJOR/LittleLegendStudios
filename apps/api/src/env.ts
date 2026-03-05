@@ -45,6 +45,8 @@ const schema = z.object({
     .string()
     .optional()
     .transform((value) => (value && value.trim().length > 0 ? value : undefined)),
+  PARENT_MAX_RETRY_REQUESTS: z.coerce.number().int().min(1).max(10).default(2),
+  GIFT_REDEMPTION_TTL_DAYS: z.coerce.number().int().min(1).max(365).default(30),
   PROVIDER_TASK_POLL_MIN_INTERVAL_MS: z.coerce.number().int().positive().default(5000),
   PROVIDER_TASK_ASSUME_SUCCESS_AFTER_SEC: z.coerce.number().int().positive().default(45),
   ELEVENLABS_API_KEY: z
@@ -79,6 +81,13 @@ const schema = z.object({
     .string()
     .optional()
     .transform((value) => (value && value.trim().length > 0 ? value : undefined)),
+  EMAIL_PROVIDER_MODE: z.enum(['stub', 'resend']).default('stub'),
+  RESEND_API_KEY: z
+    .string()
+    .optional()
+    .transform((value) => (value && value.trim().length > 0 ? value : undefined)),
+  EMAIL_FROM: z.string().min(3).default('Little Legend Studios <no-reply@example.com>'),
+  SUPPORT_EMAIL: z.string().email().default('support@example.com'),
   AUTO_REFUND_ON_FAILURE: z
     .string()
     .optional()

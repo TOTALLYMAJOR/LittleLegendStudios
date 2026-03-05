@@ -130,6 +130,46 @@ CREATE TABLE IF NOT EXISTS provider_tasks (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS order_retry_requests (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  order_id UUID NOT NULL REFERENCES orders(id),
+  actor TEXT NOT NULL CHECK (actor IN ('parent', 'admin')),
+  requested_status TEXT NOT NULL,
+  accepted BOOLEAN NOT NULL DEFAULT false,
+  reason TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS gift_redemption_links (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  order_id UUID NOT NULL REFERENCES orders(id),
+  recipient_email TEXT NOT NULL,
+  sender_name TEXT,
+  gift_message TEXT,
+  token_hash TEXT NOT NULL UNIQUE,
+  token_hint TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('pending', 'redeemed', 'expired', 'revoked')) DEFAULT 'pending',
+  redeemed_by_user_id UUID REFERENCES users(id),
+  redeemed_at TIMESTAMPTZ,
+  expires_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS email_notifications (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  order_id UUID NOT NULL REFERENCES orders(id),
+  recipient_email TEXT NOT NULL,
+  notification_type TEXT NOT NULL CHECK (notification_type IN ('delivery_ready', 'render_failed', 'gift_redeem_link')),
+  provider TEXT NOT NULL,
+  provider_message_id TEXT,
+  status TEXT NOT NULL CHECK (status IN ('sent', 'failed', 'stub')),
+  subject TEXT NOT NULL,
+  error_text TEXT,
+  payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 UPDATE orders
 SET status = 'failed_hard'
 WHERE status = 'failed';
@@ -191,3 +231,7 @@ CREATE INDEX IF NOT EXISTS idx_jobs_order_id ON jobs(order_id);
 CREATE INDEX IF NOT EXISTS idx_artifacts_order_id ON artifacts(order_id);
 CREATE INDEX IF NOT EXISTS idx_provider_tasks_order_id ON provider_tasks(order_id);
 CREATE INDEX IF NOT EXISTS idx_provider_tasks_status ON provider_tasks(status);
+CREATE INDEX IF NOT EXISTS idx_order_retry_requests_order_id ON order_retry_requests(order_id);
+CREATE INDEX IF NOT EXISTS idx_gift_redemption_links_order_id ON gift_redemption_links(order_id);
+CREATE INDEX IF NOT EXISTS idx_gift_redemption_links_status ON gift_redemption_links(status);
+CREATE INDEX IF NOT EXISTS idx_email_notifications_order_id ON email_notifications(order_id);

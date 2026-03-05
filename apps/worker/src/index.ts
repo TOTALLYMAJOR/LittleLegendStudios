@@ -11,6 +11,7 @@ import {
   uploadAssetBytes
 } from './assets.js';
 import { query } from './db.js';
+import { sendTransactionalEmail } from './email.js';
 import { env } from './env.js';
 import type { WorkerUpload } from './providers.js';
 import { buildProviderRegistry } from './providers.js';
@@ -24,6 +25,10 @@ interface OrderRow {
   status: OrderStatus;
   user_id: string;
   stripe_payment_intent_id: string | null;
+}
+
+interface OrderRecipientRow {
+  email: string;
 }
 
 interface ScriptRow {
@@ -61,9 +66,166 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
 async function getOrder(orderId: string): Promise<OrderRow | null> {
   const rows = await query<OrderRow>('SELECT id, status, user_id, stripe_payment_intent_id FROM orders WHERE id = $1', [orderId]);
   return rows[0] ?? null;
+}
+
+async function getOrderRecipientEmail(orderId: string): Promise<string | null> {
+  const rows = await query<OrderRecipientRow>(
+    `
+    SELECT u.email
+    FROM orders o
+    JOIN users u ON u.id = o.user_id
+    WHERE o.id = $1
+    LIMIT 1
+    `,
+    [orderId]
+  );
+
+  return rows[0]?.email ?? null;
+}
+
+async function recordEmailNotification(args: {
+  orderId: string;
+  recipientEmail: string;
+  notificationType: 'delivery_ready' | 'render_failed' | 'gift_redeem_link';
+  provider: string;
+  providerMessageId: string | null;
+  status: 'sent' | 'failed' | 'stub';
+  subject: string;
+  errorText: string | null;
+  payload: Record<string, unknown>;
+}): Promise<void> {
+  await query(
+    `
+    INSERT INTO email_notifications (
+      order_id,
+      recipient_email,
+      notification_type,
+      provider,
+      provider_message_id,
+      status,
+      subject,
+      error_text,
+      payload_json
+    )
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
+    `,
+    [
+      args.orderId,
+      args.recipientEmail,
+      args.notificationType,
+      args.provider,
+      args.providerMessageId,
+      args.status,
+      args.subject,
+      args.errorText,
+      JSON.stringify(args.payload)
+    ]
+  );
+}
+
+async function sendOrderNotificationEmail(args: {
+  orderId: string;
+  notificationType: 'delivery_ready' | 'render_failed';
+  subject: string;
+  text: string;
+  html: string;
+  payload: Record<string, unknown>;
+}): Promise<void> {
+  try {
+    const recipientEmail = await getOrderRecipientEmail(args.orderId);
+    if (!recipientEmail) {
+      return;
+    }
+
+    const sendResult = await sendTransactionalEmail({
+      to: recipientEmail,
+      subject: args.subject,
+      html: args.html,
+      text: args.text
+    });
+
+    await recordEmailNotification({
+      orderId: args.orderId,
+      recipientEmail,
+      notificationType: args.notificationType,
+      provider: sendResult.provider,
+      providerMessageId: sendResult.providerMessageId,
+      status: sendResult.status,
+      subject: args.subject,
+      errorText: sendResult.errorText,
+      payload: args.payload
+    });
+  } catch (error) {
+    process.stderr.write(`Email notification write failed for order ${args.orderId}: ${(error as Error).message}\n`);
+  }
+}
+
+async function sendDeliveryReadyNotification(orderId: string, finalVideoAssetKey: string): Promise<void> {
+  const orderUrl = `${env.WEB_APP_BASE_URL}/orders/${orderId}`;
+  const downloadUrl = createSignedDownloadUrl(finalVideoAssetKey);
+  const subject = 'Your Little Legend video is ready';
+
+  await sendOrderNotificationEmail({
+    orderId,
+    notificationType: 'delivery_ready',
+    subject,
+    text: [
+      'Your Little Legend cinematic keepsake is ready.',
+      `View order: ${orderUrl}`,
+      `Download video: ${downloadUrl}`
+    ].join('\n'),
+    html: `
+      <p>Your Little Legend cinematic keepsake is ready.</p>
+      <p><a href="${orderUrl}">View order status</a></p>
+      <p><a href="${downloadUrl}">Download final video</a></p>
+    `,
+    payload: {
+      orderUrl,
+      downloadUrl,
+      finalVideoAssetKey
+    }
+  });
+}
+
+async function sendRenderFailureNotification(orderId: string, failureMessage: string): Promise<void> {
+  const orderUrl = `${env.WEB_APP_BASE_URL}/orders/${orderId}`;
+  const subject = 'We hit a rendering issue with your Little Legend order';
+  const safeFailureMessage = escapeHtml(failureMessage);
+
+  await sendOrderNotificationEmail({
+    orderId,
+    notificationType: 'render_failed',
+    subject,
+    text: [
+      'A rendering issue occurred while producing your video.',
+      `Order status page: ${orderUrl}`,
+      `Reason: ${failureMessage}`,
+      'You can use the "Retry Render" button on the order page (retry limits apply).'
+    ].join('\n'),
+    html: `
+      <p>A rendering issue occurred while producing your video.</p>
+      <p>Reason: ${safeFailureMessage}</p>
+      <p><a href="${orderUrl}">Open order status</a></p>
+      <p>You can use the "Retry Render" action on that page (retry limits apply).</p>
+      <p>If retries are exhausted, contact <a href="mailto:${env.SUPPORT_EMAIL}">${env.SUPPORT_EMAIL}</a>.</p>
+    `,
+    payload: {
+      orderUrl,
+      failureMessage
+    }
+  });
 }
 
 async function setOrderStatus(orderId: string, nextStatus: OrderStatus): Promise<void> {
@@ -563,6 +725,7 @@ async function markFailedHard(orderId: string, errorMessage: string, attempt: nu
     output: { phase: 'failed_hard', autoRefundEnabled: env.AUTO_REFUND_ON_FAILURE },
     errorText: errorMessage
   });
+  await sendRenderFailureNotification(orderId, errorMessage);
 
   if (!env.AUTO_REFUND_ON_FAILURE) {
     return;
@@ -617,7 +780,13 @@ async function markFailedHard(orderId: string, errorMessage: string, attempt: nu
       output: { refunded: false },
       errorText: (refundError as Error).message
     });
-    await transitionIfCurrent(orderId, ['refund_queued'], 'manual_review');
+    const movedManualReview = await transitionIfCurrent(orderId, ['refund_queued'], 'manual_review');
+    if (movedManualReview) {
+      await sendRenderFailureNotification(
+        orderId,
+        `Automatic refund failed and support review is required: ${(refundError as Error).message}`
+      );
+    }
   }
 }
 
@@ -913,7 +1082,7 @@ async function runPipeline(orderId: string, attempt: number): Promise<void> {
   });
 
   await setOrderStatus(orderId, 'delivered');
-  process.stdout.write(`Notification stub: delivery email queued for order ${orderId}\n`);
+  await sendDeliveryReadyNotification(orderId, finalCompose.finalVideoArtifactKey);
 }
 
 async function main(): Promise<void> {

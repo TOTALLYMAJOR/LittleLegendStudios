@@ -188,6 +188,7 @@ export default async function OrderStatusPage({ params }: StatusPageProps): Prom
   }
 
   const finalArtifact = data.artifacts.find((artifact) => artifact.kind === 'final_video');
+  const previewArtifact = data.artifacts.find((artifact) => artifact.kind === 'preview_video');
   const currentStepIndex = getCurrentStepIndex(data.order.status);
 
   const failedJobs = data.jobs.filter((job) => job.status === 'failed').length;
@@ -229,6 +230,11 @@ export default async function OrderStatusPage({ params }: StatusPageProps): Prom
             <>
               <p>Version: {data.latestScript.version}</p>
               <p className="mono">{data.latestScript.script_json.title}</p>
+              {previewArtifact?.meta_json?.signedDownloadUrl ? (
+                <a href={previewArtifact.meta_json.signedDownloadUrl} target="_blank" rel="noreferrer">
+                  Open Watermarked Preview
+                </a>
+              ) : null}
               <ul>
                 {data.latestScript.script_json.shots.map((shot) => (
                   <li key={shot.shotNumber}>

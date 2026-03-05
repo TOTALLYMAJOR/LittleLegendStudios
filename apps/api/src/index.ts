@@ -7,8 +7,8 @@ import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import type Stripe from 'stripe';
 import { z } from 'zod';
 
-import { createSignedUploadUrl, registerAssetRoutes } from './asset-routes.js';
-import { deleteAssetByKey } from './asset-store.js';
+import { createSignedDownloadUrl, createSignedUploadUrl, registerAssetRoutes } from './asset-routes.js';
+import { deleteAssetByKey, writeAssetBytes } from './asset-store.js';
 import { query } from './db.js';
 import { env } from './env.js';
 import { registerProviderRoutes } from './provider-routes.js';
@@ -224,6 +224,66 @@ async function markPaymentPendingOrderAsCancelled(orderId: string): Promise<void
   }
 
   await setOrderStatus(orderId, 'awaiting_script_approval');
+}
+
+function buildPreviewVideoBytes(args: {
+  orderId: string;
+  childName: string;
+  themeName: string;
+  version: number;
+  totalDurationSec: number;
+}): Buffer {
+  const ftyp = Buffer.from('000000186674797069736f6d0000020069736f6d69736f32', 'hex');
+  const note = Buffer.from(
+    `preview-watermarked|order=${args.orderId}|child=${args.childName}|theme=${args.themeName}|version=${args.version}|duration=${args.totalDurationSec}`,
+    'utf8'
+  );
+  return Buffer.concat([ftyp, note]);
+}
+
+async function createScriptPreviewArtifact(args: {
+  order: OrderRow;
+  version: number;
+  childName: string;
+  themeName: string;
+  totalDurationSec: number;
+}): Promise<{
+  kind: 'preview_video';
+  s3Key: string;
+  meta: Record<string, unknown>;
+}> {
+  const s3Key = `${args.order.user_id}/${args.order.id}/preview/script-v${args.version}.mp4`;
+  const bytes = buildPreviewVideoBytes({
+    orderId: args.order.id,
+    childName: args.childName,
+    themeName: args.themeName,
+    version: args.version,
+    totalDurationSec: args.totalDurationSec
+  });
+
+  await writeAssetBytes(s3Key, bytes);
+  const signedDownloadUrl = createSignedDownloadUrl(s3Key);
+  const meta: Record<string, unknown> = {
+    scriptVersion: args.version,
+    watermarked: true,
+    resolution: '720p',
+    bytes: bytes.byteLength,
+    signedDownloadUrl
+  };
+
+  await query(
+    `
+    INSERT INTO artifacts (order_id, kind, s3_key, meta_json)
+    VALUES ($1, 'preview_video', $2, $3::jsonb)
+    `,
+    [args.order.id, s3Key, JSON.stringify(meta)]
+  );
+
+  return {
+    kind: 'preview_video',
+    s3Key,
+    meta
+  };
 }
 
 function normalizeContentType(contentType: string): string {
@@ -583,7 +643,18 @@ async function buildServer(): Promise<FastifyInstance> {
       await setOrderStatus(params.orderId, 'awaiting_script_approval');
     }
 
-    return reply.send(scriptRow);
+    const previewArtifact = await createScriptPreviewArtifact({
+      order: activeOrder,
+      version,
+      childName: payload.childName,
+      themeName: theme.name,
+      totalDurationSec: script.totalDurationSec
+    });
+
+    return reply.send({
+      ...scriptRow,
+      previewArtifact
+    });
   });
 
   app.post('/orders/:orderId/script/approve', async (request, reply) => {

@@ -97,7 +97,18 @@ CREATE TABLE IF NOT EXISTS jobs (
 CREATE TABLE IF NOT EXISTS artifacts (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   order_id UUID NOT NULL REFERENCES orders(id),
-  kind TEXT NOT NULL CHECK (kind IN ('voice_clone_meta', 'audio_narration', 'audio_dialogue', 'character_refs', 'shot_video', 'final_video', 'thumbnail')),
+  kind TEXT NOT NULL CHECK (
+    kind IN (
+      'voice_clone_meta',
+      'audio_narration',
+      'audio_dialogue',
+      'character_refs',
+      'shot_video',
+      'final_video',
+      'thumbnail',
+      'preview_video'
+    )
+  ),
   s3_key TEXT NOT NULL,
   meta_json JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -153,6 +164,23 @@ DROP CONSTRAINT IF EXISTS jobs_type_check;
 ALTER TABLE jobs
 ADD CONSTRAINT jobs_type_check CHECK (
   type IN ('moderation', 'voice_clone', 'voice_render', 'character_pack', 'shot_render', 'final_render', 'refund')
+);
+
+ALTER TABLE artifacts
+DROP CONSTRAINT IF EXISTS artifacts_kind_check;
+
+ALTER TABLE artifacts
+ADD CONSTRAINT artifacts_kind_check CHECK (
+  kind IN (
+    'voice_clone_meta',
+    'audio_narration',
+    'audio_dialogue',
+    'character_refs',
+    'shot_video',
+    'final_video',
+    'thumbnail',
+    'preview_video'
+  )
 );
 
 CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders(user_id);

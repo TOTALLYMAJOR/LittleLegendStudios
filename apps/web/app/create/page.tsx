@@ -23,6 +23,14 @@ type GeneratedScript = {
       dialogue: string;
     }>;
   };
+  previewArtifact?: {
+    kind: 'preview_video';
+    s3Key: string;
+    meta: {
+      signedDownloadUrl?: string;
+      [key: string]: unknown;
+    };
+  };
 };
 
 type PayResponse = {
@@ -398,6 +406,13 @@ export default function CreateOrderPage(): JSX.Element {
       {script ? (
         <section className="card">
           <h3>{script.script_json.title}</h3>
+          {script.previewArtifact?.meta?.signedDownloadUrl ? (
+            <p>
+              <a href={script.previewArtifact.meta.signedDownloadUrl} target="_blank" rel="noreferrer">
+                Open Watermarked Preview (720p)
+              </a>
+            </p>
+          ) : null}
           <p>Narration:</p>
           <ul>
             {script.script_json.narration.map((line) => (

@@ -17,6 +17,10 @@ const schema = z.object({
   NEXT_PUBLIC_API_BASE_URL: z.string().url().default('http://localhost:4000'),
   WEB_APP_BASE_URL: z.string().url().default('http://localhost:3000'),
   PUBLIC_ASSET_BASE_URL: z.string().url().default('http://localhost:4000/assets'),
+  PROVIDER_AUTH_TOKEN: z
+    .string()
+    .optional()
+    .transform((value) => (value && value.trim().length > 0 ? value : undefined)),
   STRIPE_SECRET_KEY: z
     .string()
     .optional()

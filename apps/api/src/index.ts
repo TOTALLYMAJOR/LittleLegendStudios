@@ -9,6 +9,7 @@ import { z } from 'zod';
 
 import { query } from './db.js';
 import { env } from './env.js';
+import { registerProviderRoutes } from './provider-routes.js';
 import { renderQueue } from './queue.js';
 import { generateScript } from './script.js';
 import { seedThemes } from './seed.js';
@@ -260,6 +261,7 @@ async function buildServer(): Promise<FastifyInstance> {
   await seedThemes();
 
   app.get('/health', async () => ({ ok: true }));
+  registerProviderRoutes(app);
 
   app.post('/payments/stripe/webhook', async (request, reply) => {
     if (!canVerifyStripeWebhook()) {

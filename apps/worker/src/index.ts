@@ -1,21 +1,14 @@
-import { randomUUID } from 'node:crypto';
-
 import { type JobType, type ScriptPayload, assertOrderTransition, type OrderStatus } from '@little/shared';
 import { QueueEvents, Worker } from 'bullmq';
 
 import { query } from './db.js';
 import { env } from './env.js';
+import type { WorkerUpload } from './providers.js';
+import { buildProviderRegistry } from './providers.js';
 import { createRefund, isStripeRefundEnabled } from './stripe.js';
 
 const QUEUE_NAME = 'render-orders';
-const pipelineSteps: JobType[] = [
-  'moderation',
-  'voice_clone',
-  'voice_render',
-  'character_pack',
-  'shot_render',
-  'final_render'
-];
+const providers = buildProviderRegistry();
 
 interface OrderRow {
   id: string;
@@ -27,6 +20,23 @@ interface OrderRow {
 interface ScriptRow {
   script_json: ScriptPayload;
 }
+
+interface UploadRow {
+  kind: 'photo' | 'voice';
+  s3_key: string;
+  content_type: string;
+  bytes: number;
+  sha256: string | null;
+}
+
+type ArtifactKind =
+  | 'voice_clone_meta'
+  | 'audio_narration'
+  | 'audio_dialogue'
+  | 'character_refs'
+  | 'shot_video'
+  | 'final_video'
+  | 'thumbnail';
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -66,15 +76,13 @@ async function transitionIfCurrent(
   return true;
 }
 
-async function runStep(orderId: string, type: JobType, attempt: number): Promise<void> {
-  await runStepWithInput(orderId, type, attempt, { orderId, type });
-}
-
 async function runStepWithInput(
   orderId: string,
   type: JobType,
   attempt: number,
-  input: Record<string, unknown>
+  input: Record<string, unknown>,
+  output?: Record<string, unknown>,
+  provider = 'stub_provider'
 ): Promise<void> {
   const [jobRow] = await query<{ id: string }>(
     `
@@ -82,7 +90,7 @@ async function runStepWithInput(
     VALUES ($1, $2, 'running', $3, $4, now(), $5::jsonb)
     RETURNING id
     `,
-    [orderId, type, attempt, 'stub_provider', JSON.stringify(input)]
+    [orderId, type, attempt, provider, JSON.stringify(input)]
   );
 
   await sleep(1200);
@@ -95,7 +103,44 @@ async function runStepWithInput(
         finished_at = now()
     WHERE id = $1
     `,
-    [jobRow.id, JSON.stringify({ ok: true, step: type, completedAt: new Date().toISOString() })]
+    [jobRow.id, JSON.stringify(output ?? { ok: true, step: type, completedAt: new Date().toISOString() })]
+  );
+}
+
+async function loadUploads(orderId: string): Promise<UploadRow[]> {
+  return query<UploadRow>(
+    `
+    SELECT kind, s3_key, content_type, bytes, sha256
+    FROM uploads
+    WHERE order_id = $1
+    ORDER BY created_at ASC
+    `,
+    [orderId]
+  );
+}
+
+function toWorkerUpload(upload: UploadRow): WorkerUpload {
+  return {
+    kind: upload.kind,
+    s3Key: upload.s3_key,
+    contentType: upload.content_type,
+    bytes: upload.bytes,
+    sha256: upload.sha256
+  };
+}
+
+async function createArtifact(
+  orderId: string,
+  kind: ArtifactKind,
+  s3Key: string,
+  meta: Record<string, unknown>
+): Promise<void> {
+  await query(
+    `
+    INSERT INTO artifacts (order_id, kind, s3_key, meta_json)
+    VALUES ($1, $2, $3, $4::jsonb)
+    `,
+    [orderId, kind, s3Key, JSON.stringify(meta)]
   );
 }
 
@@ -156,7 +201,16 @@ function fallbackShotPlan(): ScriptPayload['shots'] {
   ];
 }
 
-async function loadShotPlan(orderId: string): Promise<ScriptPayload['shots']> {
+function fallbackScriptPayload(): ScriptPayload {
+  return {
+    title: 'Fallback Cinematic Story',
+    narration: ['A cinematic opening begins.', 'The adventure reaches its peak.', 'A joyful ending closes the story.'],
+    totalDurationSec: 30,
+    shots: fallbackShotPlan()
+  };
+}
+
+async function loadScriptPayload(orderId: string): Promise<ScriptPayload> {
   const rows = await query<ScriptRow>(
     `
     SELECT script_json
@@ -170,10 +224,10 @@ async function loadShotPlan(orderId: string): Promise<ScriptPayload['shots']> {
 
   const script = rows[0]?.script_json;
   if (!script || !Array.isArray(script.shots) || script.shots.length === 0) {
-    return fallbackShotPlan();
+    return fallbackScriptPayload();
   }
 
-  return [...script.shots].sort((a, b) => a.shotNumber - b.shotNumber);
+  return script;
 }
 
 async function writeJobEvent(args: {
@@ -310,70 +364,185 @@ async function runPipeline(orderId: string, attempt: number): Promise<void> {
     await setOrderStatus(orderId, 'running');
   }
 
-  for (const step of pipelineSteps.slice(0, 4)) {
-    await runStep(orderId, step, attempt);
-  }
+  const uploads = await loadUploads(orderId);
+  const photoUploads = uploads.filter((upload) => upload.kind === 'photo');
+  const voiceUpload = uploads.find((upload) => upload.kind === 'voice') ?? null;
+  const scriptPayload = await loadScriptPayload(orderId);
+  const shotPlan = [...scriptPayload.shots].sort((a, b) => a.shotNumber - b.shotNumber);
+  const dialogueLines = shotPlan
+    .filter((shot) => shot.shotType === 'dialogue' && shot.dialogue.trim().length > 0 && shot.dialogue !== 'Narration only.')
+    .map((shot) => shot.dialogue);
+  const totalDurationSec = shotPlan.reduce((sum, shot) => sum + shot.durationSec, 0);
 
-  const shotPlan = await loadShotPlan(orderId);
+  await runStepWithInput(
+    orderId,
+    'moderation',
+    attempt,
+    {
+      orderId,
+      photoCount: photoUploads.length,
+      voiceCount: voiceUpload ? 1 : 0
+    },
+    {
+      ok: true,
+      checks: {
+        faceDetect: 'pass_stub',
+        nsfw: 'pass_stub',
+        audioQuality: 'pass_stub'
+      }
+    }
+  );
+
+  const voiceClone = await providers.voice.createVoiceClone({
+    orderId,
+    userId: order.user_id,
+    voiceUpload: voiceUpload ? toWorkerUpload(voiceUpload) : null
+  });
+  await runStepWithInput(
+    orderId,
+    'voice_clone',
+    attempt,
+    {
+      orderId,
+      sourceVoiceKey: voiceUpload?.s3_key ?? null
+    },
+    {
+      ok: true,
+      provider: voiceClone.provider,
+      voiceCloneId: voiceClone.voiceCloneId
+    },
+    voiceClone.provider
+  );
+
+  await createArtifact(orderId, 'voice_clone_meta', voiceClone.voiceCloneArtifactKey, {
+    ...voiceClone.voiceCloneMeta,
+    signedDownloadUrl: `${env.PUBLIC_ASSET_BASE_URL}/download/${encodeURIComponent(voiceClone.voiceCloneArtifactKey)}?token=dev`
+  });
+
+  const voiceTracks = await providers.voice.renderVoiceTracks({
+    orderId,
+    userId: order.user_id,
+    voiceCloneId: voiceClone.voiceCloneId,
+    scriptTitle: scriptPayload.title,
+    narrationLines: scriptPayload.narration,
+    dialogueLines
+  });
+
+  await runStepWithInput(
+    orderId,
+    'voice_render',
+    attempt,
+    {
+      orderId,
+      narrationLineCount: scriptPayload.narration.length,
+      dialogueLineCount: dialogueLines.length
+    },
+    {
+      ok: true,
+      provider: voiceTracks.provider,
+      narrationTrackKey: voiceTracks.narrationArtifactKey,
+      dialogueTrackKey: voiceTracks.dialogueArtifactKey
+    },
+    voiceTracks.provider
+  );
+
+  await createArtifact(orderId, 'audio_narration', voiceTracks.narrationArtifactKey, {
+    ...voiceTracks.narrationMeta,
+    signedDownloadUrl: `${env.PUBLIC_ASSET_BASE_URL}/download/${encodeURIComponent(voiceTracks.narrationArtifactKey)}?token=dev`
+  });
+
+  await createArtifact(orderId, 'audio_dialogue', voiceTracks.dialogueArtifactKey, {
+    ...voiceTracks.dialogueMeta,
+    signedDownloadUrl: `${env.PUBLIC_ASSET_BASE_URL}/download/${encodeURIComponent(voiceTracks.dialogueArtifactKey)}?token=dev`
+  });
+
+  const characterPack = await providers.scene.createCharacterPack({
+    orderId,
+    userId: order.user_id,
+    photoUploads: photoUploads.map(toWorkerUpload),
+    voiceCloneId: voiceClone.voiceCloneId
+  });
+
+  const characterProfile = characterPack.characterProfile;
+  await runStepWithInput(
+    orderId,
+    'character_pack',
+    attempt,
+    {
+      orderId,
+      sourcePhotos: photoUploads.length,
+      style: characterProfile.modelStyle
+    },
+    {
+      ok: true,
+      provider: characterPack.provider,
+      characterId: characterProfile.characterId,
+      faceEmbeddingRef: characterProfile.faceEmbeddingRef
+    },
+    characterPack.provider
+  );
+
+  await createArtifact(orderId, 'character_refs', characterPack.refsArtifactKey, {
+    ...characterPack.refsMeta,
+    signedDownloadUrl: `${env.PUBLIC_ASSET_BASE_URL}/download/${encodeURIComponent(characterPack.refsArtifactKey)}?token=dev`
+  });
+
+  const shotArtifactKeys: string[] = [];
 
   for (const shot of shotPlan) {
-    await runStepWithInput(orderId, 'shot_render', attempt, {
+    const shotRender = await providers.scene.renderShot({
       orderId,
-      shot
+      userId: order.user_id,
+      shot,
+      characterProfile
     });
 
-    const shotKey = `${order.user_id}/${orderId}/shots/shot-${shot.shotNumber}-${randomUUID().slice(0, 8)}.mp4`;
-    await query(
-      `
-      INSERT INTO artifacts (order_id, kind, s3_key, meta_json)
-      VALUES ($1, 'shot_video', $2, $3::jsonb)
-      `,
-      [
-        orderId,
-        shotKey,
-        JSON.stringify({
-          shotNumber: shot.shotNumber,
-          sceneId: shot.sceneId,
-          shotType: shot.shotType,
-          camera: shot.camera,
-          lighting: shot.lighting,
-          durationSec: shot.durationSec,
-          signedDownloadUrl: `${env.PUBLIC_ASSET_BASE_URL}/download/${encodeURIComponent(shotKey)}?token=dev`
-        })
-      ]
-    );
+    await runStepWithInput(orderId, 'shot_render', attempt, {
+      orderId,
+      shot,
+      characterId: characterProfile.characterId,
+      voiceCloneId: voiceClone.voiceCloneId
+    }, {
+      ok: true,
+      provider: shotRender.provider,
+      shotArtifactKey: shotRender.shotArtifactKey
+    }, shotRender.provider);
+
+    shotArtifactKeys.push(shotRender.shotArtifactKey);
+    await createArtifact(orderId, 'shot_video', shotRender.shotArtifactKey, {
+      ...shotRender.shotMeta,
+      signedDownloadUrl: `${env.PUBLIC_ASSET_BASE_URL}/download/${encodeURIComponent(shotRender.shotArtifactKey)}?token=dev`
+    });
   }
+
+  const finalCompose = await providers.scene.composeFinal({
+    orderId,
+    userId: order.user_id,
+    shotArtifactKeys,
+    totalDurationSec,
+    characterProfile
+  });
 
   await runStepWithInput(orderId, 'final_render', attempt, {
     orderId,
     shotCount: shotPlan.length,
-    totalDurationSec: shotPlan.reduce((sum, shot) => sum + shot.durationSec, 0)
+    totalDurationSec,
+    characterId: characterProfile.characterId
+  }, {
+    ok: true,
+    provider: finalCompose.provider,
+    finalVideoArtifactKey: finalCompose.finalVideoArtifactKey,
+    thumbnailArtifactKey: finalCompose.thumbnailArtifactKey
+  }, finalCompose.provider);
+
+  await createArtifact(orderId, 'final_video', finalCompose.finalVideoArtifactKey, {
+    ...finalCompose.finalVideoMeta,
+    signedDownloadUrl: `${env.PUBLIC_ASSET_BASE_URL}/download/${encodeURIComponent(finalCompose.finalVideoArtifactKey)}?token=dev`
   });
-
-  const finalKey = `${order.user_id}/${orderId}/final/final-${randomUUID().slice(0, 8)}.mp4`;
-  const thumbnailKey = `${order.user_id}/${orderId}/thumb/thumb-${randomUUID().slice(0, 8)}.jpg`;
-
-  await query(
-    `
-    INSERT INTO artifacts (order_id, kind, s3_key, meta_json)
-    VALUES
-      ($1, 'final_video', $2, $3::jsonb),
-      ($1, 'thumbnail', $4, $5::jsonb)
-    `,
-    [
-      orderId,
-      finalKey,
-      JSON.stringify({
-        signedDownloadUrl: `${env.PUBLIC_ASSET_BASE_URL}/download/${encodeURIComponent(finalKey)}?token=dev`,
-        resolution: '1080p',
-        durationSec: 32
-      }),
-      thumbnailKey,
-      JSON.stringify({
-        signedDownloadUrl: `${env.PUBLIC_ASSET_BASE_URL}/download/${encodeURIComponent(thumbnailKey)}?token=dev`
-      })
-    ]
-  );
+  await createArtifact(orderId, 'thumbnail', finalCompose.thumbnailArtifactKey, {
+    ...finalCompose.thumbnailMeta,
+    signedDownloadUrl: `${env.PUBLIC_ASSET_BASE_URL}/download/${encodeURIComponent(finalCompose.thumbnailArtifactKey)}?token=dev`
+  });
 
   await setOrderStatus(orderId, 'delivered');
   process.stdout.write(`Notification stub: delivery email queued for order ${orderId}\n`);

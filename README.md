@@ -53,12 +53,21 @@ npm run dev
 - Script generation + approval (deterministic 4-shot, 20-40s structure, max 3 versions/order)
 - Cinematic Prompt Engine scaffold (scene-aware shot plan with camera/lighting/environment cues)
 - Theme scene packs in template manifests (10 scenes per launch theme with anchors and asset pointers)
+- Character DNA scaffold in worker (deterministic `character_refs` profile derived from uploaded photos)
 - Expanded lifecycle states for retries/refunds (`failed_soft`, `failed_hard`, `refund_queued`, `manual_review`)
 - Stripe checkout + webhook path (real when Stripe env vars are set, stub fallback otherwise)
-- Worker pipeline consumes shot plans and writes per-shot `shot_video` artifacts
+- Worker pipeline consumes shot plans and writes `voice_clone_meta`, `audio_*`, `character_refs`, `shot_video`, and final artifacts
+- Worker provider adapters support `stub` and `http` modes for voice + scene generation services
+- API now exposes internal provider endpoints for model + scene generation (`/voice/clone`, `/voice/render`, `/scene/*`)
 - Status polling + final artifact link stub
 
 ## Notes
 
 - Stripe is integrated with optional real mode (`STRIPE_SECRET_KEY` + `STRIPE_WEBHOOK_SECRET`); storage/email/AI providers remain mocked.
+- To run model + scene generation through local API provider routes, set worker envs:
+  - `VOICE_PROVIDER_MODE=http`
+  - `VOICE_PROVIDER_BASE_URL=http://localhost:4000`
+  - `SCENE_PROVIDER_MODE=http`
+  - `SCENE_PROVIDER_BASE_URL=http://localhost:4000`
+- Optionally protect provider routes with `PROVIDER_AUTH_TOKEN` (set in API + worker env).
 - This is a foundation for Milestones M1-M3 from the product spec.

@@ -7,6 +7,7 @@ import {
   buildStubMp3Bytes,
   buildStubMp4Bytes,
   createSignedDownloadUrl,
+  fetchRemoteAssetBytes,
   uploadAssetBytes
 } from './assets.js';
 import { query } from './db.js';
@@ -186,66 +187,156 @@ async function awaitProviderTask(providerTaskId: string): Promise<Record<string,
   );
 }
 
+function readNestedString(source: Record<string, unknown>, path: string[]): string | null {
+  let current: unknown = source;
+  for (const segment of path) {
+    if (!current || typeof current !== 'object') {
+      return null;
+    }
+    current = (current as Record<string, unknown>)[segment];
+  }
+
+  if (typeof current !== 'string') {
+    return null;
+  }
+
+  const trimmed = current.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function extractProviderOutputUrl(payload: Record<string, unknown>, kind: ArtifactKind): string | null {
+  const urlPathsByKind: Record<ArtifactKind, string[][]> = {
+    voice_clone_meta: [],
+    audio_narration: [],
+    audio_dialogue: [],
+    character_refs: [],
+    shot_video: [
+      ['providerTaskOutput', 'outputUrl'],
+      ['providerTaskOutput', 'videoUrl'],
+      ['providerTaskOutput', 'url'],
+      ['providerTaskOutput', 'providerResponse', 'data', 'video_url'],
+      ['providerTaskOutput', 'providerResponse', 'data', 'url'],
+      ['providerTaskOutput', 'providerResponse', 'response', 'url']
+    ],
+    final_video: [
+      ['providerTaskOutput', 'outputUrl'],
+      ['providerTaskOutput', 'videoUrl'],
+      ['providerTaskOutput', 'url'],
+      ['providerTaskOutput', 'providerResponse', 'response', 'url'],
+      ['providerTaskOutput', 'providerResponse', 'data', 'video_url'],
+      ['providerTaskOutput', 'providerResponse', 'data', 'url']
+    ],
+    thumbnail: [
+      ['providerTaskOutput', 'thumbnailUrl'],
+      ['providerTaskOutput', 'posterUrl'],
+      ['providerTaskOutput', 'providerResponse', 'response', 'poster'],
+      ['providerTaskOutput', 'providerResponse', 'response', 'poster_url'],
+      ['providerTaskOutput', 'providerResponse', 'data', 'thumbnail_url']
+    ]
+  };
+
+  for (const path of urlPathsByKind[kind]) {
+    const value = readNestedString(payload, path);
+    if (value) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
 async function materializeArtifactFile(args: {
   kind: ArtifactKind;
   assetKey: string;
   payload: Record<string, unknown>;
-}): Promise<{ contentType: string; bytesWritten: number; placeholderAsset: boolean; materializedAt: string }> {
-  let contentType: string;
-  let bytes: Uint8Array;
+}): Promise<{
+  contentType: string;
+  bytesWritten: number;
+  placeholderAsset: boolean;
+  providerOutputIngested: boolean;
+  providerOutputUrl?: string;
+  providerOutputFetchError?: string;
+  materializedAt: string;
+}> {
+  let contentType = 'application/octet-stream';
+  let bytes: Uint8Array | null = null;
+  let placeholderAsset = true;
+  let providerOutputIngested = false;
+  const providerOutputUrl = extractProviderOutputUrl(args.payload, args.kind);
+  let providerOutputFetchError: string | undefined;
 
-  switch (args.kind) {
-    case 'voice_clone_meta':
-    case 'character_refs': {
-      contentType = 'application/json';
-      bytes = buildJsonBytes(args.payload);
-      break;
-    }
-    case 'audio_narration':
-    case 'audio_dialogue': {
-      contentType = 'audio/mpeg';
-      const label = JSON.stringify({
-        kind: args.kind,
-        key: args.assetKey,
-        summary: String(args.payload.scriptTitle ?? args.payload.voiceCloneId ?? '')
+  if (providerOutputUrl) {
+    try {
+      const fetched = await fetchRemoteAssetBytes({
+        url: providerOutputUrl,
+        fallbackContentType: args.kind === 'thumbnail' ? 'image/jpeg' : 'video/mp4'
       });
-      bytes = buildStubMp3Bytes(label);
-      break;
+      contentType = fetched.contentType;
+      bytes = fetched.bytes;
+      placeholderAsset = false;
+      providerOutputIngested = true;
+    } catch (error) {
+      providerOutputFetchError = (error as Error).message;
     }
-    case 'shot_video':
-    case 'final_video': {
-      contentType = 'video/mp4';
-      const label = JSON.stringify({
-        kind: args.kind,
-        key: args.assetKey,
-        shot: args.payload.shotNumber ?? null,
-        characterId: args.payload.characterId ?? null
-      });
-      bytes = buildStubMp4Bytes(label);
-      break;
-    }
-    case 'thumbnail': {
-      contentType = 'image/jpeg';
-      bytes = buildStubJpegBytes();
-      break;
-    }
-    default: {
-      contentType = 'application/octet-stream';
-      bytes = buildJsonBytes(args.payload);
-      break;
+  }
+
+  if (!bytes) {
+    switch (args.kind) {
+      case 'voice_clone_meta':
+      case 'character_refs': {
+        contentType = 'application/json';
+        bytes = buildJsonBytes(args.payload);
+        break;
+      }
+      case 'audio_narration':
+      case 'audio_dialogue': {
+        contentType = 'audio/mpeg';
+        const label = JSON.stringify({
+          kind: args.kind,
+          key: args.assetKey,
+          summary: String(args.payload.scriptTitle ?? args.payload.voiceCloneId ?? '')
+        });
+        bytes = buildStubMp3Bytes(label);
+        break;
+      }
+      case 'shot_video':
+      case 'final_video': {
+        contentType = 'video/mp4';
+        const label = JSON.stringify({
+          kind: args.kind,
+          key: args.assetKey,
+          shot: args.payload.shotNumber ?? null,
+          characterId: args.payload.characterId ?? null
+        });
+        bytes = buildStubMp4Bytes(label);
+        break;
+      }
+      case 'thumbnail': {
+        contentType = 'image/jpeg';
+        bytes = buildStubJpegBytes();
+        break;
+      }
+      default: {
+        contentType = 'application/octet-stream';
+        bytes = buildJsonBytes(args.payload);
+        break;
+      }
     }
   }
 
   await uploadAssetBytes({
     assetKey: args.assetKey,
     contentType,
-    bytes
+    bytes: bytes ?? buildJsonBytes({})
   });
 
   return {
     contentType,
-    bytesWritten: bytes.byteLength,
-    placeholderAsset: true,
+    bytesWritten: (bytes ?? buildJsonBytes({})).byteLength,
+    placeholderAsset,
+    providerOutputIngested,
+    ...(providerOutputUrl ? { providerOutputUrl } : {}),
+    ...(providerOutputFetchError ? { providerOutputFetchError } : {}),
     materializedAt: new Date().toISOString()
   };
 }
@@ -721,7 +812,8 @@ async function runPipeline(orderId: string, attempt: number): Promise<void> {
     assetKey: finalCompose.thumbnailArtifactKey,
     payload: {
       ...finalCompose.thumbnailMeta,
-      provider: finalCompose.provider
+      provider: finalCompose.provider,
+      providerTaskOutput: finalProviderOutput
     }
   });
 

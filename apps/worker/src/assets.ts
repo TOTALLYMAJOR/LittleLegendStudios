@@ -62,3 +62,38 @@ export function buildStubJpegBytes(): Uint8Array {
     'base64'
   );
 }
+
+export async function fetchRemoteAssetBytes(args: {
+  url: string;
+  fallbackContentType: string;
+}): Promise<{ contentType: string; bytes: Uint8Array }> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), env.PROVIDER_HTTP_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(args.url, {
+      method: 'GET',
+      signal: controller.signal
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`HTTP ${response.status}: ${text.slice(0, 250)}`);
+    }
+
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.byteLength === 0) {
+      throw new Error('Provider output payload is empty.');
+    }
+
+    const contentTypeHeader = response.headers.get('content-type');
+    const contentType = contentTypeHeader?.split(';')[0]?.trim() || args.fallbackContentType;
+
+    return {
+      contentType,
+      bytes
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}

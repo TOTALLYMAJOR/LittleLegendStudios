@@ -59,6 +59,7 @@ npm run dev
 - Worker pipeline consumes shot plans and writes `voice_clone_meta`, `audio_*`, `character_refs`, `shot_video`, and final artifacts
 - Worker provider adapters support `stub` and `http` modes for voice + scene generation services
 - API now exposes internal provider endpoints for model + scene generation (`/voice/clone`, `/voice/render`, `/scene/*`)
+- API provider endpoints support real integration attempts for ElevenLabs (voice), HeyGen (shot generation), and Shotstack (final compose) with fallback behavior.
 - Status polling + final artifact link stub
 
 ## Notes
@@ -69,5 +70,13 @@ npm run dev
   - `VOICE_PROVIDER_BASE_URL=http://localhost:4000`
   - `SCENE_PROVIDER_MODE=http`
   - `SCENE_PROVIDER_BASE_URL=http://localhost:4000`
+- API integration modes:
+  - `PROVIDER_INTEGRATION_MODE=stub` (always deterministic stub behavior)
+  - `PROVIDER_INTEGRATION_MODE=hybrid` (try real provider calls when keys are set, fallback on failure)
+  - `PROVIDER_INTEGRATION_MODE=strict` (fail request if provider config/calls fail)
+- Real provider envs:
+  - `ELEVENLABS_API_KEY` (+ optional `ELEVENLABS_FALLBACK_VOICE_ID`)
+  - `HEYGEN_API_KEY`
+  - `SHOTSTACK_API_KEY`
 - Optionally protect provider routes with `PROVIDER_AUTH_TOKEN` (set in API + worker env).
 - This is a foundation for Milestones M1-M3 from the product spec.

@@ -124,6 +124,10 @@ const composeFinalRequestSchema = z.object({
   characterProfile: characterProfileSchema
 });
 
+type ProviderUpload = z.infer<typeof providerUploadSchema>;
+
+type CharacterProfile = z.infer<typeof characterProfileSchema>;
+
 class ProviderRequestError extends Error {
   constructor(
     readonly statusCode: number,
@@ -180,6 +184,349 @@ function sendProviderError(reply: FastifyReply, request: FastifyRequest, error: 
   return reply.status(500).send({ message: 'Provider route failed.' });
 }
 
+function integrationModeAllowsExternal(): boolean {
+  return env.PROVIDER_INTEGRATION_MODE !== 'stub';
+}
+
+function integrationModeIsStrict(): boolean {
+  return env.PROVIDER_INTEGRATION_MODE === 'strict';
+}
+
+function normalizeBaseUrl(value: string): string {
+  return value.endsWith('/') ? value.slice(0, -1) : value;
+}
+
+function normalizePath(value: string): string {
+  return value.startsWith('/') ? value : `/${value}`;
+}
+
+async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), env.PROVIDER_HTTP_TIMEOUT_MS);
+
+  try {
+    return await fetch(url, {
+      ...init,
+      signal: controller.signal
+    });
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error(`Timed out after ${env.PROVIDER_HTTP_TIMEOUT_MS}ms: ${url}`);
+    }
+
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function readBodyText(response: Response): Promise<string> {
+  const text = await response.text();
+  return text.trim().slice(0, 500);
+}
+
+function getByPath(source: unknown, path: readonly string[]): unknown {
+  let current: unknown = source;
+
+  for (const segment of path) {
+    if (!current || typeof current !== 'object') {
+      return undefined;
+    }
+
+    current = (current as Record<string, unknown>)[segment];
+  }
+
+  return current;
+}
+
+function pickString(source: unknown, paths: ReadonlyArray<readonly string[]>): string | null {
+  for (const path of paths) {
+    const value = getByPath(source, path);
+    if (typeof value === 'string' && value.trim().length > 0) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+async function postJson(args: {
+  url: string;
+  headers: Record<string, string>;
+  body: Record<string, unknown>;
+}): Promise<unknown> {
+  const response = await fetchWithTimeout(args.url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...args.headers
+    },
+    body: JSON.stringify(args.body)
+  });
+
+  const rawText = await response.text();
+  let parsed: unknown = null;
+  if (rawText.trim().length > 0) {
+    try {
+      parsed = JSON.parse(rawText);
+    } catch {
+      parsed = { rawText };
+    }
+  }
+
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status} from ${args.url}: ${rawText.slice(0, 300)}`);
+  }
+
+  return parsed;
+}
+
+function buildAssetDownloadUrl(s3Key: string): string {
+  const base = normalizeBaseUrl(env.PROVIDER_SOURCE_ASSET_BASE_URL ?? env.PUBLIC_ASSET_BASE_URL);
+  return `${base}/download/${encodeURIComponent(s3Key)}?token=dev`;
+}
+
+async function fetchSourceAssetBytes(upload: ProviderUpload): Promise<{ contentType: string; bytes: ArrayBuffer; sourceUrl: string }> {
+  const sourceUrl = buildAssetDownloadUrl(upload.s3Key);
+  const headers: Record<string, string> = {};
+
+  if (env.PROVIDER_SOURCE_ASSET_BEARER_TOKEN) {
+    headers.Authorization = `Bearer ${env.PROVIDER_SOURCE_ASSET_BEARER_TOKEN}`;
+  }
+
+  const response = await fetchWithTimeout(sourceUrl, {
+    method: 'GET',
+    headers
+  });
+
+  if (!response.ok) {
+    const text = await readBodyText(response);
+    throw new Error(`Failed to fetch source asset ${upload.s3Key}: HTTP ${response.status} ${text}`);
+  }
+
+  const bytes = await response.arrayBuffer();
+  if (bytes.byteLength === 0) {
+    throw new Error(`Source asset ${upload.s3Key} is empty.`);
+  }
+
+  return {
+    contentType: upload.contentType,
+    bytes,
+    sourceUrl
+  };
+}
+
+async function createElevenLabsClone(args: {
+  orderId: string;
+  userId: string;
+  voiceUpload: ProviderUpload;
+}): Promise<{ voiceCloneId: string; sourceBytes: number; sourceUrl: string }> {
+  if (!env.ELEVENLABS_API_KEY) {
+    throw new Error('ELEVENLABS_API_KEY is not configured.');
+  }
+
+  const source = await fetchSourceAssetBytes(args.voiceUpload);
+
+  const form = new FormData();
+  form.set('name', `lls-${args.orderId.slice(0, 8)}-voice`);
+  form.set('description', `Little Legend order ${args.orderId}`);
+  form.append(
+    'files',
+    new Blob([source.bytes], { type: source.contentType }),
+    `voice-sample-${args.orderId.slice(0, 8)}.wav`
+  );
+
+  const endpoint = `${normalizeBaseUrl(env.ELEVENLABS_BASE_URL)}/v1/voices/add`;
+  const response = await fetchWithTimeout(endpoint, {
+    method: 'POST',
+    headers: {
+      'xi-api-key': env.ELEVENLABS_API_KEY
+    },
+    body: form
+  });
+
+  const rawText = await response.text();
+  let parsed: unknown = null;
+  if (rawText.trim().length > 0) {
+    try {
+      parsed = JSON.parse(rawText);
+    } catch {
+      parsed = { rawText };
+    }
+  }
+
+  if (!response.ok) {
+    throw new Error(`ElevenLabs voice clone failed: HTTP ${response.status} ${rawText.slice(0, 300)}`);
+  }
+
+  const voiceCloneId = pickString(parsed, [
+    ['voice_id'],
+    ['voiceId'],
+    ['id'],
+    ['data', 'voice_id'],
+    ['data', 'voiceId']
+  ]);
+
+  if (!voiceCloneId) {
+    throw new Error('ElevenLabs voice clone response did not include voice id.');
+  }
+
+  return {
+    voiceCloneId,
+    sourceBytes: source.bytes.byteLength,
+    sourceUrl: source.sourceUrl
+  };
+}
+
+async function renderElevenLabsTrack(args: { voiceId: string; text: string }): Promise<{ byteLength: number; requestId: string | null }> {
+  if (!env.ELEVENLABS_API_KEY) {
+    throw new Error('ELEVENLABS_API_KEY is not configured.');
+  }
+
+  if (args.text.trim().length === 0) {
+    return {
+      byteLength: 0,
+      requestId: null
+    };
+  }
+
+  const endpoint = `${normalizeBaseUrl(env.ELEVENLABS_BASE_URL)}/v1/text-to-speech/${encodeURIComponent(args.voiceId)}`;
+
+  const response = await fetchWithTimeout(endpoint, {
+    method: 'POST',
+    headers: {
+      'xi-api-key': env.ELEVENLABS_API_KEY,
+      'Content-Type': 'application/json',
+      Accept: 'audio/mpeg'
+    },
+    body: JSON.stringify({
+      text: args.text,
+      model_id: env.ELEVENLABS_MODEL_ID,
+      output_format: env.ELEVENLABS_OUTPUT_FORMAT
+    })
+  });
+
+  if (!response.ok) {
+    const text = await readBodyText(response);
+    throw new Error(`ElevenLabs TTS failed: HTTP ${response.status} ${text}`);
+  }
+
+  const audio = await response.arrayBuffer();
+  return {
+    byteLength: audio.byteLength,
+    requestId: response.headers.get('request-id') ?? response.headers.get('x-request-id')
+  };
+}
+
+async function queueHeyGenShot(args: {
+  orderId: string;
+  userId: string;
+  themeName: string;
+  shot: ScriptPayload['shots'][number];
+  sceneName: string;
+  characterProfile: CharacterProfile;
+}): Promise<{ providerTaskId: string }> {
+  if (!env.HEYGEN_API_KEY) {
+    throw new Error('HEYGEN_API_KEY is not configured.');
+  }
+
+  const endpoint = `${normalizeBaseUrl(env.HEYGEN_BASE_URL)}${normalizePath(env.HEYGEN_VIDEO_GENERATE_PATH)}`;
+  const prompt = [
+    `${args.themeName} cinematic scene \"${args.sceneName}\"`,
+    `${args.shot.camera} camera`,
+    `${args.shot.lighting} lighting`,
+    args.shot.shotType === 'dialogue' ? `child speaks: ${args.shot.dialogue}` : `narration beat: ${args.shot.narration}`,
+    `character id ${args.characterProfile.characterId}`
+  ].join('; ');
+
+  const payload = await postJson({
+    url: endpoint,
+    headers: {
+      'X-Api-Key': env.HEYGEN_API_KEY,
+      Authorization: `Bearer ${env.HEYGEN_API_KEY}`
+    },
+    body: {
+      prompt,
+      metadata: {
+        orderId: args.orderId,
+        userId: args.userId,
+        shotNumber: args.shot.shotNumber
+      }
+    }
+  });
+
+  const providerTaskId = pickString(payload, [
+    ['data', 'video_id'],
+    ['data', 'videoId'],
+    ['video_id'],
+    ['videoId'],
+    ['data', 'id'],
+    ['id']
+  ]);
+
+  if (!providerTaskId) {
+    throw new Error('HeyGen response did not include a task/video id.');
+  }
+
+  return { providerTaskId };
+}
+
+async function queueShotstackRender(args: {
+  orderId: string;
+  themeName: string;
+  totalDurationSec: number;
+  shotCount: number;
+  characterProfile: CharacterProfile;
+}): Promise<{ providerTaskId: string }> {
+  if (!env.SHOTSTACK_API_KEY) {
+    throw new Error('SHOTSTACK_API_KEY is not configured.');
+  }
+
+  const endpoint = `${normalizeBaseUrl(env.SHOTSTACK_BASE_URL)}/edit/${env.SHOTSTACK_STAGE}/render`;
+
+  const payload = await postJson({
+    url: endpoint,
+    headers: {
+      'x-api-key': env.SHOTSTACK_API_KEY
+    },
+    body: {
+      timeline: {
+        tracks: [
+          {
+            clips: [
+              {
+                asset: {
+                  type: 'title',
+                  text: `${args.themeName}: ${args.characterProfile.characterId}`,
+                  style: 'minimal'
+                },
+                start: 0,
+                length: Math.max(4, Math.min(args.totalDurationSec, 20))
+              }
+            ]
+          }
+        ]
+      },
+      output: {
+        format: 'mp4',
+        resolution: args.totalDurationSec <= 35 ? 'hd' : 'sd'
+      }
+    }
+  });
+
+  const providerTaskId = pickString(payload, [
+    ['response', 'id'],
+    ['data', 'id'],
+    ['id']
+  ]);
+
+  if (!providerTaskId) {
+    throw new Error('Shotstack response did not include a render id.');
+  }
+
+  return { providerTaskId };
+}
+
 async function loadOrderContext(orderId: string, userId: string): Promise<ProviderOrderContext> {
   const rows = await query<ProviderOrderContextRow>(
     `
@@ -215,7 +562,7 @@ async function loadOrderContext(orderId: string, userId: string): Promise<Provid
 
 function buildCharacterProfile(args: {
   orderId: string;
-  photoUploads: Array<z.infer<typeof providerUploadSchema>>;
+  photoUploads: ProviderUpload[];
   voiceCloneId: string;
 }) {
   const sourceMaterial = args.photoUploads.map((upload) => upload.sha256 ?? upload.s3Key).join('|') || args.orderId;
@@ -246,6 +593,134 @@ function buildShotKey(args: {
   return `${args.userId}/${args.orderId}/shots/shot-${args.shot.shotNumber}-${shotHash}.mp4`;
 }
 
+function buildFallbackVoiceClone(payload: z.infer<typeof voiceCloneRequestSchema>, reason: string) {
+  const sourceSeed = payload.voiceUpload?.sha256 ?? payload.voiceUpload?.s3Key ?? payload.orderId;
+  const voiceCloneId = `voice_${hashHex(`${payload.orderId}:${sourceSeed}`, 10)}`;
+  const voiceCloneArtifactKey = `${payload.userId}/${payload.orderId}/voice/clone-${voiceCloneId}.json`;
+
+  return {
+    voiceCloneId,
+    voiceCloneArtifactKey,
+    voiceCloneMeta: {
+      voiceCloneId,
+      sourceVoiceKey: payload.voiceUpload?.s3Key ?? null,
+      sourceContentType: payload.voiceUpload?.contentType ?? null,
+      sourceDurationSec: payload.voiceUpload ? Math.max(30, Math.min(60, Math.round(payload.voiceUpload.bytes / 11000))) : null,
+      providerModel: 'instant_voice_clone_v1_stub',
+      fallbackReason: reason,
+      integrationMode: env.PROVIDER_INTEGRATION_MODE
+    }
+  };
+}
+
+function buildFallbackVoiceRender(payload: z.infer<typeof voiceRenderRequestSchema>, reason: string) {
+  const narrationChars = payload.narrationLines.join(' ').trim().length;
+  const dialogueChars = payload.dialogueLines.join(' ').trim().length;
+  const totalChars = narrationChars + dialogueChars;
+  const estimatedDurationSec = Math.max(8, Math.round(totalChars / 12));
+
+  const narrationArtifactKey = `${payload.userId}/${payload.orderId}/audio/narration-${hashHex(
+    `${payload.orderId}:${payload.voiceCloneId}:narration:${payload.narrationLines.join('|')}`,
+    8
+  )}.mp3`;
+
+  const dialogueArtifactKey = `${payload.userId}/${payload.orderId}/audio/dialogue-${hashHex(
+    `${payload.orderId}:${payload.voiceCloneId}:dialogue:${payload.dialogueLines.join('|')}`,
+    8
+  )}.mp3`;
+
+  return {
+    narrationArtifactKey,
+    narrationMeta: {
+      scriptTitle: payload.scriptTitle,
+      model: 'narration_tts_v1_stub',
+      characterCount: narrationChars,
+      estimatedDurationSec,
+      fallbackReason: reason,
+      integrationMode: env.PROVIDER_INTEGRATION_MODE
+    },
+    dialogueArtifactKey,
+    dialogueMeta: {
+      voiceCloneId: payload.voiceCloneId,
+      model: 'dialogue_tts_v1_stub',
+      characterCount: dialogueChars,
+      estimatedDurationSec,
+      fallbackReason: reason,
+      integrationMode: env.PROVIDER_INTEGRATION_MODE
+    }
+  };
+}
+
+function buildFallbackShotRender(args: {
+  payload: z.infer<typeof renderShotRequestSchema>;
+  scene: ThemeManifest['scenes'][number];
+  reason: string;
+}) {
+  const { payload, scene, reason } = args;
+  const shotArtifactKey = buildShotKey({
+    orderId: payload.orderId,
+    userId: payload.userId,
+    shot: payload.shot,
+    characterId: payload.characterProfile.characterId
+  });
+
+  return {
+    shotArtifactKey,
+    shotMeta: {
+      shotNumber: payload.shot.shotNumber,
+      sceneId: scene.id,
+      sceneName: scene.name,
+      shotType: payload.shot.shotType,
+      camera: payload.shot.camera || scene.cameraPreset,
+      lighting: payload.shot.lighting || scene.lightingPreset,
+      environmentMotion:
+        payload.shot.environmentMotion.length > 0 ? payload.shot.environmentMotion : scene.environmentMotionDefaults,
+      assets: scene.assets,
+      anchors: scene.anchors,
+      soundBed: scene.soundBed,
+      renderModel: 'scene_parallax_compositor_v1_stub',
+      characterId: payload.characterProfile.characterId,
+      fallbackReason: reason,
+      integrationMode: env.PROVIDER_INTEGRATION_MODE
+    }
+  };
+}
+
+function buildFallbackFinalCompose(args: {
+  payload: z.infer<typeof composeFinalRequestSchema>;
+  context: ProviderOrderContext;
+  reason: string;
+}) {
+  const { payload, context, reason } = args;
+  const resolution = payload.totalDurationSec <= 35 ? '1080p' : '720p';
+  const finalHash = hashHex(
+    `${payload.orderId}:${payload.characterProfile.characterId}:${payload.shotArtifactKeys.join('|')}:${payload.totalDurationSec}`,
+    8
+  );
+  const finalVideoArtifactKey = `${payload.userId}/${payload.orderId}/final/final-${finalHash}.mp4`;
+  const thumbnailArtifactKey = `${payload.userId}/${payload.orderId}/thumb/thumb-${finalHash}.jpg`;
+
+  return {
+    finalVideoArtifactKey,
+    finalVideoMeta: {
+      themeName: context.themeName,
+      shotCount: payload.shotArtifactKeys.length,
+      durationSec: payload.totalDurationSec,
+      resolution,
+      codecVideo: 'h264',
+      codecAudio: 'aac',
+      fallbackUsed: resolution === '720p',
+      fallbackReason: reason,
+      integrationMode: env.PROVIDER_INTEGRATION_MODE
+    },
+    thumbnailArtifactKey,
+    thumbnailMeta: {
+      generatedFrom: finalVideoArtifactKey,
+      integrationMode: env.PROVIDER_INTEGRATION_MODE
+    }
+  };
+}
+
 export function registerProviderRoutes(app: FastifyInstance): void {
   app.post('/voice/clone', async (request, reply) => {
     if (!hasProviderAuth(request)) {
@@ -260,21 +735,50 @@ export function registerProviderRoutes(app: FastifyInstance): void {
         throw new ProviderRequestError(400, 'Voice upload is required.');
       }
 
-      const sourceSeed = payload.voiceUpload.sha256 ?? payload.voiceUpload.s3Key;
-      const voiceCloneId = `voice_${hashHex(`${payload.orderId}:${sourceSeed}`, 10)}`;
-      const voiceCloneArtifactKey = `${payload.userId}/${payload.orderId}/voice/clone-${voiceCloneId}.json`;
+      const fallback = (reason: string) => buildFallbackVoiceClone(payload, reason);
 
-      return reply.send({
-        voiceCloneId,
-        voiceCloneArtifactKey,
-        voiceCloneMeta: {
-          voiceCloneId,
-          sourceVoiceKey: payload.voiceUpload.s3Key,
-          sourceContentType: payload.voiceUpload.contentType,
-          sourceDurationSec: Math.max(30, Math.min(60, Math.round(payload.voiceUpload.bytes / 11000))),
-          providerModel: 'instant_voice_clone_v1'
+      if (!integrationModeAllowsExternal()) {
+        return reply.send(fallback('Provider integration mode is stub.'));
+      }
+
+      if (!env.ELEVENLABS_API_KEY) {
+        if (integrationModeIsStrict()) {
+          throw new ProviderRequestError(503, 'Strict provider mode enabled but ELEVENLABS_API_KEY is missing.');
         }
-      });
+        return reply.send(fallback('ELEVENLABS_API_KEY is missing.'));
+      }
+
+      try {
+        const clone = await createElevenLabsClone({
+          orderId: payload.orderId,
+          userId: payload.userId,
+          voiceUpload: payload.voiceUpload
+        });
+
+        const voiceCloneArtifactKey = `${payload.userId}/${payload.orderId}/voice/clone-${clone.voiceCloneId}.json`;
+
+        return reply.send({
+          voiceCloneId: clone.voiceCloneId,
+          voiceCloneArtifactKey,
+          voiceCloneMeta: {
+            voiceCloneId: clone.voiceCloneId,
+            sourceVoiceKey: payload.voiceUpload.s3Key,
+            sourceContentType: payload.voiceUpload.contentType,
+            sourceAudioBytes: clone.sourceBytes,
+            sourceDownloadUrl: clone.sourceUrl,
+            providerModel: 'elevenlabs_voice_clone',
+            integrationMode: env.PROVIDER_INTEGRATION_MODE
+          }
+        });
+      } catch (error) {
+        const message = (error as Error).message;
+        if (integrationModeIsStrict()) {
+          throw new ProviderRequestError(502, `ElevenLabs voice clone failed: ${message}`);
+        }
+
+        request.log.warn({ err: error, orderId: payload.orderId }, 'Falling back to stub voice clone');
+        return reply.send(fallback(`ElevenLabs voice clone failed: ${message}`));
+      }
     } catch (error) {
       return sendProviderError(reply, request, error);
     }
@@ -289,37 +793,79 @@ export function registerProviderRoutes(app: FastifyInstance): void {
       const payload = voiceRenderRequestSchema.parse(request.body);
       await loadOrderContext(payload.orderId, payload.userId);
 
-      const narrationChars = payload.narrationLines.join(' ').trim().length;
-      const dialogueChars = payload.dialogueLines.join(' ').trim().length;
-      const totalChars = narrationChars + dialogueChars;
-      const estimatedDurationSec = Math.max(8, Math.round(totalChars / 12));
+      const fallback = (reason: string) => buildFallbackVoiceRender(payload, reason);
 
-      const narrationArtifactKey = `${payload.userId}/${payload.orderId}/audio/narration-${hashHex(
-        `${payload.orderId}:${payload.voiceCloneId}:narration:${payload.narrationLines.join('|')}`,
-        8
-      )}.mp3`;
+      if (!integrationModeAllowsExternal()) {
+        return reply.send(fallback('Provider integration mode is stub.'));
+      }
 
-      const dialogueArtifactKey = `${payload.userId}/${payload.orderId}/audio/dialogue-${hashHex(
-        `${payload.orderId}:${payload.voiceCloneId}:dialogue:${payload.dialogueLines.join('|')}`,
-        8
-      )}.mp3`;
-
-      return reply.send({
-        narrationArtifactKey,
-        narrationMeta: {
-          scriptTitle: payload.scriptTitle,
-          model: 'narration_tts_v1',
-          characterCount: narrationChars,
-          estimatedDurationSec
-        },
-        dialogueArtifactKey,
-        dialogueMeta: {
-          voiceCloneId: payload.voiceCloneId,
-          model: 'dialogue_tts_v1',
-          characterCount: dialogueChars,
-          estimatedDurationSec
+      if (!env.ELEVENLABS_API_KEY) {
+        if (integrationModeIsStrict()) {
+          throw new ProviderRequestError(503, 'Strict provider mode enabled but ELEVENLABS_API_KEY is missing.');
         }
-      });
+        return reply.send(fallback('ELEVENLABS_API_KEY is missing.'));
+      }
+
+      const effectiveVoiceId =
+        payload.voiceCloneId.startsWith('voice_') && env.ELEVENLABS_FALLBACK_VOICE_ID
+          ? env.ELEVENLABS_FALLBACK_VOICE_ID
+          : payload.voiceCloneId;
+
+      try {
+        const narrationText = payload.narrationLines.join(' ').trim();
+        const dialogueText = payload.dialogueLines.join(' ').trim();
+
+        const narration = await renderElevenLabsTrack({
+          voiceId: effectiveVoiceId,
+          text: narrationText
+        });
+
+        const dialogue = await renderElevenLabsTrack({
+          voiceId: effectiveVoiceId,
+          text: dialogueText
+        });
+
+        const narrationArtifactKey = `${payload.userId}/${payload.orderId}/audio/narration-${hashHex(
+          `${payload.orderId}:${effectiveVoiceId}:narration:${payload.narrationLines.join('|')}`,
+          8
+        )}.mp3`;
+
+        const dialogueArtifactKey = `${payload.userId}/${payload.orderId}/audio/dialogue-${hashHex(
+          `${payload.orderId}:${effectiveVoiceId}:dialogue:${payload.dialogueLines.join('|')}`,
+          8
+        )}.mp3`;
+
+        return reply.send({
+          narrationArtifactKey,
+          narrationMeta: {
+            scriptTitle: payload.scriptTitle,
+            model: env.ELEVENLABS_MODEL_ID,
+            outputFormat: env.ELEVENLABS_OUTPUT_FORMAT,
+            voiceId: effectiveVoiceId,
+            generatedAudioBytes: narration.byteLength,
+            providerRequestId: narration.requestId,
+            integrationMode: env.PROVIDER_INTEGRATION_MODE
+          },
+          dialogueArtifactKey,
+          dialogueMeta: {
+            voiceCloneId: payload.voiceCloneId,
+            resolvedVoiceId: effectiveVoiceId,
+            model: env.ELEVENLABS_MODEL_ID,
+            outputFormat: env.ELEVENLABS_OUTPUT_FORMAT,
+            generatedAudioBytes: dialogue.byteLength,
+            providerRequestId: dialogue.requestId,
+            integrationMode: env.PROVIDER_INTEGRATION_MODE
+          }
+        });
+      } catch (error) {
+        const message = (error as Error).message;
+        if (integrationModeIsStrict()) {
+          throw new ProviderRequestError(502, `ElevenLabs voice render failed: ${message}`);
+        }
+
+        request.log.warn({ err: error, orderId: payload.orderId }, 'Falling back to stub voice render');
+        return reply.send(fallback(`ElevenLabs voice render failed: ${message}`));
+      }
     } catch (error) {
       return sendProviderError(reply, request, error);
     }
@@ -356,7 +902,8 @@ export function registerProviderRoutes(app: FastifyInstance): void {
             palette: 'cinematic-soft',
             lineWeight: 'medium',
             shading: 'toon_cinematic'
-          }
+          },
+          integrationMode: env.PROVIDER_INTEGRATION_MODE
         },
         characterProfile
       });
@@ -382,31 +929,70 @@ export function registerProviderRoutes(app: FastifyInstance): void {
         );
       }
 
-      const shotArtifactKey = buildShotKey({
-        orderId: payload.orderId,
-        userId: payload.userId,
-        shot: payload.shot,
-        characterId: payload.characterProfile.characterId
-      });
+      const fallback = (reason: string) =>
+        buildFallbackShotRender({
+          payload,
+          scene,
+          reason
+        });
 
-      return reply.send({
-        shotArtifactKey,
-        shotMeta: {
-          shotNumber: payload.shot.shotNumber,
-          sceneId: scene.id,
-          sceneName: scene.name,
-          shotType: payload.shot.shotType,
-          camera: payload.shot.camera || scene.cameraPreset,
-          lighting: payload.shot.lighting || scene.lightingPreset,
-          environmentMotion:
-            payload.shot.environmentMotion.length > 0 ? payload.shot.environmentMotion : scene.environmentMotionDefaults,
-          assets: scene.assets,
-          anchors: scene.anchors,
-          soundBed: scene.soundBed,
-          renderModel: 'scene_parallax_compositor_v1',
-          characterId: payload.characterProfile.characterId
+      if (!integrationModeAllowsExternal()) {
+        return reply.send(fallback('Provider integration mode is stub.'));
+      }
+
+      if (!env.HEYGEN_API_KEY) {
+        if (integrationModeIsStrict()) {
+          throw new ProviderRequestError(503, 'Strict provider mode enabled but HEYGEN_API_KEY is missing.');
         }
-      });
+        return reply.send(fallback('HEYGEN_API_KEY is missing.'));
+      }
+
+      try {
+        const shotQueue = await queueHeyGenShot({
+          orderId: payload.orderId,
+          userId: payload.userId,
+          themeName: context.themeName,
+          shot: payload.shot,
+          sceneName: scene.name,
+          characterProfile: payload.characterProfile
+        });
+
+        const shotArtifactKey = buildShotKey({
+          orderId: payload.orderId,
+          userId: payload.userId,
+          shot: payload.shot,
+          characterId: payload.characterProfile.characterId
+        });
+
+        return reply.send({
+          shotArtifactKey,
+          shotMeta: {
+            shotNumber: payload.shot.shotNumber,
+            sceneId: scene.id,
+            sceneName: scene.name,
+            shotType: payload.shot.shotType,
+            camera: payload.shot.camera || scene.cameraPreset,
+            lighting: payload.shot.lighting || scene.lightingPreset,
+            environmentMotion:
+              payload.shot.environmentMotion.length > 0 ? payload.shot.environmentMotion : scene.environmentMotionDefaults,
+            assets: scene.assets,
+            anchors: scene.anchors,
+            soundBed: scene.soundBed,
+            renderModel: 'heygen_video_agent',
+            providerTaskId: shotQueue.providerTaskId,
+            characterId: payload.characterProfile.characterId,
+            integrationMode: env.PROVIDER_INTEGRATION_MODE
+          }
+        });
+      } catch (error) {
+        const message = (error as Error).message;
+        if (integrationModeIsStrict()) {
+          throw new ProviderRequestError(502, `HeyGen shot render failed: ${message}`);
+        }
+
+        request.log.warn({ err: error, orderId: payload.orderId }, 'Falling back to stub scene shot render');
+        return reply.send(fallback(`HeyGen shot render failed: ${message}`));
+      }
     } catch (error) {
       return sendProviderError(reply, request, error);
     }
@@ -425,30 +1011,72 @@ export function registerProviderRoutes(app: FastifyInstance): void {
         throw new ProviderRequestError(400, 'At least one shot artifact key is required.');
       }
 
-      const resolution = payload.totalDurationSec <= 35 ? '1080p' : '720p';
-      const finalHash = hashHex(
-        `${payload.orderId}:${payload.characterProfile.characterId}:${payload.shotArtifactKeys.join('|')}:${payload.totalDurationSec}`,
-        8
-      );
-      const finalVideoArtifactKey = `${payload.userId}/${payload.orderId}/final/final-${finalHash}.mp4`;
-      const thumbnailArtifactKey = `${payload.userId}/${payload.orderId}/thumb/thumb-${finalHash}.jpg`;
+      const fallback = (reason: string) =>
+        buildFallbackFinalCompose({
+          payload,
+          context,
+          reason
+        });
 
-      return reply.send({
-        finalVideoArtifactKey,
-        finalVideoMeta: {
-          themeName: context.themeName,
-          shotCount: payload.shotArtifactKeys.length,
-          durationSec: payload.totalDurationSec,
-          resolution,
-          codecVideo: 'h264',
-          codecAudio: 'aac',
-          fallbackUsed: resolution === '720p'
-        },
-        thumbnailArtifactKey,
-        thumbnailMeta: {
-          generatedFrom: finalVideoArtifactKey
+      if (!integrationModeAllowsExternal()) {
+        return reply.send(fallback('Provider integration mode is stub.'));
+      }
+
+      if (!env.SHOTSTACK_API_KEY) {
+        if (integrationModeIsStrict()) {
+          throw new ProviderRequestError(503, 'Strict provider mode enabled but SHOTSTACK_API_KEY is missing.');
         }
-      });
+
+        return reply.send(fallback('SHOTSTACK_API_KEY is missing.'));
+      }
+
+      try {
+        const compose = await queueShotstackRender({
+          orderId: payload.orderId,
+          themeName: context.themeName,
+          totalDurationSec: payload.totalDurationSec,
+          shotCount: payload.shotArtifactKeys.length,
+          characterProfile: payload.characterProfile
+        });
+
+        const resolution = payload.totalDurationSec <= 35 ? '1080p' : '720p';
+        const finalHash = hashHex(
+          `${payload.orderId}:${payload.characterProfile.characterId}:${payload.shotArtifactKeys.join('|')}:${payload.totalDurationSec}`,
+          8
+        );
+        const finalVideoArtifactKey = `${payload.userId}/${payload.orderId}/final/final-${finalHash}.mp4`;
+        const thumbnailArtifactKey = `${payload.userId}/${payload.orderId}/thumb/thumb-${finalHash}.jpg`;
+
+        return reply.send({
+          finalVideoArtifactKey,
+          finalVideoMeta: {
+            themeName: context.themeName,
+            shotCount: payload.shotArtifactKeys.length,
+            durationSec: payload.totalDurationSec,
+            resolution,
+            codecVideo: 'h264',
+            codecAudio: 'aac',
+            fallbackUsed: resolution === '720p',
+            renderModel: 'shotstack_composer',
+            providerTaskId: compose.providerTaskId,
+            integrationMode: env.PROVIDER_INTEGRATION_MODE
+          },
+          thumbnailArtifactKey,
+          thumbnailMeta: {
+            generatedFrom: finalVideoArtifactKey,
+            providerTaskId: compose.providerTaskId,
+            integrationMode: env.PROVIDER_INTEGRATION_MODE
+          }
+        });
+      } catch (error) {
+        const message = (error as Error).message;
+        if (integrationModeIsStrict()) {
+          throw new ProviderRequestError(502, `Shotstack compose failed: ${message}`);
+        }
+
+        request.log.warn({ err: error, orderId: payload.orderId }, 'Falling back to stub final compose');
+        return reply.send(fallback(`Shotstack compose failed: ${message}`));
+      }
     } catch (error) {
       return sendProviderError(reply, request, error);
     }

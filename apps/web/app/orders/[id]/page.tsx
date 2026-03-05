@@ -51,6 +51,16 @@ interface ArtifactRow {
   };
 }
 
+interface ProviderTaskRow {
+  provider_task_id: string;
+  provider: string;
+  job_type: string | null;
+  status: 'queued' | 'processing' | 'succeeded' | 'failed';
+  artifact_key: string | null;
+  error_text: string | null;
+  updated_at: string;
+}
+
 interface OrderStatusResponse {
   order: {
     id: string;
@@ -59,6 +69,7 @@ interface OrderStatusResponse {
   latestScript: LatestScript | null;
   jobs: JobRow[];
   artifacts: ArtifactRow[];
+  providerTasks: ProviderTaskRow[];
 }
 
 interface LifecycleStep {
@@ -253,6 +264,15 @@ export default async function OrderStatusPage({ params }: StatusPageProps): Prom
           <strong>{failedJobs}</strong>
         </p>
         <pre className="mono">{JSON.stringify(data.jobs, null, 2)}</pre>
+      </section>
+
+      <section className="card">
+        <h2>Provider Tasks</h2>
+        {data.providerTasks.length === 0 ? (
+          <p>No provider tasks recorded yet.</p>
+        ) : (
+          <pre className="mono">{JSON.stringify(data.providerTasks, null, 2)}</pre>
+        )}
       </section>
     </main>
   );

@@ -65,6 +65,20 @@ interface AssetKeyRow {
   s3_key: string;
 }
 
+interface ProviderTaskStatusRow {
+  provider_task_id: string;
+  provider: string;
+  order_id: string | null;
+  job_type: string | null;
+  status: string;
+  artifact_key: string | null;
+  output_json: Record<string, unknown>;
+  error_text: string | null;
+  last_polled_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 const LAUNCH_PRICE_CENTS = 3900;
 const MIN_PHOTO_UPLOADS = 5;
 const MAX_PHOTO_UPLOADS = 15;
@@ -682,11 +696,33 @@ async function buildServer(): Promise<FastifyInstance> {
       [params.orderId]
     );
 
+    const providerTaskRows = await query<ProviderTaskStatusRow>(
+      `
+      SELECT
+        provider_task_id,
+        provider,
+        order_id,
+        job_type,
+        status,
+        artifact_key,
+        output_json,
+        error_text,
+        last_polled_at,
+        created_at,
+        updated_at
+      FROM provider_tasks
+      WHERE order_id = $1
+      ORDER BY updated_at DESC
+      `,
+      [params.orderId]
+    );
+
     return reply.send({
       order,
       latestScript: latestScriptRows[0] ?? null,
       jobs: jobRows,
-      artifacts: artifactsRows
+      artifacts: artifactsRows,
+      providerTasks: providerTaskRows
     });
   });
 

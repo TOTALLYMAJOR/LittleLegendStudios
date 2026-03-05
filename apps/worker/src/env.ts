@@ -29,6 +29,8 @@ const schema = z.object({
     .url()
     .optional()
     .transform((value) => (value && value.trim().length > 0 ? value : undefined)),
+  PROVIDER_TASK_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(5000),
+  PROVIDER_TASK_POLL_TIMEOUT_MS: z.coerce.number().int().positive().default(120000),
   PROVIDER_AUTH_TOKEN: z
     .string()
     .optional()

@@ -124,9 +124,39 @@ const composeFinalRequestSchema = z.object({
   characterProfile: characterProfileSchema
 });
 
+const providerTaskStatusSchema = z.enum(['queued', 'processing', 'succeeded', 'failed']);
+
+const providerTaskWebhookSchema = z.object({
+  provider: z.string().min(1),
+  providerTaskId: z.string().min(1),
+  status: providerTaskStatusSchema,
+  orderId: z.string().uuid().optional(),
+  jobType: z.string().optional(),
+  artifactKey: z.string().min(1).optional(),
+  output: z.record(z.unknown()).optional(),
+  errorText: z.string().optional()
+});
+
 type ProviderUpload = z.infer<typeof providerUploadSchema>;
 
 type CharacterProfile = z.infer<typeof characterProfileSchema>;
+
+type ProviderTaskStatus = z.infer<typeof providerTaskStatusSchema>;
+
+interface ProviderTaskRow {
+  provider_task_id: string;
+  provider: string;
+  order_id: string | null;
+  job_type: string | null;
+  status: ProviderTaskStatus;
+  artifact_key: string | null;
+  input_json: Record<string, unknown>;
+  output_json: Record<string, unknown>;
+  error_text: string | null;
+  last_polled_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
 
 class ProviderRequestError extends Error {
   constructor(
@@ -166,6 +196,137 @@ function hasProviderAuth(request: FastifyRequest): boolean {
 
   const token = parseAuthHeaderToken(request.headers.authorization);
   return token === env.PROVIDER_AUTH_TOKEN;
+}
+
+function hasProviderWebhookAuth(request: FastifyRequest): boolean {
+  if (!env.PROVIDER_WEBHOOK_SECRET) {
+    return hasProviderAuth(request);
+  }
+
+  const headerValue = request.headers['x-provider-webhook-secret'];
+  if (typeof headerValue !== 'string') {
+    return false;
+  }
+
+  return headerValue === env.PROVIDER_WEBHOOK_SECRET;
+}
+
+function toProviderTaskStatus(value: string | null | undefined): ProviderTaskStatus {
+  if (value === 'succeeded' || value === 'failed' || value === 'queued') {
+    return value;
+  }
+
+  return 'processing';
+}
+
+async function getProviderTask(providerTaskId: string): Promise<ProviderTaskRow | null> {
+  const rows = await query<ProviderTaskRow>(
+    `
+    SELECT
+      provider_task_id,
+      provider,
+      order_id,
+      job_type,
+      status,
+      artifact_key,
+      input_json,
+      output_json,
+      error_text,
+      last_polled_at,
+      created_at,
+      updated_at
+    FROM provider_tasks
+    WHERE provider_task_id = $1
+    LIMIT 1
+    `,
+    [providerTaskId]
+  );
+
+  return rows[0] ?? null;
+}
+
+async function upsertProviderTask(args: {
+  providerTaskId: string;
+  provider: string;
+  orderId?: string;
+  jobType?: string;
+  status: ProviderTaskStatus;
+  artifactKey?: string;
+  input?: Record<string, unknown>;
+  output?: Record<string, unknown>;
+  errorText?: string | null;
+}): Promise<void> {
+  await query(
+    `
+    INSERT INTO provider_tasks (
+      provider_task_id,
+      provider,
+      order_id,
+      job_type,
+      status,
+      artifact_key,
+      input_json,
+      output_json,
+      error_text,
+      created_at,
+      updated_at
+    )
+    VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, now(), now())
+    ON CONFLICT (provider_task_id)
+    DO UPDATE SET
+      provider = EXCLUDED.provider,
+      order_id = COALESCE(EXCLUDED.order_id, provider_tasks.order_id),
+      job_type = COALESCE(EXCLUDED.job_type, provider_tasks.job_type),
+      status = EXCLUDED.status,
+      artifact_key = COALESCE(EXCLUDED.artifact_key, provider_tasks.artifact_key),
+      input_json = CASE
+        WHEN provider_tasks.input_json = '{}'::jsonb THEN EXCLUDED.input_json
+        ELSE provider_tasks.input_json
+      END,
+      output_json = CASE
+        WHEN EXCLUDED.output_json = '{}'::jsonb THEN provider_tasks.output_json
+        ELSE EXCLUDED.output_json
+      END,
+      error_text = EXCLUDED.error_text,
+      updated_at = now()
+    `,
+    [
+      args.providerTaskId,
+      args.provider,
+      args.orderId ?? null,
+      args.jobType ?? null,
+      args.status,
+      args.artifactKey ?? null,
+      JSON.stringify(args.input ?? {}),
+      JSON.stringify(args.output ?? {}),
+      args.errorText ?? null
+    ]
+  );
+}
+
+async function updateProviderTaskStatus(args: {
+  providerTaskId: string;
+  status: ProviderTaskStatus;
+  output?: Record<string, unknown>;
+  errorText?: string | null;
+  lastPolled?: boolean;
+}): Promise<void> {
+  await query(
+    `
+    UPDATE provider_tasks
+    SET
+      status = $2,
+      output_json = CASE
+        WHEN $3::jsonb = '{}'::jsonb THEN output_json
+        ELSE $3::jsonb
+      END,
+      error_text = $4,
+      last_polled_at = CASE WHEN $5 THEN now() ELSE last_polled_at END,
+      updated_at = now()
+    WHERE provider_task_id = $1
+    `,
+    [args.providerTaskId, args.status, JSON.stringify(args.output ?? {}), args.errorText ?? null, args.lastPolled ?? false]
+  );
 }
 
 function sendProviderError(reply: FastifyReply, request: FastifyRequest, error: unknown): FastifyReply {
@@ -533,6 +694,211 @@ async function queueShotstackRender(args: {
   return { providerTaskId };
 }
 
+function normalizeProviderStatus(raw: string | null | undefined): ProviderTaskStatus {
+  const value = (raw ?? '').trim().toLowerCase();
+  if (value.length === 0) {
+    return 'processing';
+  }
+
+  if (['queued', 'pending', 'waiting'].includes(value)) {
+    return 'queued';
+  }
+
+  if (['done', 'completed', 'complete', 'succeeded', 'success', 'finished'].includes(value)) {
+    return 'succeeded';
+  }
+
+  if (['failed', 'error', 'errored', 'rejected', 'cancelled', 'canceled'].includes(value)) {
+    return 'failed';
+  }
+
+  return 'processing';
+}
+
+async function pollHeyGenTask(providerTaskId: string): Promise<{
+  status: ProviderTaskStatus;
+  output: Record<string, unknown>;
+  errorText?: string;
+}> {
+  if (!env.HEYGEN_API_KEY) {
+    throw new Error('HEYGEN_API_KEY is not configured.');
+  }
+
+  const base = normalizeBaseUrl(env.HEYGEN_BASE_URL);
+  const statusPath = normalizePath(env.HEYGEN_VIDEO_STATUS_PATH);
+  const endpoints = [
+    `${base}${statusPath}/${encodeURIComponent(providerTaskId)}`,
+    `${base}${statusPath}?video_id=${encodeURIComponent(providerTaskId)}`
+  ];
+
+  let lastError: string | null = null;
+  for (const endpoint of endpoints) {
+    try {
+      const response = await fetchWithTimeout(endpoint, {
+        method: 'GET',
+        headers: {
+          'X-Api-Key': env.HEYGEN_API_KEY,
+          Authorization: `Bearer ${env.HEYGEN_API_KEY}`
+        }
+      });
+
+      const rawText = await response.text();
+      if (!response.ok) {
+        lastError = `HTTP ${response.status} from ${endpoint}: ${rawText.slice(0, 200)}`;
+        continue;
+      }
+
+      const parsed = rawText.trim().length > 0 ? JSON.parse(rawText) : {};
+      const status = normalizeProviderStatus(
+        pickString(parsed, [
+          ['data', 'status'],
+          ['status'],
+          ['data', 'video_status'],
+          ['video_status']
+        ])
+      );
+      const outputUrl = pickString(parsed, [
+        ['data', 'video_url'],
+        ['video_url'],
+        ['data', 'url'],
+        ['url']
+      ]);
+      const errorMessage =
+        pickString(parsed, [['error', 'message'], ['message'], ['data', 'error_message']]) ??
+        (status === 'failed' ? 'Provider returned failed status.' : null);
+
+      return {
+        status,
+        output: {
+          providerResponse: parsed,
+          outputUrl
+        },
+        ...(errorMessage ? { errorText: errorMessage } : {})
+      };
+    } catch (error) {
+      lastError = (error as Error).message;
+    }
+  }
+
+  throw new Error(lastError ?? `Unable to poll HeyGen task ${providerTaskId}.`);
+}
+
+async function pollShotstackTask(providerTaskId: string): Promise<{
+  status: ProviderTaskStatus;
+  output: Record<string, unknown>;
+  errorText?: string;
+}> {
+  if (!env.SHOTSTACK_API_KEY) {
+    throw new Error('SHOTSTACK_API_KEY is not configured.');
+  }
+
+  const endpoint = `${normalizeBaseUrl(env.SHOTSTACK_BASE_URL)}/edit/${env.SHOTSTACK_STAGE}/render/${encodeURIComponent(providerTaskId)}`;
+  const response = await fetchWithTimeout(endpoint, {
+    method: 'GET',
+    headers: {
+      'x-api-key': env.SHOTSTACK_API_KEY
+    }
+  });
+
+  const rawText = await response.text();
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status} from ${endpoint}: ${rawText.slice(0, 200)}`);
+  }
+
+  const parsed = rawText.trim().length > 0 ? JSON.parse(rawText) : {};
+  const status = normalizeProviderStatus(
+    pickString(parsed, [
+      ['response', 'status'],
+      ['status'],
+      ['data', 'status']
+    ])
+  );
+  const outputUrl = pickString(parsed, [
+    ['response', 'url'],
+    ['url'],
+    ['data', 'url']
+  ]);
+  const errorMessage =
+    pickString(parsed, [['error', 'message'], ['message'], ['response', 'error']]) ??
+    (status === 'failed' ? 'Provider returned failed status.' : null);
+
+  return {
+    status,
+    output: {
+      providerResponse: parsed,
+      outputUrl
+    },
+    ...(errorMessage ? { errorText: errorMessage } : {})
+  };
+}
+
+async function refreshProviderTask(task: ProviderTaskRow): Promise<ProviderTaskRow> {
+  const now = Date.now();
+  const lastPolledAtMs = task.last_polled_at ? new Date(task.last_polled_at).getTime() : 0;
+  if (task.status === 'succeeded' || task.status === 'failed') {
+    return task;
+  }
+
+  if (now - lastPolledAtMs < env.PROVIDER_TASK_POLL_MIN_INTERVAL_MS) {
+    return task;
+  }
+
+  try {
+    const polled =
+      task.provider === 'heygen'
+        ? await pollHeyGenTask(task.provider_task_id)
+        : task.provider === 'shotstack'
+          ? await pollShotstackTask(task.provider_task_id)
+          : {
+              status: toProviderTaskStatus(task.status),
+              output: task.output_json
+            };
+
+    await updateProviderTaskStatus({
+      providerTaskId: task.provider_task_id,
+      status: polled.status,
+      output: polled.output,
+      errorText: polled.errorText ?? null,
+      lastPolled: true
+    });
+  } catch (error) {
+    if (integrationModeIsStrict()) {
+      throw error;
+    }
+
+    const ageSec = Math.max(0, Math.floor((now - new Date(task.created_at).getTime()) / 1000));
+    if (ageSec >= env.PROVIDER_TASK_ASSUME_SUCCESS_AFTER_SEC) {
+      await updateProviderTaskStatus({
+        providerTaskId: task.provider_task_id,
+        status: 'succeeded',
+        output: {
+          ...task.output_json,
+          assumedSuccess: true,
+          assumedAt: new Date().toISOString(),
+          fallbackReason: (error as Error).message
+        },
+        errorText: null,
+        lastPolled: true
+      });
+    } else {
+      await updateProviderTaskStatus({
+        providerTaskId: task.provider_task_id,
+        status: task.status === 'queued' ? 'queued' : 'processing',
+        output: task.output_json,
+        errorText: null,
+        lastPolled: true
+      });
+    }
+  }
+
+  const refreshed = await getProviderTask(task.provider_task_id);
+  if (!refreshed) {
+    throw new Error(`Provider task ${task.provider_task_id} disappeared during refresh.`);
+  }
+
+  return refreshed;
+}
+
 async function loadOrderContext(orderId: string, userId: string): Promise<ProviderOrderContext> {
   const rows = await query<ProviderOrderContextRow>(
     `
@@ -728,6 +1094,65 @@ function buildFallbackFinalCompose(args: {
 }
 
 export function registerProviderRoutes(app: FastifyInstance): void {
+  app.get('/provider-tasks/:providerTaskId', async (request, reply) => {
+    if (!hasProviderAuth(request)) {
+      return reply.status(401).send({ message: 'Unauthorized provider task request.' });
+    }
+
+    try {
+      const params = z.object({ providerTaskId: z.string().min(1) }).parse(request.params);
+      const task = await getProviderTask(params.providerTaskId);
+      if (!task) {
+        return reply.status(404).send({ message: 'Provider task not found.' });
+      }
+
+      const refreshed = await refreshProviderTask(task);
+      return reply.send({
+        providerTaskId: refreshed.provider_task_id,
+        provider: refreshed.provider,
+        orderId: refreshed.order_id,
+        jobType: refreshed.job_type,
+        status: refreshed.status,
+        artifactKey: refreshed.artifact_key,
+        output: refreshed.output_json,
+        errorText: refreshed.error_text,
+        lastPolledAt: refreshed.last_polled_at,
+        createdAt: refreshed.created_at,
+        updatedAt: refreshed.updated_at
+      });
+    } catch (error) {
+      return sendProviderError(reply, request, error);
+    }
+  });
+
+  app.post('/provider-tasks/webhook', async (request, reply) => {
+    if (!hasProviderWebhookAuth(request)) {
+      return reply.status(401).send({ message: 'Unauthorized provider webhook request.' });
+    }
+
+    try {
+      const payload = providerTaskWebhookSchema.parse(request.body);
+      await upsertProviderTask({
+        providerTaskId: payload.providerTaskId,
+        provider: payload.provider,
+        orderId: payload.orderId,
+        jobType: payload.jobType,
+        status: payload.status,
+        artifactKey: payload.artifactKey,
+        output: payload.output,
+        errorText: payload.errorText ?? null
+      });
+
+      return reply.send({
+        received: true,
+        providerTaskId: payload.providerTaskId,
+        status: payload.status
+      });
+    } catch (error) {
+      return sendProviderError(reply, request, error);
+    }
+  });
+
   app.post('/voice/clone', async (request, reply) => {
     if (!hasProviderAuth(request)) {
       return reply.status(401).send({ message: 'Unauthorized provider request.' });
@@ -970,6 +1395,25 @@ export function registerProviderRoutes(app: FastifyInstance): void {
           characterId: payload.characterProfile.characterId
         });
 
+        await upsertProviderTask({
+          providerTaskId: shotQueue.providerTaskId,
+          provider: 'heygen',
+          orderId: payload.orderId,
+          jobType: 'shot_render',
+          status: 'queued',
+          artifactKey: shotArtifactKey,
+          input: {
+            sceneId: scene.id,
+            shotNumber: payload.shot.shotNumber,
+            shotType: payload.shot.shotType,
+            characterId: payload.characterProfile.characterId
+          },
+          output: {
+            queuedAt: new Date().toISOString()
+          },
+          errorText: null
+        });
+
         return reply.send({
           shotArtifactKey,
           shotMeta: {
@@ -1052,6 +1496,25 @@ export function registerProviderRoutes(app: FastifyInstance): void {
         );
         const finalVideoArtifactKey = `${payload.userId}/${payload.orderId}/final/final-${finalHash}.mp4`;
         const thumbnailArtifactKey = `${payload.userId}/${payload.orderId}/thumb/thumb-${finalHash}.jpg`;
+
+        await upsertProviderTask({
+          providerTaskId: compose.providerTaskId,
+          provider: 'shotstack',
+          orderId: payload.orderId,
+          jobType: 'final_render',
+          status: 'queued',
+          artifactKey: finalVideoArtifactKey,
+          input: {
+            shotCount: payload.shotArtifactKeys.length,
+            totalDurationSec: payload.totalDurationSec,
+            characterId: payload.characterProfile.characterId
+          },
+          output: {
+            queuedAt: new Date().toISOString(),
+            thumbnailArtifactKey
+          },
+          errorText: null
+        });
 
         return reply.send({
           finalVideoArtifactKey,

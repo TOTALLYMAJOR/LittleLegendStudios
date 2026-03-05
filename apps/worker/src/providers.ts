@@ -60,6 +60,16 @@ export interface FinalComposeResult {
   thumbnailMeta: Record<string, unknown>;
 }
 
+export interface ProviderTaskStatusResult {
+  providerTaskId: string;
+  provider: string;
+  status: 'queued' | 'processing' | 'succeeded' | 'failed';
+  artifactKey: string | null;
+  output: Record<string, unknown>;
+  errorText: string | null;
+  lastPolledAt: string | null;
+}
+
 export interface VoiceProvider {
   createVoiceClone(args: {
     orderId: string;
@@ -96,6 +106,9 @@ export interface SceneProvider {
     totalDurationSec: number;
     characterProfile: CharacterProfile;
   }): Promise<FinalComposeResult>;
+  getProviderTaskStatus(args: {
+    providerTaskId: string;
+  }): Promise<ProviderTaskStatusResult>;
 }
 
 export interface ProviderRegistry {
@@ -252,6 +265,22 @@ class StubSceneProvider implements SceneProvider {
       }
     };
   }
+
+  async getProviderTaskStatus(args: {
+    providerTaskId: string;
+  }): Promise<ProviderTaskStatusResult> {
+    return {
+      providerTaskId: args.providerTaskId,
+      provider: 'stub_scene',
+      status: 'succeeded',
+      artifactKey: null,
+      output: {
+        simulated: true
+      },
+      errorText: null,
+      lastPolledAt: new Date().toISOString()
+    };
+  }
 }
 
 const voiceCloneResponseSchema = z.object({
@@ -292,6 +321,16 @@ const finalComposeResponseSchema = z.object({
   finalVideoMeta: z.record(z.unknown()).optional(),
   thumbnailArtifactKey: z.string().min(1),
   thumbnailMeta: z.record(z.unknown()).optional()
+});
+
+const providerTaskStatusResponseSchema = z.object({
+  providerTaskId: z.string().min(1),
+  provider: z.string().min(1),
+  status: z.enum(['queued', 'processing', 'succeeded', 'failed']),
+  artifactKey: z.string().nullable().optional(),
+  output: z.record(z.unknown()).optional(),
+  errorText: z.string().nullable().optional(),
+  lastPolledAt: z.string().nullable().optional()
 });
 
 class HttpVoiceProvider implements VoiceProvider {
@@ -409,6 +448,27 @@ class HttpSceneProvider implements SceneProvider {
     }
   }
 
+  private async get<T extends z.ZodTypeAny>(path: string, schema: T): Promise<z.infer<T>> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    try {
+      const response = await fetch(`${this.baseUrl}${path}`, {
+        method: 'GET',
+        headers: {
+          ...(this.authToken ? { Authorization: `Bearer ${this.authToken}` } : {})
+        },
+        signal: controller.signal
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status} from ${path}`);
+      }
+      const json = await response.json();
+      return schema.parse(json);
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
   async createCharacterPack(args: {
     orderId: string;
     userId: string;
@@ -485,6 +545,25 @@ class HttpSceneProvider implements SceneProvider {
       thumbnailMeta: response.thumbnailMeta ?? {}
     };
   }
+
+  async getProviderTaskStatus(args: {
+    providerTaskId: string;
+  }): Promise<ProviderTaskStatusResult> {
+    const response = await this.get(
+      `/provider-tasks/${encodeURIComponent(args.providerTaskId)}`,
+      providerTaskStatusResponseSchema
+    );
+
+    return {
+      providerTaskId: response.providerTaskId,
+      provider: response.provider,
+      status: response.status,
+      artifactKey: response.artifactKey ?? null,
+      output: response.output ?? {},
+      errorText: response.errorText ?? null,
+      lastPolledAt: response.lastPolledAt ?? null
+    };
+  }
 }
 
 function normalizeBaseUrl(value: string): string {
@@ -521,4 +600,3 @@ export function buildProviderRegistry(): ProviderRegistry {
     scene: resolveSceneProvider()
   };
 }
-

@@ -103,6 +103,22 @@ CREATE TABLE IF NOT EXISTS artifacts (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS provider_tasks (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  provider_task_id TEXT NOT NULL UNIQUE,
+  provider TEXT NOT NULL,
+  order_id UUID REFERENCES orders(id),
+  job_type TEXT,
+  status TEXT NOT NULL CHECK (status IN ('queued', 'processing', 'succeeded', 'failed')),
+  artifact_key TEXT,
+  input_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  output_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  error_text TEXT,
+  last_polled_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 UPDATE orders
 SET status = 'failed_hard'
 WHERE status = 'failed';
@@ -145,3 +161,5 @@ CREATE INDEX IF NOT EXISTS idx_uploads_order_id ON uploads(order_id);
 CREATE INDEX IF NOT EXISTS idx_scripts_order_id ON scripts(order_id);
 CREATE INDEX IF NOT EXISTS idx_jobs_order_id ON jobs(order_id);
 CREATE INDEX IF NOT EXISTS idx_artifacts_order_id ON artifacts(order_id);
+CREATE INDEX IF NOT EXISTS idx_provider_tasks_order_id ON provider_tasks(order_id);
+CREATE INDEX IF NOT EXISTS idx_provider_tasks_status ON provider_tasks(status);

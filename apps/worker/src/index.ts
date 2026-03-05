@@ -90,15 +90,16 @@ async function runStepWithInput(
   attempt: number,
   input: Record<string, unknown>,
   output?: Record<string, unknown>,
-  provider = 'stub_provider'
+  provider = 'stub_provider',
+  providerTaskId: string | null = null
 ): Promise<void> {
   const [jobRow] = await query<{ id: string }>(
     `
-    INSERT INTO jobs (order_id, type, status, attempt, provider, started_at, input_json)
-    VALUES ($1, $2, 'running', $3, $4, now(), $5::jsonb)
+    INSERT INTO jobs (order_id, type, status, attempt, provider, provider_task_id, started_at, input_json)
+    VALUES ($1, $2, 'running', $3, $4, $5, now(), $6::jsonb)
     RETURNING id
     `,
-    [orderId, type, attempt, provider, JSON.stringify(input)]
+    [orderId, type, attempt, provider, providerTaskId, JSON.stringify(input)]
   );
 
   await sleep(1200);
@@ -149,6 +150,39 @@ async function createArtifact(
     VALUES ($1, $2, $3, $4::jsonb)
     `,
     [orderId, kind, s3Key, JSON.stringify(meta)]
+  );
+}
+
+function extractProviderTaskId(meta: Record<string, unknown>): string | null {
+  const value = meta.providerTaskId;
+  return typeof value === 'string' && value.trim().length > 0 ? value : null;
+}
+
+async function awaitProviderTask(providerTaskId: string): Promise<Record<string, unknown>> {
+  const deadline = Date.now() + env.PROVIDER_TASK_POLL_TIMEOUT_MS;
+  let lastStatus = 'queued';
+  let lastError: string | null = null;
+
+  while (Date.now() <= deadline) {
+    const task = await providers.scene.getProviderTaskStatus({
+      providerTaskId
+    });
+    lastStatus = task.status;
+    lastError = task.errorText;
+
+    if (task.status === 'succeeded') {
+      return task.output;
+    }
+
+    if (task.status === 'failed') {
+      throw new Error(`Provider task ${providerTaskId} failed: ${task.errorText ?? 'unknown error'}`);
+    }
+
+    await sleep(env.PROVIDER_TASK_POLL_INTERVAL_MS);
+  }
+
+  throw new Error(
+    `Provider task ${providerTaskId} timed out after ${env.PROVIDER_TASK_POLL_TIMEOUT_MS}ms (last status: ${lastStatus}${lastError ? `, error: ${lastError}` : ''})`
   );
 }
 
@@ -613,6 +647,9 @@ async function runPipeline(orderId: string, attempt: number): Promise<void> {
       characterProfile
     });
 
+    const shotProviderTaskId = extractProviderTaskId(shotRender.shotMeta);
+    const shotProviderOutput = shotProviderTaskId ? await awaitProviderTask(shotProviderTaskId) : {};
+
     await runStepWithInput(orderId, 'shot_render', attempt, {
       orderId,
       shot,
@@ -621,15 +658,18 @@ async function runPipeline(orderId: string, attempt: number): Promise<void> {
     }, {
       ok: true,
       provider: shotRender.provider,
-      shotArtifactKey: shotRender.shotArtifactKey
-    }, shotRender.provider);
+      shotArtifactKey: shotRender.shotArtifactKey,
+      providerTaskId: shotProviderTaskId,
+      providerTaskOutput: shotProviderOutput
+    }, shotRender.provider, shotProviderTaskId);
 
     const shotMaterialization = await materializeArtifactFile({
       kind: 'shot_video',
       assetKey: shotRender.shotArtifactKey,
       payload: {
         ...shotRender.shotMeta,
-        provider: shotRender.provider
+        provider: shotRender.provider,
+        providerTaskOutput: shotProviderOutput
       }
     });
 
@@ -649,6 +689,9 @@ async function runPipeline(orderId: string, attempt: number): Promise<void> {
     characterProfile
   });
 
+  const finalProviderTaskId = extractProviderTaskId(finalCompose.finalVideoMeta);
+  const finalProviderOutput = finalProviderTaskId ? await awaitProviderTask(finalProviderTaskId) : {};
+
   await runStepWithInput(orderId, 'final_render', attempt, {
     orderId,
     shotCount: shotPlan.length,
@@ -658,15 +701,18 @@ async function runPipeline(orderId: string, attempt: number): Promise<void> {
     ok: true,
     provider: finalCompose.provider,
     finalVideoArtifactKey: finalCompose.finalVideoArtifactKey,
-    thumbnailArtifactKey: finalCompose.thumbnailArtifactKey
-  }, finalCompose.provider);
+    thumbnailArtifactKey: finalCompose.thumbnailArtifactKey,
+    providerTaskId: finalProviderTaskId,
+    providerTaskOutput: finalProviderOutput
+  }, finalCompose.provider, finalProviderTaskId);
 
   const finalVideoMaterialization = await materializeArtifactFile({
     kind: 'final_video',
     assetKey: finalCompose.finalVideoArtifactKey,
     payload: {
       ...finalCompose.finalVideoMeta,
-      provider: finalCompose.provider
+      provider: finalCompose.provider,
+      providerTaskOutput: finalProviderOutput
     }
   });
 

@@ -37,6 +37,12 @@ const schema = z.object({
     .string()
     .optional()
     .transform((value) => (value && value.trim().length > 0 ? value : undefined)),
+  PROVIDER_WEBHOOK_SECRET: z
+    .string()
+    .optional()
+    .transform((value) => (value && value.trim().length > 0 ? value : undefined)),
+  PROVIDER_TASK_POLL_MIN_INTERVAL_MS: z.coerce.number().int().positive().default(5000),
+  PROVIDER_TASK_ASSUME_SUCCESS_AFTER_SEC: z.coerce.number().int().positive().default(45),
   ELEVENLABS_API_KEY: z
     .string()
     .optional()
@@ -54,6 +60,7 @@ const schema = z.object({
     .transform((value) => (value && value.trim().length > 0 ? value : undefined)),
   HEYGEN_BASE_URL: z.string().url().default('https://api.heygen.com'),
   HEYGEN_VIDEO_GENERATE_PATH: z.string().min(1).default('/v1/video_agent/generate'),
+  HEYGEN_VIDEO_STATUS_PATH: z.string().min(1).default('/v1/video_agent/status'),
   SHOTSTACK_API_KEY: z
     .string()
     .optional()

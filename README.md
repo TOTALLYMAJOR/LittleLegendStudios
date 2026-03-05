@@ -61,6 +61,7 @@ npm run dev
 - Worker provider adapters support `stub` and `http` modes for voice + scene generation services
 - API now exposes internal provider endpoints for model + scene generation (`/voice/clone`, `/voice/render`, `/scene/*`)
 - API provider endpoints support real integration attempts for ElevenLabs (voice), HeyGen (shot generation), and Shotstack (final compose) with fallback behavior.
+- Provider task tracking with polling/webhook endpoints (`GET /provider-tasks/:id`, `POST /provider-tasks/webhook`) and DB persistence
 - Status polling + final artifact link stub
 
 ## Notes
@@ -76,6 +77,11 @@ npm run dev
   - `PROVIDER_INTEGRATION_MODE=stub` (always deterministic stub behavior)
   - `PROVIDER_INTEGRATION_MODE=hybrid` (try real provider calls when keys are set, fallback on failure)
   - `PROVIDER_INTEGRATION_MODE=strict` (fail request if provider config/calls fail)
+- Provider task controls:
+  - `PROVIDER_TASK_POLL_MIN_INTERVAL_MS` (API-side refresh throttling)
+  - `PROVIDER_TASK_ASSUME_SUCCESS_AFTER_SEC` (hybrid-mode fallback when provider polling is unavailable)
+  - `PROVIDER_TASK_POLL_INTERVAL_MS` / `PROVIDER_TASK_POLL_TIMEOUT_MS` (worker-side polling loop)
+  - `PROVIDER_WEBHOOK_SECRET` (optional auth for provider webhook callbacks)
 - Real provider envs:
   - `ELEVENLABS_API_KEY` (+ optional `ELEVENLABS_FALLBACK_VOICE_ID`)
   - `HEYGEN_API_KEY`

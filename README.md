@@ -60,6 +60,7 @@ npm run dev
 - Worker pipeline consumes shot plans and writes `voice_clone_meta`, `audio_*`, `character_refs`, `shot_video`, and final artifacts
 - Worker now materializes binary placeholder files for generated artifact keys so signed download links resolve immediately
 - Worker attempts to ingest provider output URLs (when available from task polling) before falling back to placeholders
+- Worker now compiles per-shot `sceneRenderSpec` payloads from theme manifests (assets, anchors, camera, lighting, environment motion, model profile)
 - Worker provider adapters support `stub` and `http` modes for voice + scene generation services
 - API now exposes internal provider endpoints for model + scene generation (`/voice/clone`, `/voice/render`, `/scene/*`)
 - API provider endpoints support real integration attempts for ElevenLabs (voice), HeyGen (shot generation), and Shotstack (final compose) with fallback behavior.

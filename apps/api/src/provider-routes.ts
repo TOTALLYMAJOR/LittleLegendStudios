@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 
-import { buildSignedAssetUrl, type ScriptPayload, type ThemeManifest } from '@little/shared';
+import { buildSignedAssetUrl, type SceneRenderSpec, type ScriptPayload, type ThemeManifest } from '@little/shared';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 
@@ -52,6 +52,33 @@ const shotLineSchema = z.object({
   action: z.string(),
   dialogue: z.string(),
   narration: z.string()
+});
+
+const sceneRenderSpecSchema = z.object({
+  shotNumber: z.number().int().positive(),
+  sceneId: z.string().min(1),
+  sceneName: z.string().min(1),
+  sceneArchitecture: z.string().min(1),
+  camera: z.string().min(1),
+  lighting: z.string().min(1),
+  environmentMotion: z.array(z.string()).default([]),
+  soundBed: z.string().min(1),
+  assets: z.object({
+    bgLoop: z.string().min(1),
+    particlesOverlay: z.string().min(1),
+    lut: z.string().min(1)
+  }),
+  anchors: z.object({
+    child: z.object({
+      x: z.number(),
+      y: z.number(),
+      scale: z.number().positive()
+    })
+  }),
+  modelProfile: z.object({
+    avatarModel: z.string().min(1),
+    compositorModel: z.string().min(1)
+  })
 });
 
 const themeManifestSchema = z.object({
@@ -113,6 +140,7 @@ const renderShotRequestSchema = z.object({
   orderId: z.string().uuid(),
   userId: z.string().uuid(),
   shot: shotLineSchema,
+  sceneRenderSpec: sceneRenderSpecSchema.optional(),
   characterProfile: characterProfileSchema
 });
 
@@ -597,6 +625,7 @@ async function queueHeyGenShot(args: {
   userId: string;
   themeName: string;
   shot: ScriptPayload['shots'][number];
+  sceneRenderSpec: SceneRenderSpec;
   sceneName: string;
   characterProfile: CharacterProfile;
 }): Promise<{ providerTaskId: string }> {
@@ -606,9 +635,11 @@ async function queueHeyGenShot(args: {
 
   const endpoint = `${normalizeBaseUrl(env.HEYGEN_BASE_URL)}${normalizePath(env.HEYGEN_VIDEO_GENERATE_PATH)}`;
   const prompt = [
-    `${args.themeName} cinematic scene \"${args.sceneName}\"`,
-    `${args.shot.camera} camera`,
-    `${args.shot.lighting} lighting`,
+    `${args.themeName} cinematic scene \"${args.sceneRenderSpec.sceneName || args.sceneName}\"`,
+    `${args.sceneRenderSpec.sceneArchitecture} composition`,
+    `${args.sceneRenderSpec.camera} camera`,
+    `${args.sceneRenderSpec.lighting} lighting`,
+    `environment motion ${args.sceneRenderSpec.environmentMotion.join(', ') || 'ambient particles'}`,
     args.shot.shotType === 'dialogue' ? `child speaks: ${args.shot.dialogue}` : `narration beat: ${args.shot.narration}`,
     `character id ${args.characterProfile.characterId}`
   ].join('; ');
@@ -972,6 +1003,45 @@ function buildShotKey(args: {
   return `${args.userId}/${args.orderId}/shots/shot-${args.shot.shotNumber}-${shotHash}.mp4`;
 }
 
+function buildSceneRenderSpec(args: {
+  payload: z.infer<typeof renderShotRequestSchema>;
+  scene: ThemeManifest['scenes'][number];
+  sceneArchitecture: string;
+}): SceneRenderSpec {
+  const { payload, scene, sceneArchitecture } = args;
+  const explicitSpec = payload.sceneRenderSpec;
+
+  if (explicitSpec && explicitSpec.shotNumber !== payload.shot.shotNumber) {
+    throw new ProviderRequestError(400, 'sceneRenderSpec.shotNumber must match shot.shotNumber.');
+  }
+
+  if (explicitSpec && explicitSpec.sceneId !== scene.id) {
+    throw new ProviderRequestError(400, 'sceneRenderSpec.sceneId must match resolved scene id for this theme.');
+  }
+
+  return {
+    shotNumber: payload.shot.shotNumber,
+    sceneId: scene.id,
+    sceneName: explicitSpec?.sceneName || scene.name,
+    sceneArchitecture: explicitSpec?.sceneArchitecture || sceneArchitecture,
+    camera: explicitSpec?.camera || payload.shot.camera || scene.cameraPreset,
+    lighting: explicitSpec?.lighting || payload.shot.lighting || scene.lightingPreset,
+    environmentMotion:
+      explicitSpec?.environmentMotion && explicitSpec.environmentMotion.length > 0
+        ? explicitSpec.environmentMotion
+        : payload.shot.environmentMotion.length > 0
+          ? payload.shot.environmentMotion
+          : scene.environmentMotionDefaults,
+    soundBed: explicitSpec?.soundBed || scene.soundBed,
+    assets: explicitSpec?.assets || scene.assets,
+    anchors: explicitSpec?.anchors || scene.anchors,
+    modelProfile: explicitSpec?.modelProfile || {
+      avatarModel: payload.shot.shotType === 'dialogue' ? 'avatar_speech_v1' : 'avatar_idle_v1',
+      compositorModel: integrationModeAllowsExternal() ? 'provider_scene_compositor_v1' : 'scene_parallax_compositor_v1_stub'
+    }
+  };
+}
+
 function buildFallbackVoiceClone(payload: z.infer<typeof voiceCloneRequestSchema>, reason: string) {
   const sourceSeed = payload.voiceUpload?.sha256 ?? payload.voiceUpload?.s3Key ?? payload.orderId;
   const voiceCloneId = `voice_${hashHex(`${payload.orderId}:${sourceSeed}`, 10)}`;
@@ -1032,10 +1102,10 @@ function buildFallbackVoiceRender(payload: z.infer<typeof voiceRenderRequestSche
 
 function buildFallbackShotRender(args: {
   payload: z.infer<typeof renderShotRequestSchema>;
-  scene: ThemeManifest['scenes'][number];
+  sceneRenderSpec: SceneRenderSpec;
   reason: string;
 }) {
-  const { payload, scene, reason } = args;
+  const { payload, sceneRenderSpec, reason } = args;
   const shotArtifactKey = buildShotKey({
     orderId: payload.orderId,
     userId: payload.userId,
@@ -1047,17 +1117,18 @@ function buildFallbackShotRender(args: {
     shotArtifactKey,
     shotMeta: {
       shotNumber: payload.shot.shotNumber,
-      sceneId: scene.id,
-      sceneName: scene.name,
+      sceneId: sceneRenderSpec.sceneId,
+      sceneName: sceneRenderSpec.sceneName,
       shotType: payload.shot.shotType,
-      camera: payload.shot.camera || scene.cameraPreset,
-      lighting: payload.shot.lighting || scene.lightingPreset,
-      environmentMotion:
-        payload.shot.environmentMotion.length > 0 ? payload.shot.environmentMotion : scene.environmentMotionDefaults,
-      assets: scene.assets,
-      anchors: scene.anchors,
-      soundBed: scene.soundBed,
-      renderModel: 'scene_parallax_compositor_v1_stub',
+      camera: sceneRenderSpec.camera,
+      lighting: sceneRenderSpec.lighting,
+      environmentMotion: sceneRenderSpec.environmentMotion,
+      assets: sceneRenderSpec.assets,
+      anchors: sceneRenderSpec.anchors,
+      soundBed: sceneRenderSpec.soundBed,
+      sceneArchitecture: sceneRenderSpec.sceneArchitecture,
+      renderModel: sceneRenderSpec.modelProfile.compositorModel,
+      modelProfile: sceneRenderSpec.modelProfile,
       characterId: payload.characterProfile.characterId,
       fallbackReason: reason,
       integrationMode: env.PROVIDER_INTEGRATION_MODE
@@ -1482,19 +1553,20 @@ export function registerProviderRoutes(app: FastifyInstance): void {
     try {
       const payload = renderShotRequestSchema.parse(request.body);
       const context = await loadOrderContext(payload.orderId, payload.userId);
-      const scene = context.manifest.scenes.find((entry) => entry.id === payload.shot.sceneId);
+      const indexedFallbackScene =
+        context.manifest.scenes[(Math.max(payload.shot.shotNumber, 1) - 1) % context.manifest.scenes.length];
+      const scene = context.manifest.scenes.find((entry) => entry.id === payload.shot.sceneId) ?? indexedFallbackScene;
 
-      if (!scene) {
-        throw new ProviderRequestError(
-          400,
-          `Scene "${payload.shot.sceneId}" does not exist in the "${context.themeName}" theme pack.`
-        );
-      }
+      const sceneRenderSpec = buildSceneRenderSpec({
+        payload,
+        scene,
+        sceneArchitecture: context.manifest.sceneArchitecture
+      });
 
       const fallback = (reason: string) =>
         buildFallbackShotRender({
           payload,
-          scene,
+          sceneRenderSpec,
           reason
         });
 
@@ -1515,6 +1587,7 @@ export function registerProviderRoutes(app: FastifyInstance): void {
           userId: payload.userId,
           themeName: context.themeName,
           shot: payload.shot,
+          sceneRenderSpec,
           sceneName: scene.name,
           characterProfile: payload.characterProfile
         });
@@ -1534,10 +1607,11 @@ export function registerProviderRoutes(app: FastifyInstance): void {
           status: 'queued',
           artifactKey: shotArtifactKey,
           input: {
-            sceneId: scene.id,
+            sceneId: sceneRenderSpec.sceneId,
             shotNumber: payload.shot.shotNumber,
             shotType: payload.shot.shotType,
-            characterId: payload.characterProfile.characterId
+            characterId: payload.characterProfile.characterId,
+            sceneRenderSpec
           },
           output: {
             queuedAt: new Date().toISOString()
@@ -1549,17 +1623,18 @@ export function registerProviderRoutes(app: FastifyInstance): void {
           shotArtifactKey,
           shotMeta: {
             shotNumber: payload.shot.shotNumber,
-            sceneId: scene.id,
-            sceneName: scene.name,
+            sceneId: sceneRenderSpec.sceneId,
+            sceneName: sceneRenderSpec.sceneName,
             shotType: payload.shot.shotType,
-            camera: payload.shot.camera || scene.cameraPreset,
-            lighting: payload.shot.lighting || scene.lightingPreset,
-            environmentMotion:
-              payload.shot.environmentMotion.length > 0 ? payload.shot.environmentMotion : scene.environmentMotionDefaults,
-            assets: scene.assets,
-            anchors: scene.anchors,
-            soundBed: scene.soundBed,
-            renderModel: 'heygen_video_agent',
+            camera: sceneRenderSpec.camera,
+            lighting: sceneRenderSpec.lighting,
+            environmentMotion: sceneRenderSpec.environmentMotion,
+            assets: sceneRenderSpec.assets,
+            anchors: sceneRenderSpec.anchors,
+            soundBed: sceneRenderSpec.soundBed,
+            sceneArchitecture: sceneRenderSpec.sceneArchitecture,
+            renderModel: sceneRenderSpec.modelProfile.avatarModel,
+            modelProfile: sceneRenderSpec.modelProfile,
             providerTaskId: shotQueue.providerTaskId,
             characterId: payload.characterProfile.characterId,
             integrationMode: env.PROVIDER_INTEGRATION_MODE

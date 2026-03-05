@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 
-import type { ScriptPayload } from '@little/shared';
+import type { SceneRenderSpec, ScriptPayload } from '@little/shared';
 import { z } from 'zod';
 
 import { env } from './env.js';
@@ -97,6 +97,7 @@ export interface SceneProvider {
     orderId: string;
     userId: string;
     shot: ScriptPayload['shots'][number];
+    sceneRenderSpec: SceneRenderSpec;
     characterProfile: CharacterProfile;
   }): Promise<ShotRenderResult>;
   composeFinal(args: {
@@ -222,6 +223,7 @@ class StubSceneProvider implements SceneProvider {
     orderId: string;
     userId: string;
     shot: ScriptPayload['shots'][number];
+    sceneRenderSpec: SceneRenderSpec;
     characterProfile: CharacterProfile;
   }): Promise<ShotRenderResult> {
     const shotArtifactKey = `${args.userId}/${args.orderId}/shots/shot-${args.shot.shotNumber}-${randomUUID().slice(0, 8)}.mp4`;
@@ -230,10 +232,17 @@ class StubSceneProvider implements SceneProvider {
       shotArtifactKey,
       shotMeta: {
         shotNumber: args.shot.shotNumber,
-        sceneId: args.shot.sceneId,
+        sceneId: args.sceneRenderSpec.sceneId,
+        sceneName: args.sceneRenderSpec.sceneName,
+        sceneArchitecture: args.sceneRenderSpec.sceneArchitecture,
         shotType: args.shot.shotType,
-        camera: args.shot.camera,
-        lighting: args.shot.lighting,
+        camera: args.sceneRenderSpec.camera,
+        lighting: args.sceneRenderSpec.lighting,
+        environmentMotion: args.sceneRenderSpec.environmentMotion,
+        assets: args.sceneRenderSpec.assets,
+        anchors: args.sceneRenderSpec.anchors,
+        soundBed: args.sceneRenderSpec.soundBed,
+        modelProfile: args.sceneRenderSpec.modelProfile,
         durationSec: args.shot.durationSec,
         characterId: args.characterProfile.characterId
       }
@@ -498,6 +507,7 @@ class HttpSceneProvider implements SceneProvider {
     orderId: string;
     userId: string;
     shot: ScriptPayload['shots'][number];
+    sceneRenderSpec: SceneRenderSpec;
     characterProfile: CharacterProfile;
   }): Promise<ShotRenderResult> {
     const response = await this.post(
@@ -506,6 +516,7 @@ class HttpSceneProvider implements SceneProvider {
         orderId: args.orderId,
         userId: args.userId,
         shot: args.shot,
+        sceneRenderSpec: args.sceneRenderSpec,
         characterProfile: args.characterProfile
       },
       shotRenderResponseSchema

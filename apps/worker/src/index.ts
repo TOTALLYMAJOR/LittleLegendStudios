@@ -1,4 +1,4 @@
-import { type JobType, type ScriptPayload, assertOrderTransition, type OrderStatus } from '@little/shared';
+import { type JobType, type SceneRenderSpec, type ScriptPayload, type ThemeManifest, assertOrderTransition, type OrderStatus } from '@little/shared';
 import { QueueEvents, Worker } from 'bullmq';
 
 import {
@@ -36,6 +36,16 @@ interface UploadRow {
   content_type: string;
   bytes: number;
   sha256: string | null;
+}
+
+interface OrderThemeRow {
+  theme_name: string;
+  template_manifest_json: unknown;
+}
+
+interface OrderRenderContext {
+  themeName: string;
+  manifest: ThemeManifest;
 }
 
 type ArtifactKind =
@@ -127,6 +137,70 @@ async function loadUploads(orderId: string): Promise<UploadRow[]> {
     `,
     [orderId]
   );
+}
+
+function parseManifest(value: unknown): ThemeManifest {
+  if (!value || typeof value !== 'object') {
+    throw new Error('Theme manifest missing for order.');
+  }
+
+  const manifest = value as ThemeManifest;
+  if (!Array.isArray(manifest.scenes) || manifest.scenes.length === 0) {
+    throw new Error('Theme manifest must include at least one scene.');
+  }
+
+  return manifest;
+}
+
+async function loadOrderRenderContext(orderId: string): Promise<OrderRenderContext> {
+  const rows = await query<OrderThemeRow>(
+    `
+    SELECT
+      t.name AS theme_name,
+      t.template_manifest_json
+    FROM orders o
+    JOIN themes t ON t.id = o.theme_id
+    WHERE o.id = $1
+    LIMIT 1
+    `,
+    [orderId]
+  );
+
+  const row = rows[0];
+  if (!row) {
+    throw new Error(`Order ${orderId} theme context not found`);
+  }
+
+  return {
+    themeName: row.theme_name,
+    manifest: parseManifest(row.template_manifest_json)
+  };
+}
+
+function resolveSceneRenderSpec(args: {
+  shot: ScriptPayload['shots'][number];
+  context: OrderRenderContext;
+}): SceneRenderSpec {
+  const indexedFallbackScene =
+    args.context.manifest.scenes[(Math.max(args.shot.shotNumber, 1) - 1) % args.context.manifest.scenes.length];
+  const scene = args.context.manifest.scenes.find((entry) => entry.id === args.shot.sceneId) ?? indexedFallbackScene;
+
+  return {
+    shotNumber: args.shot.shotNumber,
+    sceneId: scene.id,
+    sceneName: scene.name,
+    sceneArchitecture: args.context.manifest.sceneArchitecture,
+    camera: args.shot.camera || scene.cameraPreset,
+    lighting: args.shot.lighting || scene.lightingPreset,
+    environmentMotion: args.shot.environmentMotion.length > 0 ? args.shot.environmentMotion : scene.environmentMotionDefaults,
+    soundBed: scene.soundBed,
+    assets: scene.assets,
+    anchors: scene.anchors,
+    modelProfile: {
+      avatarModel: args.shot.shotType === 'dialogue' ? 'avatar_speech_v1' : 'avatar_idle_v1',
+      compositorModel: env.SCENE_PROVIDER_MODE === 'http' ? 'provider_scene_compositor_v1' : 'scene_parallax_compositor_v1_stub'
+    }
+  };
 }
 
 function toWorkerUpload(upload: UploadRow): WorkerUpload {
@@ -564,6 +638,7 @@ async function runPipeline(orderId: string, attempt: number): Promise<void> {
   const uploads = await loadUploads(orderId);
   const photoUploads = uploads.filter((upload) => upload.kind === 'photo');
   const voiceUpload = uploads.find((upload) => upload.kind === 'voice') ?? null;
+  const renderContext = await loadOrderRenderContext(orderId);
   const scriptPayload = await loadScriptPayload(orderId);
   const shotPlan = [...scriptPayload.shots].sort((a, b) => a.shotNumber - b.shotNumber);
   const dialogueLines = shotPlan
@@ -731,10 +806,16 @@ async function runPipeline(orderId: string, attempt: number): Promise<void> {
   const shotArtifactKeys: string[] = [];
 
   for (const shot of shotPlan) {
+    const sceneRenderSpec = resolveSceneRenderSpec({
+      shot,
+      context: renderContext
+    });
+
     const shotRender = await providers.scene.renderShot({
       orderId,
       userId: order.user_id,
       shot,
+      sceneRenderSpec,
       characterProfile
     });
 
@@ -744,6 +825,7 @@ async function runPipeline(orderId: string, attempt: number): Promise<void> {
     await runStepWithInput(orderId, 'shot_render', attempt, {
       orderId,
       shot,
+      sceneRenderSpec,
       characterId: characterProfile.characterId,
       voiceCloneId: voiceClone.voiceCloneId
     }, {
@@ -759,6 +841,7 @@ async function runPipeline(orderId: string, attempt: number): Promise<void> {
       assetKey: shotRender.shotArtifactKey,
       payload: {
         ...shotRender.shotMeta,
+        sceneRenderSpec,
         provider: shotRender.provider,
         providerTaskOutput: shotProviderOutput
       }
@@ -767,6 +850,7 @@ async function runPipeline(orderId: string, attempt: number): Promise<void> {
     shotArtifactKeys.push(shotRender.shotArtifactKey);
     await createArtifact(orderId, 'shot_video', shotRender.shotArtifactKey, {
       ...shotRender.shotMeta,
+      sceneRenderSpec,
       ...shotMaterialization,
       signedDownloadUrl: createSignedDownloadUrl(shotRender.shotArtifactKey)
     });

@@ -290,11 +290,24 @@ async function main() {
     });
     process.stdout.write('[smoke] script approved\n');
 
+    const paymentIdempotencyKey = `smoke-pay-${orderId}`;
     const payResult = await client.request(`/orders/${orderId}/pay`, {
       method: 'POST',
+      headers: {
+        'Idempotency-Key': paymentIdempotencyKey
+      },
       jsonBody: {}
     });
     process.stdout.write(`[smoke] pay provider: ${payResult.provider}\n`);
+
+    const payReplay = await client.request(`/orders/${orderId}/pay`, {
+      method: 'POST',
+      headers: {
+        'Idempotency-Key': paymentIdempotencyKey
+      },
+      jsonBody: {}
+    });
+    process.stdout.write(`[smoke] pay idempotent replay provider: ${payReplay.provider}\n`);
 
     if (payResult.provider === 'stripe') {
       throw new Error(

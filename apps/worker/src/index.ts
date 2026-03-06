@@ -797,11 +797,17 @@ async function runPipeline(orderId: string, attempt: number): Promise<void> {
   }
 
   if (order.status !== 'paid' && order.status !== 'failed_soft') {
-    throw new Error(`Order ${orderId} must be paid or retryable before rendering`);
+    process.stdout.write(`[worker] Skipping non-renderable order ${orderId} in status ${order.status}\n`);
+    return;
   }
 
-  if (order.status === 'paid' || order.status === 'failed_soft') {
-    await setOrderStatus(orderId, 'running');
+  const movedToRunning = await transitionIfCurrent(orderId, ['paid', 'failed_soft'], 'running');
+  if (!movedToRunning) {
+    const latest = await getOrder(orderId);
+    process.stdout.write(
+      `[worker] Skipping render start for order ${orderId}; current status is ${latest?.status ?? 'missing'}\n`
+    );
+    return;
   }
 
   const uploads = await loadUploads(orderId);

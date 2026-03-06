@@ -102,6 +102,7 @@ Notes:
 - Character DNA scaffold in worker (deterministic `character_refs` profile derived from uploaded photos)
 - Expanded lifecycle states for retries/refunds (`failed_soft`, `failed_hard`, `refund_queued`, `manual_review`)
 - Stripe checkout + webhook path (real when Stripe env vars are set, stub fallback otherwise)
+- Payment idempotency support via `Idempotency-Key` / `X-Idempotency-Key` on `POST /orders/:orderId/pay`
 - Worker pipeline consumes shot plans and writes `voice_clone_meta`, `audio_*`, `character_refs`, `shot_video`, and final artifacts
 - Worker now materializes binary placeholder files for generated artifact keys so signed download links resolve immediately
 - Worker attempts to ingest provider output URLs (when available from task polling) before falling back to placeholders
@@ -111,6 +112,11 @@ Notes:
 - API provider endpoints support real integration attempts for ElevenLabs (voice), HeyGen (shot generation), and Shotstack (final compose) with fallback behavior.
 - Provider task tracking with polling/webhook endpoints (`GET /provider-tasks/:id`, `POST /provider-tasks/webhook`) and DB persistence
 - Provider task admin routes for monitoring/retry (`GET /provider-tasks`, `POST /provider-tasks/:id/retry`)
+- Stripe webhook replay protection with persisted dedupe records in `stripe_webhook_events`
+- Render queue enqueue dedupe persistence in `render_enqueue_dedupes`
+- Render queue dead-letter visibility + retry:
+  - `GET /admin/queue/render/dead-letter`
+  - `POST /admin/queue/render/dead-letter/:jobId/retry`
 - Order status now includes provider task rows for live visibility in the status page
 - Order status/create UI surfaces latest watermarked preview links when available
 - Order status now includes computed per-shot scene plans with model profile tags (camera/lighting/assets/anchors) for render introspection

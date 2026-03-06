@@ -11,14 +11,13 @@
   - run `npm ci`
   - run `npm run typecheck`
   - run `npm run smoke` with Postgres + Redis service containers and stub payment/email mode
-  - enforce as required check via branch protection on `main`
-
-## Backlog
-
-- [ ] Payment/render reliability hardening:
+  - workflow is live; required check enforcement is blocked until GitHub billing lock is resolved
+- [x] Payment/render reliability hardening:
   - idempotency keys for payment + queue enqueue
   - webhook replay protection + dedupe persistence
   - dead-letter/retry observability for failed jobs
+
+## Backlog
 
 - [ ] Parent experience polish:
   - resend gift email action

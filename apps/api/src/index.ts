@@ -120,6 +120,39 @@ interface OrderOwnerRow {
   email: string;
 }
 
+interface PaymentIdempotencyRow {
+  id: string;
+  order_id: string;
+  idempotency_key: string;
+  status: 'in_progress' | 'completed' | 'failed';
+  response_json: Record<string, unknown> | null;
+  error_text: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface RenderEnqueueDedupeRow {
+  id: string;
+  order_id: string;
+  dedupe_key: string;
+  job_id: string;
+  payment_intent_id: string;
+  source: string;
+  created_at: string;
+}
+
+interface StripeWebhookEventRow {
+  event_id: string;
+  event_type: string;
+  status: 'processing' | 'processed' | 'failed';
+  delivery_count: number;
+  payload_json: Record<string, unknown>;
+  last_error: string | null;
+  first_received_at: string;
+  last_received_at: string;
+  processed_at: string | null;
+}
+
 interface ScenePlanEntry {
   shotNumber: number;
   shotType: 'narration' | 'dialogue';
@@ -128,12 +161,32 @@ interface ScenePlanEntry {
   sceneRenderSpec: SceneRenderSpec;
 }
 
+type RenderEnqueueSource = 'payment_stub' | 'payment_webhook' | 'parent_retry' | 'admin_retry';
+
+interface QueueRenderResult {
+  queued: boolean;
+  deduped: boolean;
+  jobId: string;
+  dedupeKey: string;
+}
+
 const LAUNCH_PRICE_CENTS = 3900;
 const MIN_PHOTO_UPLOADS = 5;
 const MAX_PHOTO_UPLOADS = 15;
 const REQUIRED_VOICE_UPLOADS = 1;
 const MAX_SCRIPT_VERSIONS_PER_ORDER = 3;
 const parentRetryableStatuses: OrderStatus[] = ['failed_soft', 'failed_hard', 'manual_review'];
+const postPaymentStatuses = new Set<OrderStatus>([
+  'paid',
+  'running',
+  'failed_soft',
+  'failed_hard',
+  'refund_queued',
+  'manual_review',
+  'delivered',
+  'refunded',
+  'expired'
+]);
 const photoContentTypes = new Set(['image/jpeg', 'image/png']);
 const voiceContentTypes = new Set(['audio/wav', 'audio/x-wav', 'audio/m4a', 'audio/x-m4a', 'audio/mp4']);
 
@@ -229,6 +282,30 @@ function extractParentAccessToken(request: FastifyRequest): string | null {
 
   const headerToken = request.headers['x-parent-access-token'];
   return typeof headerToken === 'string' && headerToken.trim().length > 0 ? headerToken.trim() : null;
+}
+
+function readHeaderToken(value: string | string[] | undefined): string | null {
+  if (Array.isArray(value)) {
+    return value[0]?.trim() || null;
+  }
+  if (typeof value === 'string' && value.trim().length > 0) {
+    return value.trim();
+  }
+  return null;
+}
+
+function extractIdempotencyKey(request: FastifyRequest, fallbackKey: string): string {
+  const primary = readHeaderToken(request.headers['idempotency-key']);
+  if (primary) {
+    return primary;
+  }
+
+  const secondary = readHeaderToken(request.headers['x-idempotency-key']);
+  if (secondary) {
+    return secondary;
+  }
+
+  return fallbackKey;
 }
 
 function hashToken(value: string): string {
@@ -338,14 +415,17 @@ async function recordRetryRequest(args: {
   requestedStatus: OrderStatus;
   accepted: boolean;
   reason?: string;
-}): Promise<void> {
-  await query(
+}): Promise<string> {
+  const rows = await query<{ id: string }>(
     `
     INSERT INTO order_retry_requests (order_id, actor, requested_status, accepted, reason)
     VALUES ($1, $2, $3, $4, $5)
+    RETURNING id
     `,
     [args.orderId, args.actor, args.requestedStatus, args.accepted, args.reason ?? null]
   );
+
+  return rows[0].id;
 }
 
 async function recordEmailNotification(args: {
@@ -404,17 +484,224 @@ async function setOrderStatus(orderId: string, nextStatus: OrderStatus): Promise
   return rows[0];
 }
 
-async function queueRenderOrder(orderId: string, paymentIntentId: string, jobId = `render-${orderId}`): Promise<void> {
-  await renderQueue.add(
-    'render-order',
-    {
-      orderId,
-      paymentIntentId
-    },
-    {
-      jobId
-    }
+async function transitionOrderIfCurrent(
+  orderId: string,
+  allowedCurrentStatuses: OrderStatus[],
+  nextStatus: OrderStatus
+): Promise<OrderRow | null> {
+  const rows = await query<OrderRow>(
+    `
+    UPDATE orders
+    SET status = $2, updated_at = now()
+    WHERE id = $1
+      AND status = ANY($3::text[])
+    RETURNING *
+    `,
+    [orderId, nextStatus, allowedCurrentStatuses]
   );
+
+  return rows[0] ?? null;
+}
+
+async function claimPaymentIdempotencyKey(orderId: string, idempotencyKey: string): Promise<boolean> {
+  const rows = await query<{ id: string }>(
+    `
+    INSERT INTO payment_idempotency_keys (order_id, idempotency_key, status)
+    VALUES ($1, $2, 'in_progress')
+    ON CONFLICT (order_id, idempotency_key)
+    DO NOTHING
+    RETURNING id
+    `,
+    [orderId, idempotencyKey]
+  );
+
+  return Boolean(rows[0]?.id);
+}
+
+async function getPaymentIdempotencyKey(orderId: string, idempotencyKey: string): Promise<PaymentIdempotencyRow | null> {
+  const rows = await query<PaymentIdempotencyRow>(
+    `
+    SELECT *
+    FROM payment_idempotency_keys
+    WHERE order_id = $1
+      AND idempotency_key = $2
+    LIMIT 1
+    `,
+    [orderId, idempotencyKey]
+  );
+
+  return rows[0] ?? null;
+}
+
+async function waitForPaymentIdempotencyResult(
+  orderId: string,
+  idempotencyKey: string,
+  timeoutMs = 8000
+): Promise<PaymentIdempotencyRow | null> {
+  const started = Date.now();
+
+  while (Date.now() - started <= timeoutMs) {
+    const row = await getPaymentIdempotencyKey(orderId, idempotencyKey);
+    if (!row) {
+      return null;
+    }
+
+    if (row.status === 'completed' || row.status === 'failed') {
+      return row;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+
+  return null;
+}
+
+async function completePaymentIdempotencyKey(
+  orderId: string,
+  idempotencyKey: string,
+  response: Record<string, unknown>
+): Promise<void> {
+  await query(
+    `
+    UPDATE payment_idempotency_keys
+    SET status = 'completed',
+        response_json = $3::jsonb,
+        error_text = NULL,
+        updated_at = now()
+    WHERE order_id = $1
+      AND idempotency_key = $2
+    `,
+    [orderId, idempotencyKey, JSON.stringify(response)]
+  );
+}
+
+async function failPaymentIdempotencyKey(orderId: string, idempotencyKey: string, errorText: string): Promise<void> {
+  await query(
+    `
+    UPDATE payment_idempotency_keys
+    SET status = 'failed',
+        error_text = $3,
+        updated_at = now()
+    WHERE order_id = $1
+      AND idempotency_key = $2
+    `,
+    [orderId, idempotencyKey, errorText]
+  );
+}
+
+async function upsertStripeWebhookEvent(event: Stripe.Event): Promise<StripeWebhookEventRow> {
+  const rows = await query<StripeWebhookEventRow>(
+    `
+    INSERT INTO stripe_webhook_events (event_id, event_type, status, delivery_count, payload_json)
+    VALUES ($1, $2, 'processing', 1, $3::jsonb)
+    ON CONFLICT (event_id)
+    DO UPDATE
+    SET event_type = EXCLUDED.event_type,
+        payload_json = EXCLUDED.payload_json,
+        delivery_count = stripe_webhook_events.delivery_count + 1,
+        last_received_at = now()
+    RETURNING *
+    `,
+    [event.id, event.type, JSON.stringify(event)]
+  );
+
+  return rows[0];
+}
+
+async function markStripeWebhookEventProcessed(eventId: string): Promise<void> {
+  await query(
+    `
+    UPDATE stripe_webhook_events
+    SET status = 'processed',
+        last_error = NULL,
+        processed_at = now(),
+        last_received_at = now()
+    WHERE event_id = $1
+    `,
+    [eventId]
+  );
+}
+
+async function markStripeWebhookEventFailed(eventId: string, errorText: string): Promise<void> {
+  await query(
+    `
+    UPDATE stripe_webhook_events
+    SET status = 'failed',
+        last_error = $2,
+        last_received_at = now()
+    WHERE event_id = $1
+    `,
+    [eventId, errorText]
+  );
+}
+
+async function queueRenderOrder(args: {
+  orderId: string;
+  paymentIntentId: string;
+  jobId: string;
+  dedupeKey: string;
+  source: RenderEnqueueSource;
+}): Promise<QueueRenderResult> {
+  const claim = await query<{ id: string }>(
+    `
+    INSERT INTO render_enqueue_dedupes (order_id, dedupe_key, job_id, payment_intent_id, source)
+    VALUES ($1, $2, $3, $4, $5)
+    ON CONFLICT (order_id, dedupe_key)
+    DO NOTHING
+    RETURNING id
+    `,
+    [args.orderId, args.dedupeKey, args.jobId, args.paymentIntentId, args.source]
+  );
+
+  if (!claim[0]) {
+    const existing = await query<RenderEnqueueDedupeRow>(
+      `
+      SELECT *
+      FROM render_enqueue_dedupes
+      WHERE order_id = $1
+        AND dedupe_key = $2
+      LIMIT 1
+      `,
+      [args.orderId, args.dedupeKey]
+    );
+
+    return {
+      queued: false,
+      deduped: true,
+      jobId: existing[0]?.job_id ?? args.jobId,
+      dedupeKey: args.dedupeKey
+    };
+  }
+
+  try {
+    await renderQueue.add(
+      'render-order',
+      {
+        orderId: args.orderId,
+        paymentIntentId: args.paymentIntentId
+      },
+      {
+        jobId: args.jobId
+      }
+    );
+  } catch (error) {
+    await query(
+      `
+      DELETE FROM render_enqueue_dedupes
+      WHERE order_id = $1
+        AND dedupe_key = $2
+      `,
+      [args.orderId, args.dedupeKey]
+    );
+    throw error;
+  }
+
+  return {
+    queued: true,
+    deduped: false,
+    jobId: args.jobId,
+    dedupeKey: args.dedupeKey
+  };
 }
 
 async function updatePaymentIntent(orderId: string, paymentIntentId: string | null): Promise<void> {
@@ -432,7 +719,7 @@ async function markPaidAndQueueIfEligible(orderId: string, paymentIntentId: stri
   }
 
   if (order.status === 'awaiting_script_approval') {
-    await setOrderStatus(orderId, 'payment_pending');
+    await transitionOrderIfCurrent(orderId, ['awaiting_script_approval'], 'payment_pending');
   }
 
   const refreshed = await getOrder(orderId);
@@ -440,22 +727,36 @@ async function markPaidAndQueueIfEligible(orderId: string, paymentIntentId: stri
     return;
   }
 
+  if (postPaymentStatuses.has(refreshed.status)) {
+    return;
+  }
+
   if (refreshed.status !== 'payment_pending') {
     return;
   }
 
-  await updatePaymentIntent(orderId, paymentIntentId);
-  const paidOrder = await setOrderStatus(orderId, 'paid');
-  await queueRenderOrder(orderId, paidOrder.stripe_payment_intent_id ?? paymentIntentId ?? `pi_missing_${randomUUID().slice(0, 10)}`);
-}
+  const resolvedPaymentIntentId =
+    paymentIntentId ?? refreshed.stripe_payment_intent_id ?? `pi_missing_${randomUUID().replaceAll('-', '').slice(0, 16)}`;
 
-async function markPaymentPendingOrderAsCancelled(orderId: string): Promise<void> {
-  const order = await getOrder(orderId);
-  if (!order || order.status !== 'payment_pending') {
+  await updatePaymentIntent(orderId, resolvedPaymentIntentId);
+  const paidOrder = await transitionOrderIfCurrent(orderId, ['payment_pending'], 'paid');
+  const orderForQueue = paidOrder ?? (await getOrder(orderId));
+
+  if (!orderForQueue || orderForQueue.status !== 'paid') {
     return;
   }
 
-  await setOrderStatus(orderId, 'awaiting_script_approval');
+  await queueRenderOrder({
+    orderId,
+    paymentIntentId: orderForQueue.stripe_payment_intent_id ?? resolvedPaymentIntentId,
+    jobId: `render-${orderId}-payment-${resolvedPaymentIntentId.slice(-12)}`,
+    dedupeKey: `payment:${resolvedPaymentIntentId}`,
+    source: 'payment_webhook'
+  });
+}
+
+async function markPaymentPendingOrderAsCancelled(orderId: string): Promise<void> {
+  await transitionOrderIfCurrent(orderId, ['payment_pending'], 'awaiting_script_approval');
 }
 
 function buildPreviewVideoBytes(args: {
@@ -726,6 +1027,26 @@ async function buildServer(): Promise<FastifyInstance> {
       return reply.status(400).send({ message: `Webhook signature verification failed: ${(error as Error).message}` });
     }
 
+    const trackedEvent = await upsertStripeWebhookEvent(event);
+    if (trackedEvent.status === 'processed') {
+      return reply.send({
+        received: true,
+        deduped: true,
+        eventId: event.id,
+        deliveryCount: trackedEvent.delivery_count
+      });
+    }
+
+    if (trackedEvent.status === 'processing' && trackedEvent.delivery_count > 1) {
+      return reply.status(202).send({
+        received: true,
+        deduped: true,
+        inProgress: true,
+        eventId: event.id,
+        deliveryCount: trackedEvent.delivery_count
+      });
+    }
+
     try {
       if (event.type === 'checkout.session.completed') {
         const session = event.data.object as Stripe.Checkout.Session;
@@ -752,12 +1073,18 @@ async function buildServer(): Promise<FastifyInstance> {
           await markPaymentPendingOrderAsCancelled(orderId);
         }
       }
+      await markStripeWebhookEventProcessed(event.id);
     } catch (error) {
+      await markStripeWebhookEventFailed(event.id, (error as Error).message);
       request.log.error({ err: error, eventId: event.id, eventType: event.type }, 'Stripe webhook processing failed');
       return reply.status(500).send({ message: 'Webhook processing failed' });
     }
 
-    return reply.send({ received: true });
+    return reply.send({
+      received: true,
+      eventId: event.id,
+      deliveryCount: trackedEvent.delivery_count
+    });
   });
 
   app.post('/users/upsert', async (request, reply) => {
@@ -1054,45 +1381,104 @@ async function buildServer(): Promise<FastifyInstance> {
 
     let payableOrder = order;
     if (payableOrder.status === 'awaiting_script_approval') {
-      payableOrder = await setOrderStatus(params.orderId, 'payment_pending');
+      const transitioned = await transitionOrderIfCurrent(params.orderId, ['awaiting_script_approval'], 'payment_pending');
+      payableOrder = transitioned ?? (await getOrder(params.orderId)) ?? payableOrder;
     }
 
-    if (payableOrder.status !== 'payment_pending') {
+    if (postPaymentStatuses.has(payableOrder.status) && payableOrder.stripe_payment_intent_id) {
+      const replayResponse = {
+        order: payableOrder,
+        paymentIntentId: payableOrder.stripe_payment_intent_id,
+        provider: payableOrder.stripe_payment_intent_id.startsWith('pi_dev_') ? 'stripe_stub' : 'stripe',
+        idempotentReplay: true
+      };
+      return reply.send(replayResponse);
+    }
+
+    if (payableOrder.status !== 'payment_pending' || postPaymentStatuses.has(payableOrder.status)) {
       return reply.status(409).send({ message: `Cannot pay order in status ${payableOrder.status}` });
     }
 
-    if (isStripePaymentsEnabled()) {
-      const [user] = await query<Pick<UserRow, 'email'>>('SELECT email FROM users WHERE id = $1', [order.user_id]);
-
-      const checkoutSession = await createCheckoutSession({
-        orderId: params.orderId,
-        amountCents: payableOrder.amount_cents,
-        currency: payableOrder.currency,
-        parentEmail: user?.email
-      });
-
-      if (!checkoutSession.url) {
-        return reply.status(500).send({ message: 'Stripe Checkout session did not return a URL.' });
+    const idempotencyKey = extractIdempotencyKey(request, `pay:${params.orderId}`);
+    const claimed = await claimPaymentIdempotencyKey(params.orderId, idempotencyKey);
+    if (!claimed) {
+      const existing = await waitForPaymentIdempotencyResult(params.orderId, idempotencyKey);
+      if (existing?.status === 'completed' && existing.response_json) {
+        return reply.send(existing.response_json);
       }
 
-      return reply.send({
-        order: payableOrder,
-        provider: 'stripe',
-        checkoutSessionId: checkoutSession.id,
-        checkoutUrl: checkoutSession.url
+      if (existing?.status === 'failed') {
+        return reply.status(409).send({
+          message: existing.error_text ?? 'Payment request failed for this idempotency key.',
+          idempotencyKey
+        });
+      }
+
+      return reply.status(409).send({
+        message: 'Payment request already in progress for this idempotency key.',
+        idempotencyKey
       });
     }
 
-    const paymentIntentId = `pi_dev_${randomUUID().replaceAll('-', '').slice(0, 24)}`;
-    await updatePaymentIntent(params.orderId, paymentIntentId);
-    const paidOrder = await setOrderStatus(params.orderId, 'paid');
-    await queueRenderOrder(params.orderId, paymentIntentId);
+    try {
+      if (isStripePaymentsEnabled()) {
+        const [user] = await query<Pick<UserRow, 'email'>>('SELECT email FROM users WHERE id = $1', [order.user_id]);
 
-    return reply.send({
-      order: paidOrder,
-      paymentIntentId,
-      provider: 'stripe_stub'
-    });
+        const checkoutSession = await createCheckoutSession({
+          orderId: params.orderId,
+          amountCents: payableOrder.amount_cents,
+          currency: payableOrder.currency,
+          parentEmail: user?.email,
+          idempotencyKey
+        });
+
+        if (!checkoutSession.url) {
+          await failPaymentIdempotencyKey(params.orderId, idempotencyKey, 'Stripe Checkout session did not return a URL.');
+          return reply.status(500).send({ message: 'Stripe Checkout session did not return a URL.' });
+        }
+
+        const stripeResponse = {
+          order: payableOrder,
+          provider: 'stripe',
+          checkoutSessionId: checkoutSession.id,
+          checkoutUrl: checkoutSession.url,
+          idempotencyKey
+        };
+        await completePaymentIdempotencyKey(params.orderId, idempotencyKey, stripeResponse);
+        return reply.send(stripeResponse);
+      }
+
+      const paymentIntentId = payableOrder.stripe_payment_intent_id ?? `pi_dev_${randomUUID().replaceAll('-', '').slice(0, 24)}`;
+      await updatePaymentIntent(params.orderId, paymentIntentId);
+
+      const paidOrder =
+        (await transitionOrderIfCurrent(params.orderId, ['payment_pending'], 'paid')) ?? (await getOrder(params.orderId));
+      if (!paidOrder || !postPaymentStatuses.has(paidOrder.status)) {
+        throw new Error(`Order ${params.orderId} did not reach a post-payment status after payment attempt.`);
+      }
+
+      if (paidOrder.status === 'paid') {
+        await queueRenderOrder({
+          orderId: params.orderId,
+          paymentIntentId,
+          jobId: `render-${params.orderId}-payment-${paymentIntentId.slice(-12)}`,
+          dedupeKey: `payment:${paymentIntentId}`,
+          source: 'payment_stub'
+        });
+      }
+
+      const stubResponse = {
+        order: paidOrder,
+        paymentIntentId,
+        provider: 'stripe_stub',
+        idempotencyKey
+      };
+      await completePaymentIdempotencyKey(params.orderId, idempotencyKey, stubResponse);
+      return reply.send(stubResponse);
+    } catch (error) {
+      await failPaymentIdempotencyKey(params.orderId, idempotencyKey, (error as Error).message);
+      throw error;
+    }
   });
 
   app.post('/orders/:orderId/retry', async (request, reply) => {
@@ -1159,19 +1545,26 @@ async function buildServer(): Promise<FastifyInstance> {
       updatedOrder = await setOrderStatus(params.orderId, 'failed_soft');
     }
 
-    const retryJobId = `render-${params.orderId}-parent-retry-${Date.now()}`;
-    await queueRenderOrder(params.orderId, order.stripe_payment_intent_id, retryJobId);
-    await recordRetryRequest({
+    const retryRequestId = await recordRetryRequest({
       orderId: params.orderId,
       actor: 'parent',
       requestedStatus: order.status,
       accepted: true,
       reason: payload.reason
     });
+    const retryJobId = `render-${params.orderId}-parent-retry-${retryRequestId}`;
+    const queueResult = await queueRenderOrder({
+      orderId: params.orderId,
+      paymentIntentId: order.stripe_payment_intent_id,
+      jobId: retryJobId,
+      dedupeKey: `retry:${retryRequestId}`,
+      source: 'parent_retry'
+    });
 
     const nextUsed = parentRetryUsed + 1;
     return reply.send({
-      queued: true,
+      queued: queueResult.queued,
+      deduped: queueResult.deduped,
       orderId: params.orderId,
       fromStatus: order.status,
       currentStatus: updatedOrder.status,
@@ -1230,24 +1623,115 @@ async function buildServer(): Promise<FastifyInstance> {
       updatedOrder = await setOrderStatus(params.orderId, 'failed_soft');
     }
 
-    const retryJobId = `render-${params.orderId}-admin-retry-${Date.now()}`;
-    await queueRenderOrder(params.orderId, order.stripe_payment_intent_id, retryJobId);
-    await recordRetryRequest({
+    const retryRequestId = await recordRetryRequest({
       orderId: params.orderId,
       actor: 'admin',
       requestedStatus: order.status,
       accepted: true,
       reason: payload.reason
     });
+    const retryJobId = `render-${params.orderId}-admin-retry-${retryRequestId}`;
+    const queueResult = await queueRenderOrder({
+      orderId: params.orderId,
+      paymentIntentId: order.stripe_payment_intent_id,
+      jobId: retryJobId,
+      dedupeKey: `retry:${retryRequestId}`,
+      source: 'admin_retry'
+    });
 
     return reply.send({
-      queued: true,
+      queued: queueResult.queued,
+      deduped: queueResult.deduped,
       orderId: params.orderId,
       fromStatus: order.status,
       currentStatus: updatedOrder.status,
       retryJobId,
       paymentIntentId: order.stripe_payment_intent_id,
       reason: payload.reason ?? null
+    });
+  });
+
+  app.get('/admin/queue/render/dead-letter', async (request, reply) => {
+    if (!hasAdminAccess(request)) {
+      return reply.status(401).send({ message: 'Unauthorized admin request.' });
+    }
+
+    const queryParams = z
+      .object({
+        limit: z.coerce.number().int().min(1).max(100).default(25)
+      })
+      .parse(request.query ?? {});
+
+    const failedJobs = await renderQueue.getFailed(0, queryParams.limit - 1);
+    const [failedCount, waitingCount, activeCount, delayedCount] = await Promise.all([
+      renderQueue.getJobCountByTypes('failed'),
+      renderQueue.getJobCountByTypes('waiting'),
+      renderQueue.getJobCountByTypes('active'),
+      renderQueue.getJobCountByTypes('delayed')
+    ]);
+
+    const recentFailedSteps = await query<{
+      order_id: string;
+      type: string;
+      attempt: number;
+      provider: string;
+      error_text: string | null;
+      finished_at: string | null;
+    }>(
+      `
+      SELECT order_id, type, attempt, provider, error_text, finished_at
+      FROM jobs
+      WHERE status = 'failed'
+      ORDER BY finished_at DESC NULLS LAST
+      LIMIT $1
+      `,
+      [queryParams.limit]
+    );
+
+    return reply.send({
+      queue: {
+        name: 'render-orders',
+        failedCount,
+        waitingCount,
+        activeCount,
+        delayedCount
+      },
+      failedJobs: failedJobs.map((job) => ({
+        jobId: job.id,
+        name: job.name,
+        attemptsMade: job.attemptsMade,
+        maxAttempts: job.opts.attempts ?? 1,
+        failedReason: job.failedReason,
+        data: job.data,
+        timestamp: job.timestamp,
+        processedOn: job.processedOn ?? null,
+        finishedOn: job.finishedOn ?? null
+      })),
+      recentFailedSteps
+    });
+  });
+
+  app.post('/admin/queue/render/dead-letter/:jobId/retry', async (request, reply) => {
+    if (!hasAdminAccess(request)) {
+      return reply.status(401).send({ message: 'Unauthorized admin request.' });
+    }
+
+    const params = z.object({ jobId: z.string().min(1) }).parse(request.params);
+    const job = await renderQueue.getJob(params.jobId);
+    if (!job) {
+      return reply.status(404).send({ message: 'Queue job not found.' });
+    }
+
+    const state = await job.getState();
+    if (state !== 'failed') {
+      return reply.status(409).send({ message: `Queue job is in state ${state}; only failed jobs can be retried.` });
+    }
+
+    await job.retry();
+    return reply.send({
+      queued: true,
+      jobId: params.jobId,
+      previousState: state
     });
   });
 

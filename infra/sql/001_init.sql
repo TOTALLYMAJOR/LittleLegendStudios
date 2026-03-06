@@ -170,6 +170,41 @@ CREATE TABLE IF NOT EXISTS email_notifications (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS payment_idempotency_keys (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  order_id UUID NOT NULL REFERENCES orders(id),
+  idempotency_key TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('in_progress', 'completed', 'failed')) DEFAULT 'in_progress',
+  response_json JSONB,
+  error_text TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (order_id, idempotency_key)
+);
+
+CREATE TABLE IF NOT EXISTS render_enqueue_dedupes (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  order_id UUID NOT NULL REFERENCES orders(id),
+  dedupe_key TEXT NOT NULL,
+  job_id TEXT NOT NULL,
+  payment_intent_id TEXT NOT NULL,
+  source TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (order_id, dedupe_key)
+);
+
+CREATE TABLE IF NOT EXISTS stripe_webhook_events (
+  event_id TEXT PRIMARY KEY,
+  event_type TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('processing', 'processed', 'failed')),
+  delivery_count INT NOT NULL DEFAULT 1,
+  payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  last_error TEXT,
+  first_received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  processed_at TIMESTAMPTZ
+);
+
 UPDATE orders
 SET status = 'failed_hard'
 WHERE status = 'failed';
@@ -235,3 +270,7 @@ CREATE INDEX IF NOT EXISTS idx_order_retry_requests_order_id ON order_retry_requ
 CREATE INDEX IF NOT EXISTS idx_gift_redemption_links_order_id ON gift_redemption_links(order_id);
 CREATE INDEX IF NOT EXISTS idx_gift_redemption_links_status ON gift_redemption_links(status);
 CREATE INDEX IF NOT EXISTS idx_email_notifications_order_id ON email_notifications(order_id);
+CREATE INDEX IF NOT EXISTS idx_payment_idempotency_order_id ON payment_idempotency_keys(order_id);
+CREATE INDEX IF NOT EXISTS idx_render_enqueue_dedupes_order_id ON render_enqueue_dedupes(order_id);
+CREATE INDEX IF NOT EXISTS idx_render_enqueue_dedupes_created_at ON render_enqueue_dedupes(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_stripe_webhook_events_status ON stripe_webhook_events(status);

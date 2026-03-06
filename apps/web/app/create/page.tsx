@@ -49,6 +49,10 @@ type UploadSignResponse = {
 const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000';
 const launchPriceLabel = '$39';
 
+function createIdempotencyKey(prefix: string): string {
+  return `${prefix}:${Date.now()}:${crypto.randomUUID()}`;
+}
+
 function setParentAccessTokenCookie(token: string): void {
   document.cookie = `parent_access_token=${encodeURIComponent(token)}; Path=/; Max-Age=2592000; SameSite=Lax`;
 }
@@ -104,6 +108,7 @@ export default function CreateOrderPage(): JSX.Element {
   const [themeSlug, setThemeSlug] = useState('');
   const [userId, setUserId] = useState('');
   const [orderId, setOrderId] = useState('');
+  const [paymentIdempotencyKey, setPaymentIdempotencyKey] = useState('');
   const [script, setScript] = useState<GeneratedScript | null>(null);
   const [isScriptApproved, setIsScriptApproved] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
@@ -166,6 +171,7 @@ export default function CreateOrderPage(): JSX.Element {
       });
 
       setOrderId(order.id);
+      setPaymentIdempotencyKey(createIdempotencyKey(`pay:${order.id}`));
 
       await apiFetch(`/orders/${order.id}/consent`, {
         method: 'POST',
@@ -293,8 +299,16 @@ export default function CreateOrderPage(): JSX.Element {
 
     setLoading(true);
     try {
+      const idempotencyKey = paymentIdempotencyKey || createIdempotencyKey(`pay:${orderId}`);
+      if (!paymentIdempotencyKey) {
+        setPaymentIdempotencyKey(idempotencyKey);
+      }
+
       const payResponse = await apiFetch<PayResponse>(`/orders/${orderId}/pay`, {
         method: 'POST',
+        headers: {
+          'Idempotency-Key': idempotencyKey
+        },
         body: JSON.stringify({})
       });
 

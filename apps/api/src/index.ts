@@ -154,6 +154,38 @@ interface StripeWebhookEventRow {
   processed_at: string | null;
 }
 
+interface EmailNotificationFailureRow {
+  id: string;
+  order_id: string;
+  order_status: OrderStatus;
+  parent_email: string;
+  recipient_email: string;
+  notification_type: 'delivery_ready' | 'render_failed' | 'gift_redeem_link';
+  provider: string;
+  provider_message_id: string | null;
+  subject: string;
+  error_text: string | null;
+  payload_json: Record<string, unknown>;
+  created_at: string;
+}
+
+interface EmailFailureCountRow {
+  key: string;
+  count: number;
+}
+
+interface RetryHistoryRow {
+  id: string;
+  order_id: string;
+  current_order_status: OrderStatus;
+  parent_email: string;
+  actor: 'parent' | 'admin';
+  requested_status: OrderStatus;
+  accepted: boolean;
+  reason: string | null;
+  created_at: string;
+}
+
 interface ScenePlanEntry {
   shotNumber: number;
   shotType: 'narration' | 'dialogue';
@@ -226,6 +258,19 @@ const approveScriptSchema = z.object({
 
 const adminRetrySchema = z.object({
   reason: z.string().min(1).max(500).optional()
+});
+
+const adminEmailFailuresQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(25),
+  orderId: z.string().uuid().optional(),
+  notificationType: z.enum(['delivery_ready', 'render_failed', 'gift_redeem_link']).optional()
+});
+
+const adminRetryHistoryQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(25),
+  orderId: z.string().uuid().optional(),
+  actor: z.enum(['parent', 'admin']).optional(),
+  accepted: z.coerce.boolean().optional()
 });
 
 const parentRetrySchema = z.object({
@@ -1884,6 +1929,214 @@ async function buildServer(): Promise<FastifyInstance> {
       retryJobId,
       paymentIntentId: order.stripe_payment_intent_id,
       reason: payload.reason ?? null
+    });
+  });
+
+  app.get('/admin/email-notifications/failures', async (request, reply) => {
+    if (!hasAdminAccess(request)) {
+      return reply.status(401).send({ message: 'Unauthorized admin request.' });
+    }
+
+    const queryParams = adminEmailFailuresQuerySchema.parse(request.query ?? {});
+    const orderIdFilter = queryParams.orderId ?? null;
+    const notificationTypeFilter = queryParams.notificationType ?? null;
+
+    const [failures, totalCountRows, countsByTypeRows, countsByProviderRows] = await Promise.all([
+      query<EmailNotificationFailureRow>(
+        `
+        SELECT
+          en.id,
+          en.order_id,
+          o.status AS order_status,
+          u.email AS parent_email,
+          en.recipient_email,
+          en.notification_type,
+          en.provider,
+          en.provider_message_id,
+          en.subject,
+          en.error_text,
+          en.payload_json,
+          en.created_at
+        FROM email_notifications en
+        INNER JOIN orders o ON o.id = en.order_id
+        INNER JOIN users u ON u.id = o.user_id
+        WHERE en.status = 'failed'
+          AND ($1::uuid IS NULL OR en.order_id = $1)
+          AND ($2::text IS NULL OR en.notification_type = $2)
+        ORDER BY en.created_at DESC
+        LIMIT $3
+        `,
+        [orderIdFilter, notificationTypeFilter, queryParams.limit]
+      ),
+      query<{ count: number }>(
+        `
+        SELECT COUNT(*)::int AS count
+        FROM email_notifications en
+        WHERE en.status = 'failed'
+          AND ($1::uuid IS NULL OR en.order_id = $1)
+          AND ($2::text IS NULL OR en.notification_type = $2)
+        `,
+        [orderIdFilter, notificationTypeFilter]
+      ),
+      query<EmailFailureCountRow>(
+        `
+        SELECT en.notification_type AS key, COUNT(*)::int AS count
+        FROM email_notifications en
+        WHERE en.status = 'failed'
+          AND ($1::uuid IS NULL OR en.order_id = $1)
+          AND ($2::text IS NULL OR en.notification_type = $2)
+        GROUP BY en.notification_type
+        ORDER BY COUNT(*) DESC, en.notification_type ASC
+        `,
+        [orderIdFilter, notificationTypeFilter]
+      ),
+      query<EmailFailureCountRow>(
+        `
+        SELECT en.provider AS key, COUNT(*)::int AS count
+        FROM email_notifications en
+        WHERE en.status = 'failed'
+          AND ($1::uuid IS NULL OR en.order_id = $1)
+          AND ($2::text IS NULL OR en.notification_type = $2)
+        GROUP BY en.provider
+        ORDER BY COUNT(*) DESC, en.provider ASC
+        `,
+        [orderIdFilter, notificationTypeFilter]
+      )
+    ]);
+
+    return reply.send({
+      filters: {
+        orderId: orderIdFilter,
+        notificationType: notificationTypeFilter,
+        limit: queryParams.limit
+      },
+      summary: {
+        totalFailed: totalCountRows[0]?.count ?? 0,
+        byType: countsByTypeRows.map((row) => ({
+          notificationType: row.key,
+          count: row.count
+        })),
+        byProvider: countsByProviderRows.map((row) => ({
+          provider: row.key,
+          count: row.count
+        }))
+      },
+      failures: failures.map((row) => ({
+        id: row.id,
+        orderId: row.order_id,
+        orderStatus: row.order_status,
+        parentEmail: row.parent_email,
+        recipientEmail: row.recipient_email,
+        notificationType: row.notification_type,
+        provider: row.provider,
+        providerMessageId: row.provider_message_id,
+        subject: row.subject,
+        errorText: row.error_text,
+        payload: row.payload_json,
+        createdAt: row.created_at
+      }))
+    });
+  });
+
+  app.get('/admin/retry-requests', async (request, reply) => {
+    if (!hasAdminAccess(request)) {
+      return reply.status(401).send({ message: 'Unauthorized admin request.' });
+    }
+
+    const queryParams = adminRetryHistoryQuerySchema.parse(request.query ?? {});
+    const orderIdFilter = queryParams.orderId ?? null;
+    const actorFilter = queryParams.actor ?? null;
+    const acceptedFilter = typeof queryParams.accepted === 'boolean' ? queryParams.accepted : null;
+
+    const [historyRows, totalCountRows, actorCountsRows, outcomeCountsRows] = await Promise.all([
+      query<RetryHistoryRow>(
+        `
+        SELECT
+          rr.id,
+          rr.order_id,
+          o.status AS current_order_status,
+          u.email AS parent_email,
+          rr.actor,
+          rr.requested_status,
+          rr.accepted,
+          rr.reason,
+          rr.created_at
+        FROM order_retry_requests rr
+        INNER JOIN orders o ON o.id = rr.order_id
+        INNER JOIN users u ON u.id = o.user_id
+        WHERE ($1::uuid IS NULL OR rr.order_id = $1)
+          AND ($2::text IS NULL OR rr.actor = $2)
+          AND ($3::boolean IS NULL OR rr.accepted = $3)
+        ORDER BY rr.created_at DESC
+        LIMIT $4
+        `,
+        [orderIdFilter, actorFilter, acceptedFilter, queryParams.limit]
+      ),
+      query<{ count: number }>(
+        `
+        SELECT COUNT(*)::int AS count
+        FROM order_retry_requests rr
+        WHERE ($1::uuid IS NULL OR rr.order_id = $1)
+          AND ($2::text IS NULL OR rr.actor = $2)
+          AND ($3::boolean IS NULL OR rr.accepted = $3)
+        `,
+        [orderIdFilter, actorFilter, acceptedFilter]
+      ),
+      query<{ actor: 'parent' | 'admin'; count: number }>(
+        `
+        SELECT rr.actor, COUNT(*)::int AS count
+        FROM order_retry_requests rr
+        WHERE ($1::uuid IS NULL OR rr.order_id = $1)
+          AND ($2::text IS NULL OR rr.actor = $2)
+          AND ($3::boolean IS NULL OR rr.accepted = $3)
+        GROUP BY rr.actor
+        ORDER BY COUNT(*) DESC, rr.actor ASC
+        `,
+        [orderIdFilter, actorFilter, acceptedFilter]
+      ),
+      query<{ accepted: boolean; count: number }>(
+        `
+        SELECT rr.accepted, COUNT(*)::int AS count
+        FROM order_retry_requests rr
+        WHERE ($1::uuid IS NULL OR rr.order_id = $1)
+          AND ($2::text IS NULL OR rr.actor = $2)
+          AND ($3::boolean IS NULL OR rr.accepted = $3)
+        GROUP BY rr.accepted
+        ORDER BY rr.accepted DESC
+        `,
+        [orderIdFilter, actorFilter, acceptedFilter]
+      )
+    ]);
+
+    return reply.send({
+      filters: {
+        orderId: orderIdFilter,
+        actor: actorFilter,
+        accepted: acceptedFilter,
+        limit: queryParams.limit
+      },
+      summary: {
+        totalRequests: totalCountRows[0]?.count ?? 0,
+        actorBreakdown: actorCountsRows.map((row) => ({
+          actor: row.actor,
+          count: row.count
+        })),
+        outcomeBreakdown: outcomeCountsRows.map((row) => ({
+          accepted: row.accepted,
+          count: row.count
+        }))
+      },
+      retryRequests: historyRows.map((row) => ({
+        id: row.id,
+        orderId: row.order_id,
+        currentOrderStatus: row.current_order_status,
+        parentEmail: row.parent_email,
+        actor: row.actor,
+        requestedStatus: row.requested_status,
+        accepted: row.accepted,
+        reason: row.reason,
+        createdAt: row.created_at
+      }))
     });
   });
 

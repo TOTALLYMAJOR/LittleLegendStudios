@@ -1,6 +1,8 @@
 'use client';
 
 import Link from 'next/link';
+import type { Route } from 'next';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useMemo, useState } from 'react';
 
 type Theme = {
@@ -48,6 +50,14 @@ type UploadSignResponse = {
 
 const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000';
 const launchPriceLabel = '$39';
+
+function sanitizeReturnTo(value: string | null): string | null {
+  if (!value || !value.startsWith('/') || value.startsWith('//')) {
+    return null;
+  }
+
+  return value;
+}
 
 function createIdempotencyKey(prefix: string): string {
   return `${prefix}:${Date.now()}:${crypto.randomUUID()}`;
@@ -99,6 +109,8 @@ async function uploadFileToSignedUrl(args: {
 }
 
 export default function CreateOrderPage(): JSX.Element {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const [themes, setThemes] = useState<Theme[]>([]);
   const [email, setEmail] = useState('');
   const [childName, setChildName] = useState('');
@@ -112,6 +124,8 @@ export default function CreateOrderPage(): JSX.Element {
   const [photoFiles, setPhotoFiles] = useState<FileList | null>(null);
   const [voiceFile, setVoiceFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
+  const returnTo = sanitizeReturnTo(searchParams.get('returnTo'));
+  const recoveringOrderId = returnTo?.match(/^\/orders\/([^/?#]+)/)?.[1] ?? null;
 
   const canCreateUser = useMemo(() => email.length > 3, [email]);
   const canCreateOrder = useMemo(() => userId.length > 0 && themeSlug.length > 0, [themeSlug, userId]);
@@ -146,6 +160,12 @@ export default function CreateOrderPage(): JSX.Element {
       });
 
       setUserId(user.id);
+      if (returnTo) {
+        setStatusMessage(`Parent session restored. Returning to ${recoveringOrderId ?? 'your order'}...`);
+        router.push(returnTo as Route);
+        return;
+      }
+
       setStatusMessage(`User ready: ${user.id}`);
     } catch (error) {
       setStatusMessage((error as Error).message);
@@ -329,6 +349,22 @@ export default function CreateOrderPage(): JSX.Element {
         checkout, and async delivery.
       </p>
 
+      {returnTo ? (
+        <section className="card">
+          <h2>Recover Parent Session</h2>
+          <p>
+            Your parent session is missing or expired. Re-enter the parent email for{' '}
+            {recoveringOrderId ? <span className="mono">{recoveringOrderId}</span> : 'this order'} to restore access and return.
+          </p>
+          <p>
+            If you reached this order from a gift email instead, reopen that gift redemption link to establish the correct session.
+          </p>
+          <p>
+            Return target: <span className="mono">{returnTo}</span>
+          </p>
+        </section>
+      ) : null}
+
       <section className="grid two">
         <article className="card">
           <h2>1. Parent Identity</h2>
@@ -341,7 +377,7 @@ export default function CreateOrderPage(): JSX.Element {
             onChange={(event) => setEmail(event.target.value)}
           />
           <button disabled={!canCreateUser || loading} onClick={upsertUser}>
-            Create/Load Parent
+            {returnTo ? 'Restore Parent Session' : 'Create/Load Parent'}
           </button>
           {userId ? <p className="mono">user_id: {userId}</p> : null}
         </article>

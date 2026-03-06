@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import type { Route } from 'next';
 import { cookies } from 'next/headers';
 
 import { OrderActions } from './OrderActions';
@@ -229,6 +230,7 @@ async function loadOrder(args: {
 
 export default async function OrderStatusPage({ params }: StatusPageProps): Promise<JSX.Element> {
   const parentAccessToken = cookies().get('parent_access_token')?.value ?? null;
+  const recoveryHref = `/create?returnTo=${encodeURIComponent(`/orders/${params.id}`)}`;
   const { data, unauthorized } = await loadOrder({
     orderId: params.id,
     parentAccessToken
@@ -241,10 +243,17 @@ export default async function OrderStatusPage({ params }: StatusPageProps): Prom
           <h1>{unauthorized ? 'Parent auth required' : 'Order not found'}</h1>
           <p>
             {unauthorized
-              ? 'Open this order from the create or gift-redeem flow to establish your parent session.'
+              ? 'Your parent session is missing or expired. Restore it with the original parent email, then return to this order.'
               : 'The order id may be invalid or not yet created.'}
           </p>
-          <Link href="/create">Back to create flow</Link>
+          {unauthorized ? (
+            <>
+              <Link href={recoveryHref as Route}>Restore parent session</Link>
+              <p>If this order came from a gift email, reopening that redemption link will also restore access.</p>
+            </>
+          ) : (
+            <Link href="/create">Back to create flow</Link>
+          )}
         </section>
       </main>
     );
@@ -331,6 +340,7 @@ export default async function OrderStatusPage({ params }: StatusPageProps): Prom
         parentRetryPolicy={data.parentRetryPolicy}
         latestGiftLink={data.latestGiftLink}
         parentAccessToken={parentAccessToken}
+        recoveryHref={recoveryHref}
       />
 
       <section className="card">

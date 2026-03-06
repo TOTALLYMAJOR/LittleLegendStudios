@@ -29,6 +29,7 @@ interface OrderActionsProps {
   parentRetryPolicy: ParentRetryPolicy;
   latestGiftLink: LatestGiftLink | null;
   parentAccessToken: string | null;
+  recoveryHref: string;
 }
 
 async function parseResponse(response: Response): Promise<any> {
@@ -48,7 +49,8 @@ export function OrderActions({
   orderId,
   parentRetryPolicy: initialRetryPolicy,
   latestGiftLink,
-  parentAccessToken
+  parentAccessToken,
+  recoveryHref
 }: OrderActionsProps): JSX.Element {
   const [retryPolicy, setRetryPolicy] = useState<ParentRetryPolicy>(initialRetryPolicy);
   const [retryReason, setRetryReason] = useState('');
@@ -63,15 +65,23 @@ export function OrderActions({
   const [giftLoading, setGiftLoading] = useState(false);
   const [giftActionMessage, setGiftActionMessage] = useState('');
   const [redemptionUrl, setRedemptionUrl] = useState('');
+  const [sessionRecoveryMessage, setSessionRecoveryMessage] = useState(
+    parentAccessToken ? '' : 'Parent session missing. Restore it before retrying order actions.'
+  );
 
   const retryDisabled = useMemo(
-    () => retryLoading || !retryPolicy.canRetry || !parentAccessToken,
-    [parentAccessToken, retryLoading, retryPolicy.canRetry]
+    () => retryLoading || !retryPolicy.canRetry || !parentAccessToken || Boolean(sessionRecoveryMessage),
+    [parentAccessToken, retryLoading, retryPolicy.canRetry, sessionRecoveryMessage]
   );
   const hasPendingGiftLink = giftLinkState?.status === 'pending';
-  const resendGiftDisabled = giftLoading || !parentAccessToken || !hasPendingGiftLink;
-  const revokeGiftDisabled = giftLoading || !parentAccessToken || !hasPendingGiftLink;
+  const resendGiftDisabled = giftLoading || !parentAccessToken || !hasPendingGiftLink || Boolean(sessionRecoveryMessage);
+  const revokeGiftDisabled = giftLoading || !parentAccessToken || !hasPendingGiftLink || Boolean(sessionRecoveryMessage);
   const createGiftActionLabel = giftLinkState ? 'Regenerate Gift Redemption Link' : 'Create Gift Redemption Link';
+
+  function markSessionExpired(): Error {
+    setSessionRecoveryMessage('Parent session expired. Restore it, then return to this order.');
+    return new Error('Parent session expired. Restore it, then return to this order.');
+  }
 
   async function retryRender(): Promise<void> {
     setRetryLoading(true);
@@ -93,10 +103,14 @@ export function OrderActions({
         })
       });
       const data = await parseResponse(response);
+      if (response.status === 401) {
+        throw markSessionExpired();
+      }
       if (!response.ok) {
         throw new Error(data.message || `Retry request failed (${response.status}).`);
       }
 
+      setSessionRecoveryMessage('');
       const nextUsed = Number(data.parentRetryUsed ?? retryPolicy.used + 1);
       const nextLimit = Number(data.parentRetryLimit ?? retryPolicy.limit);
       const nextRemaining = Number(data.parentRetryRemaining ?? Math.max(0, nextLimit - nextUsed));
@@ -147,10 +161,14 @@ export function OrderActions({
         })
       });
       const data = await parseResponse(response);
+      if (response.status === 401) {
+        throw markSessionExpired();
+      }
       if (!response.ok) {
         throw new Error(data.message || `Gift link creation failed (${response.status}).`);
       }
 
+      setSessionRecoveryMessage('');
       setRedemptionUrl(String(data.redemptionUrl ?? ''));
       setGiftLinkState((data.giftLink as LatestGiftLink | undefined) ?? null);
       const emailStatus = String(data.emailDelivery?.status ?? 'skipped');
@@ -182,10 +200,14 @@ export function OrderActions({
           : undefined
       });
       const data = await parseResponse(response);
+      if (response.status === 401) {
+        throw markSessionExpired();
+      }
       if (!response.ok) {
         throw new Error(data.message || `Gift link revoke failed (${response.status}).`);
       }
 
+      setSessionRecoveryMessage('');
       setGiftLinkState((data.giftLink as LatestGiftLink | undefined) ?? giftLinkState);
       setGiftActionMessage('Gift link revoked. You can generate a replacement when ready.');
     } catch (error) {
@@ -210,10 +232,14 @@ export function OrderActions({
           : undefined
       });
       const data = await parseResponse(response);
+      if (response.status === 401) {
+        throw markSessionExpired();
+      }
       if (!response.ok) {
         throw new Error(data.message || `Gift email resend failed (${response.status}).`);
       }
 
+      setSessionRecoveryMessage('');
       setRedemptionUrl(String(data.redemptionUrl ?? ''));
       setGiftLinkState((data.giftLink as LatestGiftLink | undefined) ?? giftLinkState);
       const emailStatus = String(data.emailDelivery?.status ?? 'sent');
@@ -233,7 +259,11 @@ export function OrderActions({
     <section className="grid two">
       <article className="card">
         <h2>Parent Retry</h2>
-        {!parentAccessToken ? <p>Parent session missing. Return to create/redeem flow and reopen this order.</p> : null}
+        {sessionRecoveryMessage ? (
+          <p>
+            {sessionRecoveryMessage} <a href={recoveryHref}>Restore parent session</a>
+          </p>
+        ) : null}
         <p>
           Retries used: <strong>{retryPolicy.used}</strong> / {retryPolicy.limit} (remaining {retryPolicy.remaining})
         </p>
@@ -253,7 +283,11 @@ export function OrderActions({
 
       <article className="card">
         <h2>Gift Mode</h2>
-        {!parentAccessToken ? <p>Parent session missing. Return to create/redeem flow and reopen this order.</p> : null}
+        {sessionRecoveryMessage ? (
+          <p>
+            {sessionRecoveryMessage} <a href={recoveryHref}>Restore parent session</a>
+          </p>
+        ) : null}
         {giftLinkState ? (
           <>
             <p>
@@ -289,7 +323,7 @@ export function OrderActions({
           <option value="no">No, I will share it manually</option>
         </select>
 
-        <button disabled={giftLoading || !parentAccessToken} onClick={createGiftLink}>
+        <button disabled={giftLoading || !parentAccessToken || Boolean(sessionRecoveryMessage)} onClick={createGiftLink}>
           {createGiftActionLabel}
         </button>
         <button disabled={resendGiftDisabled} onClick={resendGiftEmail}>

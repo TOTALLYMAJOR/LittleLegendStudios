@@ -117,6 +117,12 @@ Notes:
 - Render queue dead-letter visibility + retry:
   - `GET /admin/queue/render/dead-letter`
   - `POST /admin/queue/render/dead-letter/:jobId/retry`
+- Email notification failure visibility:
+  - `GET /admin/email-notifications/failures`
+  - web view at `/admin/email-notifications`
+- Retry request history visibility:
+  - `GET /admin/retry-requests`
+  - web view at `/admin/retry-history`
 - Order status now includes provider task rows for live visibility in the status page
 - Order status/create UI surfaces latest watermarked preview links when available
 - Order status now includes computed per-shot scene plans with model profile tags (camera/lighting/assets/anchors) for render introspection

@@ -2130,6 +2130,57 @@ async function buildServer(): Promise<FastifyInstance> {
     });
   });
 
+  app.post('/orders/:orderId/gift-link/revoke', async (request, reply) => {
+    const params = z.object({ orderId: z.string().uuid() }).parse(request.params);
+
+    const order = await getOrder(params.orderId);
+    if (!order) {
+      return reply.status(404).send({ message: 'Order not found' });
+    }
+
+    const hasOrderAccess = await assertParentOwnsOrder(request, order);
+    if (!hasOrderAccess) {
+      return reply.status(401).send({ message: 'Unauthorized parent request.' });
+    }
+
+    const latestGiftLink = await getLatestGiftLink(params.orderId);
+    if (!latestGiftLink) {
+      return reply.status(404).send({ message: 'No gift link exists for this order yet.' });
+    }
+
+    if (latestGiftLink.status === 'pending' && isGiftLinkExpired(latestGiftLink)) {
+      await markGiftLinkExpired(latestGiftLink.id);
+      latestGiftLink.status = 'expired';
+    }
+
+    if (latestGiftLink.status !== 'pending') {
+      return reply
+        .status(409)
+        .send({ message: `Cannot revoke gift link in status ${latestGiftLink.status}.` });
+    }
+
+    const revokedRows = await query<GiftLinkRow>(
+      `
+      UPDATE gift_redemption_links
+      SET status = 'revoked',
+          updated_at = now()
+      WHERE id = $1
+        AND status = 'pending'
+      RETURNING *
+      `,
+      [latestGiftLink.id]
+    );
+    const revokedLink = revokedRows[0];
+    if (!revokedLink) {
+      return reply.status(409).send({ message: 'Gift link could not be revoked because it is no longer pending.' });
+    }
+
+    return reply.send({
+      giftLink: buildGiftLinkResponse(revokedLink),
+      revoked: true
+    });
+  });
+
   app.get('/gift/redeem/:token', async (request, reply) => {
     const params = giftRedeemParamsSchema.parse(request.params);
     const link = await getGiftLinkByToken(params.token);

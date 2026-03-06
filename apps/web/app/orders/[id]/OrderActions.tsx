@@ -68,7 +68,10 @@ export function OrderActions({
     () => retryLoading || !retryPolicy.canRetry || !parentAccessToken,
     [parentAccessToken, retryLoading, retryPolicy.canRetry]
   );
-  const resendGiftDisabled = giftLoading || !parentAccessToken || !giftLinkState || giftLinkState.status !== 'pending';
+  const hasPendingGiftLink = giftLinkState?.status === 'pending';
+  const resendGiftDisabled = giftLoading || !parentAccessToken || !hasPendingGiftLink;
+  const revokeGiftDisabled = giftLoading || !parentAccessToken || !hasPendingGiftLink;
+  const createGiftActionLabel = giftLinkState ? 'Regenerate Gift Redemption Link' : 'Create Gift Redemption Link';
 
   async function retryRender(): Promise<void> {
     setRetryLoading(true);
@@ -151,11 +154,40 @@ export function OrderActions({
       setRedemptionUrl(String(data.redemptionUrl ?? ''));
       setGiftLinkState((data.giftLink as LatestGiftLink | undefined) ?? null);
       const emailStatus = String(data.emailDelivery?.status ?? 'skipped');
+      const actionVerb = giftLinkState ? 'regenerated' : 'created';
       setGiftActionMessage(
         emailStatus === 'failed'
-          ? `Gift link created, but email delivery failed: ${String(data.emailDelivery?.errorText ?? 'unknown error')}`
-          : `Gift link created (${emailStatus}).`
+          ? `Gift link ${actionVerb}, but email delivery failed: ${String(data.emailDelivery?.errorText ?? 'unknown error')}`
+          : `Gift link ${actionVerb} (${emailStatus}).`
       );
+    } catch (error) {
+      setGiftActionMessage((error as Error).message);
+    } finally {
+      setGiftLoading(false);
+    }
+  }
+
+  async function revokeGiftLink(): Promise<void> {
+    setGiftLoading(true);
+    setGiftActionMessage('');
+    setRedemptionUrl('');
+
+    try {
+      const response = await fetch(`${apiBase}/orders/${orderId}/gift-link/revoke`, {
+        method: 'POST',
+        headers: parentAccessToken
+          ? {
+              Authorization: `Bearer ${parentAccessToken}`
+            }
+          : undefined
+      });
+      const data = await parseResponse(response);
+      if (!response.ok) {
+        throw new Error(data.message || `Gift link revoke failed (${response.status}).`);
+      }
+
+      setGiftLinkState((data.giftLink as LatestGiftLink | undefined) ?? giftLinkState);
+      setGiftActionMessage('Gift link revoked. You can generate a replacement when ready.');
     } catch (error) {
       setGiftActionMessage((error as Error).message);
     } finally {
@@ -223,9 +255,12 @@ export function OrderActions({
         <h2>Gift Mode</h2>
         {!parentAccessToken ? <p>Parent session missing. Return to create/redeem flow and reopen this order.</p> : null}
         {giftLinkState ? (
-          <p>
-            Latest gift link status: <strong>{giftLinkState.status}</strong> (token suffix {giftLinkState.tokenHint})
-          </p>
+          <>
+            <p>
+              Latest gift link status: <strong>{giftLinkState.status}</strong> (token suffix {giftLinkState.tokenHint})
+            </p>
+            <p>Expires: {new Date(giftLinkState.expiresAt).toLocaleString()}</p>
+          </>
         ) : (
           <p>No gift link created for this order yet.</p>
         )}
@@ -255,10 +290,13 @@ export function OrderActions({
         </select>
 
         <button disabled={giftLoading || !parentAccessToken} onClick={createGiftLink}>
-          Create Gift Redemption Link
+          {createGiftActionLabel}
         </button>
         <button disabled={resendGiftDisabled} onClick={resendGiftEmail}>
           Resend Gift Email
+        </button>
+        <button disabled={revokeGiftDisabled} onClick={revokeGiftLink}>
+          Revoke Gift Link
         </button>
 
         {redemptionUrl ? (

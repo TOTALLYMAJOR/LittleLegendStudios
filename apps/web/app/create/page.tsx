@@ -49,6 +49,10 @@ type UploadSignResponse = {
 const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000';
 const launchPriceLabel = '$39';
 
+function setParentAccessTokenCookie(token: string): void {
+  document.cookie = `parent_access_token=${encodeURIComponent(token)}; Path=/; Max-Age=2592000; SameSite=Lax`;
+}
+
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${apiBase}${path}`, {
     ...init,
@@ -134,12 +138,13 @@ export default function CreateOrderPage(): JSX.Element {
   async function upsertUser(): Promise<void> {
     setLoading(true);
     try {
-      const user = await apiFetch<{ id: string }>('/users/upsert', {
+      const user = await apiFetch<{ id: string; parentAccessToken: string }>('/users/upsert', {
         method: 'POST',
         body: JSON.stringify({ email })
       });
 
       setUserId(user.id);
+      setParentAccessTokenCookie(user.parentAccessToken);
       setStatusMessage(`User ready: ${user.id}`);
     } catch (error) {
       setStatusMessage((error as Error).message);

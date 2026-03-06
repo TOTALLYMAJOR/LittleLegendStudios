@@ -12,6 +12,7 @@ import { deleteAssetByKey, writeAssetBytes } from './asset-store.js';
 import { query } from './db.js';
 import { sendTransactionalEmail } from './email.js';
 import { env } from './env.js';
+import { createParentAccessToken, verifyParentAccessToken } from './parent-auth.js';
 import { registerProviderRoutes } from './provider-routes.js';
 import { renderQueue } from './queue.js';
 import { generateScript } from './script.js';
@@ -112,6 +113,11 @@ interface GiftRedeemOrderRow {
   id: string;
   status: OrderStatus;
   theme_name: string;
+}
+
+interface OrderOwnerRow {
+  id: string;
+  email: string;
 }
 
 interface ScenePlanEntry {
@@ -215,6 +221,16 @@ function hasAdminAccess(request: FastifyRequest): boolean {
   return typeof headerToken === 'string' && headerToken === env.ADMIN_API_TOKEN;
 }
 
+function extractParentAccessToken(request: FastifyRequest): string | null {
+  const bearerToken = parseBearerToken(request.headers.authorization);
+  if (bearerToken) {
+    return bearerToken;
+  }
+
+  const headerToken = request.headers['x-parent-access-token'];
+  return typeof headerToken === 'string' && headerToken.trim().length > 0 ? headerToken.trim() : null;
+}
+
 function hashToken(value: string): string {
   return createHash('sha256').update(value).digest('hex');
 }
@@ -247,6 +263,34 @@ function escapeHtml(value: string): string {
 async function getOrder(orderId: string): Promise<OrderRow | null> {
   const rows = await query<OrderRow>('SELECT * FROM orders WHERE id = $1', [orderId]);
   return rows[0] ?? null;
+}
+
+async function getOrderOwner(userId: string): Promise<OrderOwnerRow | null> {
+  const rows = await query<OrderOwnerRow>('SELECT id, email FROM users WHERE id = $1 LIMIT 1', [userId]);
+  return rows[0] ?? null;
+}
+
+async function assertParentOwnsOrder(request: FastifyRequest, order: OrderRow): Promise<boolean> {
+  const token = extractParentAccessToken(request);
+  if (!token) {
+    return false;
+  }
+
+  const identity = verifyParentAccessToken(token);
+  if (!identity) {
+    return false;
+  }
+
+  if (identity.userId !== order.user_id) {
+    return false;
+  }
+
+  const owner = await getOrderOwner(order.user_id);
+  if (!owner) {
+    return false;
+  }
+
+  return owner.email.toLowerCase() === identity.email.toLowerCase();
 }
 
 async function getGiftLinkByToken(token: string): Promise<GiftLinkRow | null> {
@@ -730,7 +774,14 @@ async function buildServer(): Promise<FastifyInstance> {
       [payload.email.toLowerCase()]
     );
 
-    return reply.send(rows[0]);
+    const user = rows[0];
+    return reply.send({
+      ...user,
+      parentAccessToken: createParentAccessToken({
+        userId: user.id,
+        email: user.email
+      })
+    });
   });
 
   app.post('/orders/:orderId/consent', async (request, reply) => {
@@ -1053,6 +1104,11 @@ async function buildServer(): Promise<FastifyInstance> {
       return reply.status(404).send({ message: 'Order not found' });
     }
 
+    const hasOrderAccess = await assertParentOwnsOrder(request, order);
+    if (!hasOrderAccess) {
+      return reply.status(401).send({ message: 'Unauthorized parent request.' });
+    }
+
     if (!parentRetryableStatuses.includes(order.status)) {
       await recordRetryRequest({
         orderId: params.orderId,
@@ -1202,6 +1258,11 @@ async function buildServer(): Promise<FastifyInstance> {
     const order = await getOrder(params.orderId);
     if (!order) {
       return reply.status(404).send({ message: 'Order not found' });
+    }
+
+    const hasOrderAccess = await assertParentOwnsOrder(request, order);
+    if (!hasOrderAccess) {
+      return reply.status(401).send({ message: 'Unauthorized parent request.' });
     }
 
     if (order.status === 'refunded' || order.status === 'expired') {
@@ -1453,6 +1514,10 @@ async function buildServer(): Promise<FastifyInstance> {
       orderId: link.order_id,
       userId: user.id,
       parentEmail: user.email,
+      parentAccessToken: createParentAccessToken({
+        userId: user.id,
+        email: user.email
+      }),
       giftLink: {
         id: updatedLink.id,
         status: updatedLink.status,
@@ -1468,6 +1533,11 @@ async function buildServer(): Promise<FastifyInstance> {
     const order = await getOrder(params.orderId);
     if (!order) {
       return reply.status(404).send({ message: 'Order not found' });
+    }
+
+    const hasOrderAccess = await assertParentOwnsOrder(request, order);
+    if (!hasOrderAccess) {
+      return reply.status(401).send({ message: 'Unauthorized parent request.' });
     }
 
     const latestScriptRows = await query<LatestScriptRow>(

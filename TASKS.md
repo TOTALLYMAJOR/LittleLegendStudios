@@ -7,14 +7,13 @@
   - protect `POST /orders/:orderId/gift-link`
   - protect `GET /orders/:orderId/status`
   - issue signed parent access token from `/users/upsert` and `/gift/redeem/:token`
-
-## Backlog
-
-- [ ] Add GitHub Actions CI pipeline:
+- [x] Add GitHub Actions CI pipeline:
   - run `npm ci`
   - run `npm run typecheck`
   - run `npm run smoke` with Postgres + Redis service containers and stub payment/email mode
   - enforce as required check via branch protection on `main`
+
+## Backlog
 
 - [ ] Payment/render reliability hardening:
   - idempotency keys for payment + queue enqueue

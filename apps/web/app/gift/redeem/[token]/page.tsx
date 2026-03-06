@@ -6,10 +6,6 @@ import { useEffect, useState } from 'react';
 
 const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000';
 
-function setParentAccessTokenCookie(token: string): void {
-  document.cookie = `parent_access_token=${encodeURIComponent(token)}; Path=/; Max-Age=2592000; SameSite=Lax`;
-}
-
 interface GiftPreviewResponse {
   giftLink: {
     id: string;
@@ -68,7 +64,8 @@ export default function GiftRedeemPage(): JSX.Element {
       setStatusMessage('');
       try {
         const response = await fetch(`${apiBase}/gift/redeem/${token}`, {
-          cache: 'no-store'
+          cache: 'no-store',
+          credentials: 'include'
         });
         const data = await parseResponse(response);
         if (!response.ok) {
@@ -115,6 +112,7 @@ export default function GiftRedeemPage(): JSX.Element {
     try {
       const response = await fetch(`${apiBase}/gift/redeem/${token}`, {
         method: 'POST',
+        credentials: 'include',
         headers: {
           'Content-Type': 'application/json'
         },
@@ -125,10 +123,6 @@ export default function GiftRedeemPage(): JSX.Element {
       const data = await parseResponse(response);
       if (!response.ok) {
         throw new Error(data.message || `Gift redemption failed (${response.status}).`);
-      }
-
-      if (typeof data.parentAccessToken === 'string' && data.parentAccessToken.length > 0) {
-        setParentAccessTokenCookie(data.parentAccessToken);
       }
 
       const orderId = String(data.orderId ?? '');

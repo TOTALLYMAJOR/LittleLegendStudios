@@ -147,6 +147,7 @@ CREATE TABLE IF NOT EXISTS gift_redemption_links (
   sender_name TEXT,
   gift_message TEXT,
   token_hash TEXT NOT NULL UNIQUE,
+  token_encrypted TEXT,
   token_hint TEXT NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('pending', 'redeemed', 'expired', 'revoked')) DEFAULT 'pending',
   redeemed_by_user_id UUID REFERENCES users(id),
@@ -192,6 +193,9 @@ CREATE TABLE IF NOT EXISTS render_enqueue_dedupes (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (order_id, dedupe_key)
 );
+
+ALTER TABLE gift_redemption_links
+ADD COLUMN IF NOT EXISTS token_encrypted TEXT;
 
 CREATE TABLE IF NOT EXISTS stripe_webhook_events (
   event_id TEXT PRIMARY KEY,

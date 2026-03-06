@@ -212,6 +212,7 @@ async function main() {
 
     const order = await client.request('/orders', {
       method: 'POST',
+      headers: authHeaders(parentAccessToken),
       jsonBody: {
         userId: user.id,
         themeSlug: selectedTheme.slug,
@@ -223,6 +224,7 @@ async function main() {
 
     await client.request(`/orders/${orderId}/consent`, {
       method: 'POST',
+      headers: authHeaders(parentAccessToken),
       jsonBody: {
         userId: user.id,
         version: 'smoke-v1',
@@ -236,6 +238,7 @@ async function main() {
       const contentType = 'image/jpeg';
       const signed = await client.request(`/orders/${orderId}/uploads/sign`, {
         method: 'POST',
+        headers: authHeaders(parentAccessToken),
         jsonBody: {
           kind: 'photo',
           contentType,
@@ -257,6 +260,7 @@ async function main() {
       const contentType = 'audio/wav';
       const signed = await client.request(`/orders/${orderId}/uploads/sign`, {
         method: 'POST',
+        headers: authHeaders(parentAccessToken),
         jsonBody: {
           kind: 'voice',
           contentType,
@@ -275,6 +279,7 @@ async function main() {
 
     const generated = await client.request(`/orders/${orderId}/script/generate`, {
       method: 'POST',
+      headers: authHeaders(parentAccessToken),
       jsonBody: {
         childName,
         keywords: ['smoke', 'automation']
@@ -284,6 +289,7 @@ async function main() {
 
     await client.request(`/orders/${orderId}/script/approve`, {
       method: 'POST',
+      headers: authHeaders(parentAccessToken),
       jsonBody: {
         version: generated.version
       }
@@ -294,6 +300,7 @@ async function main() {
     const payResult = await client.request(`/orders/${orderId}/pay`, {
       method: 'POST',
       headers: {
+        ...authHeaders(parentAccessToken),
         'Idempotency-Key': paymentIdempotencyKey
       },
       jsonBody: {}
@@ -303,6 +310,7 @@ async function main() {
     const payReplay = await client.request(`/orders/${orderId}/pay`, {
       method: 'POST',
       headers: {
+        ...authHeaders(parentAccessToken),
         'Idempotency-Key': paymentIdempotencyKey
       },
       jsonBody: {}

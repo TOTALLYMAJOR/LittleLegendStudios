@@ -1,4 +1,4 @@
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from 'node:crypto';
 
 import cors from '@fastify/cors';
 import { assertOrderTransition, type OrderStatus, type SceneRenderSpec, type ScriptPayload, type ThemeManifest } from '@little/shared';
@@ -9,7 +9,7 @@ import { z } from 'zod';
 
 import { createSignedDownloadUrl, createSignedUploadUrl, registerAssetRoutes } from './asset-routes.js';
 import { deleteAssetByKey, writeAssetBytes } from './asset-store.js';
-import { query } from './db.js';
+import { pool, query } from './db.js';
 import { sendTransactionalEmail } from './email.js';
 import { env } from './env.js';
 import { createParentAccessToken, verifyParentAccessToken } from './parent-auth.js';
@@ -100,6 +100,7 @@ interface GiftLinkRow {
   sender_name: string | null;
   gift_message: string | null;
   token_hash: string;
+  token_encrypted: string | null;
   token_hint: string;
   status: 'pending' | 'redeemed' | 'expired' | 'revoked';
   redeemed_by_user_id: string | null;
@@ -274,16 +275,6 @@ function hasAdminAccess(request: FastifyRequest): boolean {
   return typeof headerToken === 'string' && headerToken === env.ADMIN_API_TOKEN;
 }
 
-function extractParentAccessToken(request: FastifyRequest): string | null {
-  const bearerToken = parseBearerToken(request.headers.authorization);
-  if (bearerToken) {
-    return bearerToken;
-  }
-
-  const headerToken = request.headers['x-parent-access-token'];
-  return typeof headerToken === 'string' && headerToken.trim().length > 0 ? headerToken.trim() : null;
-}
-
 function readHeaderToken(value: string | string[] | undefined): string | null {
   if (Array.isArray(value)) {
     return value[0]?.trim() || null;
@@ -292,6 +283,47 @@ function readHeaderToken(value: string | string[] | undefined): string | null {
     return value.trim();
   }
   return null;
+}
+
+function readCookieToken(cookieHeader: string | string[] | undefined, cookieName: string): string | null {
+  if (!cookieHeader) {
+    return null;
+  }
+
+  const raw = Array.isArray(cookieHeader) ? cookieHeader.join('; ') : cookieHeader;
+  for (const part of raw.split(';')) {
+    const [name, ...valueParts] = part.trim().split('=');
+    if (name !== cookieName || valueParts.length === 0) {
+      continue;
+    }
+
+    const value = valueParts.join('=').trim();
+    if (!value) {
+      return null;
+    }
+
+    try {
+      return decodeURIComponent(value);
+    } catch {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+function extractParentAccessToken(request: FastifyRequest): string | null {
+  const bearerToken = parseBearerToken(request.headers.authorization);
+  if (bearerToken) {
+    return bearerToken;
+  }
+
+  const headerToken = request.headers['x-parent-access-token'];
+  if (typeof headerToken === 'string' && headerToken.trim().length > 0) {
+    return headerToken.trim();
+  }
+
+  return readCookieToken(request.headers.cookie, 'parent_access_token');
 }
 
 function extractIdempotencyKey(request: FastifyRequest, fallbackKey: string): string {
@@ -312,6 +344,22 @@ function hashToken(value: string): string {
   return createHash('sha256').update(value).digest('hex');
 }
 
+function buildParentAccessTokenSetCookie(token: string): string {
+  const parts = [
+    `parent_access_token=${encodeURIComponent(token)}`,
+    'Path=/',
+    `Max-Age=${env.PARENT_AUTH_TTL_SEC}`,
+    'HttpOnly',
+    'SameSite=Lax'
+  ];
+
+  if (env.WEB_APP_BASE_URL.startsWith('https://')) {
+    parts.push('Secure');
+  }
+
+  return parts.join('; ');
+}
+
 function buildGiftRedemptionUrl(token: string): string {
   return `${env.WEB_APP_BASE_URL}/gift/redeem/${token}`;
 }
@@ -322,6 +370,41 @@ function buildGiftTokenHint(token: string): string {
 
 function createGiftToken(): string {
   return randomBytes(24).toString('hex');
+}
+
+function getGiftTokenEncryptionKey(): Buffer {
+  return createHash('sha256').update(env.PARENT_AUTH_SECRET).digest();
+}
+
+function encryptGiftToken(token: string): string {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv('aes-256-gcm', getGiftTokenEncryptionKey(), iv);
+  const ciphertext = Buffer.concat([cipher.update(token, 'utf8'), cipher.final()]);
+  const authTag = cipher.getAuthTag();
+  return `${iv.toString('base64url')}.${authTag.toString('base64url')}.${ciphertext.toString('base64url')}`;
+}
+
+function decryptGiftToken(value: string): string | null {
+  const [ivText, authTagText, ciphertextText] = value.split('.', 3);
+  if (!ivText || !authTagText || !ciphertextText) {
+    return null;
+  }
+
+  try {
+    const decipher = createDecipheriv(
+      'aes-256-gcm',
+      getGiftTokenEncryptionKey(),
+      Buffer.from(ivText, 'base64url')
+    );
+    decipher.setAuthTag(Buffer.from(authTagText, 'base64url'));
+    const decrypted = Buffer.concat([
+      decipher.update(Buffer.from(ciphertextText, 'base64url')),
+      decipher.final()
+    ]);
+    return decrypted.toString('utf8');
+  } catch {
+    return null;
+  }
 }
 
 function isGiftLinkExpired(link: Pick<GiftLinkRow, 'expires_at'>): boolean {
@@ -370,6 +453,25 @@ async function assertParentOwnsOrder(request: FastifyRequest, order: OrderRow): 
   return owner.email.toLowerCase() === identity.email.toLowerCase();
 }
 
+async function assertParentOwnsUserId(request: FastifyRequest, userId: string): Promise<boolean> {
+  const token = extractParentAccessToken(request);
+  if (!token) {
+    return false;
+  }
+
+  const identity = verifyParentAccessToken(token);
+  if (!identity || identity.userId !== userId) {
+    return false;
+  }
+
+  const owner = await getOrderOwner(userId);
+  if (!owner) {
+    return false;
+  }
+
+  return owner.email.toLowerCase() === identity.email.toLowerCase();
+}
+
 async function getGiftLinkByToken(token: string): Promise<GiftLinkRow | null> {
   const rows = await query<GiftLinkRow>(
     `
@@ -392,6 +494,20 @@ async function markGiftLinkExpired(linkId: string): Promise<void> {
     `,
     [linkId]
   );
+}
+
+async function getLatestGiftLink(orderId: string): Promise<GiftLinkRow | null> {
+  const rows = await query<GiftLinkRow>(
+    `
+    SELECT *
+    FROM gift_redemption_links
+    WHERE order_id = $1
+    ORDER BY created_at DESC
+    LIMIT 1
+    `,
+    [orderId]
+  );
+  return rows[0] ?? null;
 }
 
 async function getParentRetryUsage(orderId: string): Promise<number> {
@@ -466,6 +582,93 @@ async function recordEmailNotification(args: {
       JSON.stringify(args.payload)
     ]
   );
+}
+
+function buildGiftLinkResponse(giftLink: GiftLinkRow) {
+  return {
+    id: giftLink.id,
+    orderId: giftLink.order_id,
+    recipientEmail: giftLink.recipient_email,
+    senderName: giftLink.sender_name,
+    giftMessage: giftLink.gift_message,
+    status: giftLink.status,
+    tokenHint: giftLink.token_hint,
+    expiresAt: giftLink.expires_at,
+    createdAt: giftLink.created_at
+  };
+}
+
+function buildGiftEmailContent(args: {
+  senderName: string | null;
+  giftMessage: string | null;
+  redemptionUrl: string;
+}) {
+  const subject = 'Your Little Legend gift is ready to redeem';
+  const senderLine = args.senderName
+    ? `${args.senderName} sent you a Little Legend gift.`
+    : 'A Little Legend gift was sent to you.';
+  const messageLine = args.giftMessage
+    ? `Message: "${args.giftMessage}"`
+    : 'Open the redemption link to claim your order.';
+  const safeSenderLine = escapeHtml(senderLine);
+  const safeMessageLine = escapeHtml(messageLine);
+
+  return {
+    subject,
+    html: `
+      <p>${safeSenderLine}</p>
+      <p>${safeMessageLine}</p>
+      <p><a href="${args.redemptionUrl}">Redeem gift</a></p>
+      <p>If the button does not work, copy this URL into your browser:</p>
+      <p>${args.redemptionUrl}</p>
+    `,
+    text: `${senderLine}\n${messageLine}\nRedeem gift: ${args.redemptionUrl}`
+  };
+}
+
+async function deliverGiftLinkEmail(args: {
+  orderId: string;
+  giftLink: GiftLinkRow;
+  redemptionUrl: string;
+  source: 'create' | 'resend';
+}): Promise<{
+  status: 'sent' | 'failed' | 'stub';
+  provider: 'resend' | 'stub';
+  errorText: string | null;
+}> {
+  const message = buildGiftEmailContent({
+    senderName: args.giftLink.sender_name,
+    giftMessage: args.giftLink.gift_message,
+    redemptionUrl: args.redemptionUrl
+  });
+  const sendResult = await sendTransactionalEmail({
+    to: args.giftLink.recipient_email,
+    subject: message.subject,
+    html: message.html,
+    text: message.text
+  });
+
+  await recordEmailNotification({
+    orderId: args.orderId,
+    recipientEmail: args.giftLink.recipient_email,
+    notificationType: 'gift_redeem_link',
+    provider: sendResult.provider,
+    providerMessageId: sendResult.providerMessageId,
+    status: sendResult.status,
+    subject: message.subject,
+    errorText: sendResult.errorText,
+    payload: {
+      giftLinkId: args.giftLink.id,
+      tokenHint: args.giftLink.token_hint,
+      source: args.source
+    }
+  });
+
+  return {
+    status: sendResult.status,
+    provider: sendResult.provider,
+    errorText: sendResult.errorText
+  };
 }
 
 async function setOrderStatus(orderId: string, nextStatus: OrderStatus): Promise<OrderRow> {
@@ -1102,12 +1305,15 @@ async function buildServer(): Promise<FastifyInstance> {
     );
 
     const user = rows[0];
+    const parentAccessToken = createParentAccessToken({
+      userId: user.id,
+      email: user.email
+    });
+    reply.header('Set-Cookie', buildParentAccessTokenSetCookie(parentAccessToken));
+
     return reply.send({
       ...user,
-      parentAccessToken: createParentAccessToken({
-        userId: user.id,
-        email: user.email
-      })
+      parentAccessToken
     });
   });
 
@@ -1122,6 +1328,11 @@ async function buildServer(): Promise<FastifyInstance> {
 
     if (order.user_id !== payload.userId) {
       return reply.status(403).send({ message: 'Consent user mismatch' });
+    }
+
+    const hasUserAccess = await assertParentOwnsUserId(request, payload.userId);
+    if (!hasUserAccess) {
+      return reply.status(401).send({ message: 'Unauthorized parent request.' });
     }
 
     const rows = await query(
@@ -1152,6 +1363,11 @@ async function buildServer(): Promise<FastifyInstance> {
   app.post('/orders', async (request, reply) => {
     const payload = createOrderSchema.parse(request.body);
 
+    const hasUserAccess = await assertParentOwnsUserId(request, payload.userId);
+    if (!hasUserAccess) {
+      return reply.status(401).send({ message: 'Unauthorized parent request.' });
+    }
+
     const themeRows = await query<ThemeRow>('SELECT * FROM themes WHERE slug = $1 AND is_active = true', [
       payload.themeSlug
     ]);
@@ -1180,6 +1396,11 @@ async function buildServer(): Promise<FastifyInstance> {
     const order = await getOrder(params.orderId);
     if (!order) {
       return reply.status(404).send({ message: 'Order not found' });
+    }
+
+    const hasOrderAccess = await assertParentOwnsOrder(request, order);
+    if (!hasOrderAccess) {
+      return reply.status(401).send({ message: 'Unauthorized parent request.' });
     }
 
     if (!['draft', 'needs_user_fix', 'awaiting_script_approval'].includes(order.status)) {
@@ -1243,6 +1464,11 @@ async function buildServer(): Promise<FastifyInstance> {
     const order = await getOrder(params.orderId);
     if (!order) {
       return reply.status(404).send({ message: 'Order not found' });
+    }
+
+    const hasOrderAccess = await assertParentOwnsOrder(request, order);
+    if (!hasOrderAccess) {
+      return reply.status(401).send({ message: 'Unauthorized parent request.' });
     }
 
     if (!['draft', 'needs_user_fix', 'awaiting_script_approval', 'script_regenerate'].includes(order.status)) {
@@ -1329,6 +1555,11 @@ async function buildServer(): Promise<FastifyInstance> {
       return reply.status(404).send({ message: 'Order not found' });
     }
 
+    const hasOrderAccess = await assertParentOwnsOrder(request, order);
+    if (!hasOrderAccess) {
+      return reply.status(401).send({ message: 'Unauthorized parent request.' });
+    }
+
     if (!['awaiting_script_approval', 'script_regenerate', 'payment_pending'].includes(order.status)) {
       return reply.status(409).send({ message: `Cannot approve script for order in status ${order.status}` });
     }
@@ -1368,6 +1599,11 @@ async function buildServer(): Promise<FastifyInstance> {
     const order = await getOrder(params.orderId);
     if (!order) {
       return reply.status(404).send({ message: 'Order not found' });
+    }
+
+    const hasOrderAccess = await assertParentOwnsOrder(request, order);
+    if (!hasOrderAccess) {
+      return reply.status(401).send({ message: 'Unauthorized parent request.' });
     }
 
     const approvedRows = await query<{ id: string }>(
@@ -1778,6 +2014,7 @@ async function buildServer(): Promise<FastifyInstance> {
         sender_name,
         gift_message,
         token_hash,
+        token_encrypted,
         token_hint,
         status,
         expires_at
@@ -1789,8 +2026,9 @@ async function buildServer(): Promise<FastifyInstance> {
         $4,
         $5,
         $6,
+        $7,
         'pending',
-        now() + ($7::text || ' days')::interval
+        now() + ($8::text || ' days')::interval
       )
       RETURNING *
       `,
@@ -1800,6 +2038,7 @@ async function buildServer(): Promise<FastifyInstance> {
         payload.senderName ?? null,
         payload.giftMessage ?? null,
         tokenHash,
+        encryptGiftToken(giftToken),
         tokenHint,
         String(expiresInDays)
       ]
@@ -1821,60 +2060,71 @@ async function buildServer(): Promise<FastifyInstance> {
     };
 
     if (payload.sendEmail) {
-      const subject = `Your Little Legend gift is ready to redeem`;
-      const senderLine = payload.senderName ? `${payload.senderName} sent you a Little Legend gift.` : `A Little Legend gift was sent to you.`;
-      const messageLine = payload.giftMessage ? `Message: "${payload.giftMessage}"` : 'Open the redemption link to claim your order.';
-      const safeSenderLine = escapeHtml(senderLine);
-      const safeMessageLine = escapeHtml(messageLine);
-      const html = `
-        <p>${safeSenderLine}</p>
-        <p>${safeMessageLine}</p>
-        <p><a href="${redemptionUrl}">Redeem gift</a></p>
-        <p>If the button does not work, copy this URL into your browser:</p>
-        <p>${redemptionUrl}</p>
-      `;
-      const text = `${senderLine}\n${messageLine}\nRedeem gift: ${redemptionUrl}`;
-      const sendResult = await sendTransactionalEmail({
-        to: normalizedRecipientEmail,
-        subject,
-        html,
-        text
-      });
-
-      emailDelivery = {
-        status: sendResult.status,
-        provider: sendResult.provider,
-        errorText: sendResult.errorText
-      };
-
-      await recordEmailNotification({
+      emailDelivery = await deliverGiftLinkEmail({
         orderId: params.orderId,
-        recipientEmail: normalizedRecipientEmail,
-        notificationType: 'gift_redeem_link',
-        provider: sendResult.provider,
-        providerMessageId: sendResult.providerMessageId,
-        status: sendResult.status,
-        subject,
-        errorText: sendResult.errorText,
-        payload: {
-          giftLinkId: giftLink.id,
-          tokenHint
-        }
+        giftLink,
+        redemptionUrl,
+        source: 'create'
       });
     }
 
     return reply.send({
-      giftLink: {
-        id: giftLink.id,
-        orderId: giftLink.order_id,
-        recipientEmail: giftLink.recipient_email,
-        senderName: giftLink.sender_name,
-        giftMessage: giftLink.gift_message,
-        status: giftLink.status,
-        tokenHint: giftLink.token_hint,
-        expiresAt: giftLink.expires_at,
-        createdAt: giftLink.created_at
-      },
+      giftLink: buildGiftLinkResponse(giftLink),
+      redemptionUrl,
+      emailDelivery
+    });
+  });
+
+  app.post('/orders/:orderId/gift-link/resend', async (request, reply) => {
+    const params = z.object({ orderId: z.string().uuid() }).parse(request.params);
+
+    const order = await getOrder(params.orderId);
+    if (!order) {
+      return reply.status(404).send({ message: 'Order not found' });
+    }
+
+    const hasOrderAccess = await assertParentOwnsOrder(request, order);
+    if (!hasOrderAccess) {
+      return reply.status(401).send({ message: 'Unauthorized parent request.' });
+    }
+
+    const latestGiftLink = await getLatestGiftLink(params.orderId);
+    if (!latestGiftLink) {
+      return reply.status(404).send({ message: 'No gift link exists for this order yet.' });
+    }
+
+    if (latestGiftLink.status === 'pending' && isGiftLinkExpired(latestGiftLink)) {
+      await markGiftLinkExpired(latestGiftLink.id);
+      latestGiftLink.status = 'expired';
+    }
+
+    if (latestGiftLink.status !== 'pending') {
+      return reply
+        .status(409)
+        .send({ message: `Cannot resend email for gift link in status ${latestGiftLink.status}.` });
+    }
+
+    if (!latestGiftLink.token_encrypted) {
+      return reply.status(409).send({
+        message: 'This gift link predates resend support. Create a new gift redemption link to email it again.'
+      });
+    }
+
+    const giftToken = decryptGiftToken(latestGiftLink.token_encrypted);
+    if (!giftToken) {
+      return reply.status(500).send({ message: 'Gift redemption token could not be restored for resend.' });
+    }
+
+    const redemptionUrl = buildGiftRedemptionUrl(giftToken);
+    const emailDelivery = await deliverGiftLinkEmail({
+      orderId: params.orderId,
+      giftLink: latestGiftLink,
+      redemptionUrl,
+      source: 'resend'
+    });
+
+    return reply.send({
+      giftLink: buildGiftLinkResponse(latestGiftLink),
       redemptionUrl,
       emailDelivery
     });
@@ -1890,6 +2140,10 @@ async function buildServer(): Promise<FastifyInstance> {
     if (link.status === 'pending' && isGiftLinkExpired(link)) {
       await markGiftLinkExpired(link.id);
       return reply.status(410).send({ message: 'Gift redemption link has expired.' });
+    }
+
+    if (link.status !== 'pending') {
+      return reply.status(410).send({ message: 'Gift redemption link is unavailable.' });
     }
 
     const orderRows = await query<GiftRedeemOrderRow>(
@@ -1934,81 +2188,119 @@ async function buildServer(): Promise<FastifyInstance> {
   app.post('/gift/redeem/:token', async (request, reply) => {
     const params = giftRedeemParamsSchema.parse(request.params);
     const payload = giftRedeemSchema.parse(request.body ?? {});
-
-    const link = await getGiftLinkByToken(params.token);
-    if (!link) {
-      return reply.status(404).send({ message: 'Gift redemption link not found.' });
-    }
-
-    if (link.status === 'pending' && isGiftLinkExpired(link)) {
-      await markGiftLinkExpired(link.id);
-      return reply.status(410).send({ message: 'Gift redemption link has expired.' });
-    }
-
-    if (link.status !== 'pending') {
-      return reply.status(409).send({
-        message: `Gift redemption link cannot be redeemed in status ${link.status}.`
-      });
-    }
-
     const normalizedParentEmail = payload.parentEmail.toLowerCase();
-    if (normalizedParentEmail !== link.recipient_email.toLowerCase()) {
-      return reply.status(403).send({ message: 'Gift redemption email does not match recipient email.' });
-    }
+    const client = await pool.connect();
 
-    const [user] = await query<UserRow>(
-      `
-      INSERT INTO users (email)
-      VALUES ($1)
-      ON CONFLICT (email)
-      DO UPDATE SET email = EXCLUDED.email
-      RETURNING *
-      `,
-      [normalizedParentEmail]
-    );
+    try {
+      await client.query('BEGIN');
 
-    await query(
-      `
-      UPDATE orders
-      SET user_id = $2,
-          updated_at = now()
-      WHERE id = $1
-      `,
-      [link.order_id, user.id]
-    );
+      const linkRows = await client.query<GiftLinkRow>(
+        `
+        SELECT *
+        FROM gift_redemption_links
+        WHERE token_hash = $1
+        LIMIT 1
+        FOR UPDATE
+        `,
+        [hashToken(params.token)]
+      );
+      const link = linkRows.rows[0];
+      if (!link) {
+        await client.query('ROLLBACK');
+        return reply.status(404).send({ message: 'Gift redemption link not found.' });
+      }
 
-    const [updatedLink] = await query<GiftLinkRow>(
-      `
-      UPDATE gift_redemption_links
-      SET status = 'redeemed',
-          redeemed_by_user_id = $2,
-          redeemed_at = now(),
-          updated_at = now()
-      WHERE id = $1
-      RETURNING *
-      `,
-      [link.id, user.id]
-    );
-    if (!updatedLink) {
-      return reply.status(500).send({ message: 'Gift redemption update failed.' });
-    }
+      if (link.status === 'pending' && isGiftLinkExpired(link)) {
+        await client.query(
+          `
+          UPDATE gift_redemption_links
+          SET status = 'expired', updated_at = now()
+          WHERE id = $1 AND status = 'pending'
+          `,
+          [link.id]
+        );
+        await client.query('COMMIT');
+        return reply.status(410).send({ message: 'Gift redemption link has expired.' });
+      }
 
-    return reply.send({
-      redeemed: true,
-      orderId: link.order_id,
-      userId: user.id,
-      parentEmail: user.email,
-      parentAccessToken: createParentAccessToken({
+      if (link.status !== 'pending') {
+        await client.query('ROLLBACK');
+        return reply.status(409).send({
+          message: `Gift redemption link cannot be redeemed in status ${link.status}.`
+        });
+      }
+
+      if (normalizedParentEmail !== link.recipient_email.toLowerCase()) {
+        await client.query('ROLLBACK');
+        return reply.status(403).send({ message: 'Gift redemption email does not match recipient email.' });
+      }
+
+      const userRows = await client.query<UserRow>(
+        `
+        INSERT INTO users (email)
+        VALUES ($1)
+        ON CONFLICT (email)
+        DO UPDATE SET email = EXCLUDED.email
+        RETURNING *
+        `,
+        [normalizedParentEmail]
+      );
+      const user = userRows.rows[0];
+
+      await client.query(
+        `
+        UPDATE orders
+        SET user_id = $2,
+            updated_at = now()
+        WHERE id = $1
+        `,
+        [link.order_id, user.id]
+      );
+
+      const updatedLinkRows = await client.query<GiftLinkRow>(
+        `
+        UPDATE gift_redemption_links
+        SET status = 'redeemed',
+            redeemed_by_user_id = $2,
+            redeemed_at = now(),
+            updated_at = now()
+        WHERE id = $1
+          AND status = 'pending'
+        RETURNING *
+        `,
+        [link.id, user.id]
+      );
+      const updatedLink = updatedLinkRows.rows[0];
+      if (!updatedLink) {
+        throw new Error('Gift redemption update failed.');
+      }
+
+      await client.query('COMMIT');
+      const parentAccessToken = createParentAccessToken({
         userId: user.id,
         email: user.email
-      }),
-      giftLink: {
-        id: updatedLink.id,
-        status: updatedLink.status,
-        redeemedAt: updatedLink.redeemed_at
-      },
-      orderStatusUrl: `${env.WEB_APP_BASE_URL}/orders/${link.order_id}`
-    });
+      });
+      reply.header('Set-Cookie', buildParentAccessTokenSetCookie(parentAccessToken));
+
+      return reply.send({
+        redeemed: true,
+        orderId: link.order_id,
+        userId: user.id,
+        parentEmail: user.email,
+        parentAccessToken,
+        giftLink: {
+          id: updatedLink.id,
+          status: updatedLink.status,
+          redeemedAt: updatedLink.redeemed_at
+        },
+        orderStatusUrl: `${env.WEB_APP_BASE_URL}/orders/${link.order_id}`
+      });
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
   });
 
   app.get('/orders/:orderId/status', async (request, reply) => {
@@ -2109,17 +2401,7 @@ async function buildServer(): Promise<FastifyInstance> {
     );
 
     const parentRetryPolicy = await buildParentRetryPolicy(order);
-    const latestGiftLinkRows = await query<GiftLinkRow>(
-      `
-      SELECT *
-      FROM gift_redemption_links
-      WHERE order_id = $1
-      ORDER BY created_at DESC
-      LIMIT 1
-      `,
-      [params.orderId]
-    );
-    const latestGiftLink = latestGiftLinkRows[0] ?? null;
+    const latestGiftLink = await getLatestGiftLink(params.orderId);
 
     return reply.send({
       order,
@@ -2130,15 +2412,8 @@ async function buildServer(): Promise<FastifyInstance> {
       parentRetryPolicy,
       latestGiftLink: latestGiftLink
         ? {
-            id: latestGiftLink.id,
-            recipientEmail: latestGiftLink.recipient_email,
-            senderName: latestGiftLink.sender_name,
-            giftMessage: latestGiftLink.gift_message,
-            tokenHint: latestGiftLink.token_hint,
-            status: latestGiftLink.status,
-            expiresAt: latestGiftLink.expires_at,
-            redeemedAt: latestGiftLink.redeemed_at,
-            createdAt: latestGiftLink.created_at
+            ...buildGiftLinkResponse(latestGiftLink),
+            redeemedAt: latestGiftLink.redeemed_at
           }
         : null,
       scenePlanThemeName,
@@ -2153,6 +2428,11 @@ async function buildServer(): Promise<FastifyInstance> {
     const order = await getOrder(params.orderId);
     if (!order) {
       return reply.status(404).send({ message: 'Order not found' });
+    }
+
+    const hasOrderAccess = hasAdminAccess(request) || (await assertParentOwnsOrder(request, order));
+    if (!hasOrderAccess) {
+      return reply.status(401).send({ message: 'Unauthorized delete request.' });
     }
 
     const uploadRows = await query<AssetKeyRow>('SELECT s3_key FROM uploads WHERE order_id = $1', [params.orderId]);

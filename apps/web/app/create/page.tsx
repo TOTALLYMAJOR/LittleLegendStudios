@@ -53,13 +53,10 @@ function createIdempotencyKey(prefix: string): string {
   return `${prefix}:${Date.now()}:${crypto.randomUUID()}`;
 }
 
-function setParentAccessTokenCookie(token: string): void {
-  document.cookie = `parent_access_token=${encodeURIComponent(token)}; Path=/; Max-Age=2592000; SameSite=Lax`;
-}
-
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${apiBase}${path}`, {
     ...init,
+    credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
       ...(init?.headers ?? {})
@@ -149,7 +146,6 @@ export default function CreateOrderPage(): JSX.Element {
       });
 
       setUserId(user.id);
-      setParentAccessTokenCookie(user.parentAccessToken);
       setStatusMessage(`User ready: ${user.id}`);
     } catch (error) {
       setStatusMessage((error as Error).message);

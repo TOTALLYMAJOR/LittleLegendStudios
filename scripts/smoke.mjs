@@ -100,6 +100,14 @@ function createSmokeClient(baseUrl) {
   };
 }
 
+function authHeaders(parentAccessToken) {
+  return parentAccessToken
+    ? {
+        Authorization: `Bearer ${parentAccessToken}`
+      }
+    : {};
+}
+
 function alignAssetUrlWithApiBase(url, apiBase) {
   const signed = new URL(url);
   const api = new URL(apiBase);
@@ -138,13 +146,15 @@ async function uploadSignedAsset({ signedUploadUrl, contentType, bytes }) {
   }
 }
 
-async function waitForOrderTerminalStatus(client, orderId, timeoutMs) {
+async function waitForOrderTerminalStatus(client, orderId, parentAccessToken, timeoutMs) {
   const started = Date.now();
   const terminalStatuses = new Set(['delivered', 'failed_hard', 'manual_review', 'refunded', 'expired']);
   let lastStatus = 'unknown';
 
   while (Date.now() - started <= timeoutMs) {
-    const statusPayload = await client.request(`/orders/${orderId}/status`);
+    const statusPayload = await client.request(`/orders/${orderId}/status`, {
+      headers: authHeaders(parentAccessToken)
+    });
     lastStatus = statusPayload.order.status;
     process.stdout.write(`[smoke] order ${orderId} status: ${lastStatus}\n`);
 
@@ -187,6 +197,10 @@ async function main() {
       method: 'POST',
       jsonBody: { email: parentEmail }
     });
+    const parentAccessToken = String(user.parentAccessToken ?? '');
+    if (!parentAccessToken) {
+      throw new Error('/users/upsert did not return parentAccessToken.');
+    }
     process.stdout.write(`[smoke] user ready: ${user.id}\n`);
 
     const themes = await client.request('/themes');
@@ -288,7 +302,7 @@ async function main() {
       );
     }
 
-    const terminalPayload = await waitForOrderTerminalStatus(client, orderId, 240000);
+    const terminalPayload = await waitForOrderTerminalStatus(client, orderId, parentAccessToken, 240000);
     process.stdout.write(`[smoke] terminal status after initial run: ${terminalPayload.order.status}\n`);
 
     const forcedPaymentIntent = `pi_dev_smoke_${smokeSeed}`;
@@ -306,6 +320,7 @@ async function main() {
 
     const retryResult = await client.request(`/orders/${orderId}/retry`, {
       method: 'POST',
+      headers: authHeaders(parentAccessToken),
       jsonBody: {
         reason: 'smoke test parent retry'
       }
@@ -314,6 +329,7 @@ async function main() {
 
     const giftLink = await client.request(`/orders/${orderId}/gift-link`, {
       method: 'POST',
+      headers: authHeaders(parentAccessToken),
       jsonBody: {
         recipientEmail: giftEmail,
         senderName: 'Smoke Test',

@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { cookies } from 'next/headers';
 
 import { OrderActions } from './OrderActions';
 
@@ -199,27 +200,50 @@ function getStatusChipClass(status: OrderStatus): string {
   return 'status-chip';
 }
 
-async function loadOrder(orderId: string): Promise<OrderStatusResponse | null> {
-  const response = await fetch(`${apiBase}/orders/${orderId}/status`, {
-    cache: 'no-store'
+async function loadOrder(args: {
+  orderId: string;
+  parentAccessToken: string | null;
+}): Promise<{ data: OrderStatusResponse | null; unauthorized: boolean }> {
+  const response = await fetch(`${apiBase}/orders/${args.orderId}/status`, {
+    cache: 'no-store',
+    headers: args.parentAccessToken
+      ? {
+          Authorization: `Bearer ${args.parentAccessToken}`
+        }
+      : undefined
   });
 
-  if (!response.ok) {
-    return null;
+  if (response.status === 401) {
+    return { data: null, unauthorized: true };
   }
 
-  return response.json();
+  if (!response.ok) {
+    return { data: null, unauthorized: false };
+  }
+
+  return {
+    data: (await response.json()) as OrderStatusResponse,
+    unauthorized: false
+  };
 }
 
 export default async function OrderStatusPage({ params }: StatusPageProps): Promise<JSX.Element> {
-  const data = await loadOrder(params.id);
+  const parentAccessToken = cookies().get('parent_access_token')?.value ?? null;
+  const { data, unauthorized } = await loadOrder({
+    orderId: params.id,
+    parentAccessToken
+  });
 
   if (!data) {
     return (
       <main>
         <section className="card">
-          <h1>Order not found</h1>
-          <p>The order id may be invalid or not yet created.</p>
+          <h1>{unauthorized ? 'Parent auth required' : 'Order not found'}</h1>
+          <p>
+            {unauthorized
+              ? 'Open this order from the create or gift-redeem flow to establish your parent session.'
+              : 'The order id may be invalid or not yet created.'}
+          </p>
           <Link href="/create">Back to create flow</Link>
         </section>
       </main>
@@ -306,6 +330,7 @@ export default async function OrderStatusPage({ params }: StatusPageProps): Prom
         orderId={data.order.id}
         parentRetryPolicy={data.parentRetryPolicy}
         latestGiftLink={data.latestGiftLink}
+        parentAccessToken={parentAccessToken}
       />
 
       <section className="card">

@@ -116,6 +116,10 @@ Notes:
 - Order status now includes computed per-shot scene plans with model profile tags (camera/lighting/assets/anchors) for render introspection
 - Admin order retry endpoint: `POST /admin/orders/:orderId/retry` (token-gated via `ADMIN_API_TOKEN`)
 - Parent-facing retry endpoint with limits: `POST /orders/:orderId/retry` (limit from `PARENT_MAX_RETRY_REQUESTS`)
+- Parent token auth + ownership checks now gate:
+  - `GET /orders/:orderId/status`
+  - `POST /orders/:orderId/retry`
+  - `POST /orders/:orderId/gift-link`
 - Gift redemption link flow:
   - create link: `POST /orders/:orderId/gift-link`
   - inspect link: `GET /gift/redeem/:token`
@@ -131,6 +135,9 @@ Notes:
   - `EMAIL_PROVIDER_MODE=stub` (default, logs to stdout)
   - `EMAIL_PROVIDER_MODE=resend` + `RESEND_API_KEY` (real delivery)
   - `EMAIL_FROM` controls sender identity.
+- Parent auth token controls:
+  - `PARENT_AUTH_SECRET` (HMAC secret for signed parent access tokens)
+  - `PARENT_AUTH_TTL_SEC` (token lifetime)
 - To run model + scene generation through local API provider routes, set worker envs:
   - `VOICE_PROVIDER_MODE=http`
   - `VOICE_PROVIDER_BASE_URL=http://localhost:4000`

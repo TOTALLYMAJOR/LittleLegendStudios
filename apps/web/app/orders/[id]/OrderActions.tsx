@@ -28,6 +28,7 @@ interface OrderActionsProps {
   orderId: string;
   parentRetryPolicy: ParentRetryPolicy;
   latestGiftLink: LatestGiftLink | null;
+  parentAccessToken: string | null;
 }
 
 async function parseResponse(response: Response): Promise<any> {
@@ -46,7 +47,8 @@ async function parseResponse(response: Response): Promise<any> {
 export function OrderActions({
   orderId,
   parentRetryPolicy: initialRetryPolicy,
-  latestGiftLink
+  latestGiftLink,
+  parentAccessToken
 }: OrderActionsProps): JSX.Element {
   const [retryPolicy, setRetryPolicy] = useState<ParentRetryPolicy>(initialRetryPolicy);
   const [retryReason, setRetryReason] = useState('');
@@ -61,7 +63,10 @@ export function OrderActions({
   const [giftActionMessage, setGiftActionMessage] = useState('');
   const [redemptionUrl, setRedemptionUrl] = useState('');
 
-  const retryDisabled = useMemo(() => retryLoading || !retryPolicy.canRetry, [retryLoading, retryPolicy.canRetry]);
+  const retryDisabled = useMemo(
+    () => retryLoading || !retryPolicy.canRetry || !parentAccessToken,
+    [parentAccessToken, retryLoading, retryPolicy.canRetry]
+  );
 
   async function retryRender(): Promise<void> {
     setRetryLoading(true);
@@ -71,7 +76,12 @@ export function OrderActions({
       const response = await fetch(`${apiBase}/orders/${orderId}/retry`, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          ...(parentAccessToken
+            ? {
+                Authorization: `Bearer ${parentAccessToken}`
+              }
+            : {})
         },
         body: JSON.stringify({
           reason: retryReason.trim().length > 0 ? retryReason.trim() : undefined
@@ -117,7 +127,12 @@ export function OrderActions({
       const response = await fetch(`${apiBase}/orders/${orderId}/gift-link`, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          ...(parentAccessToken
+            ? {
+                Authorization: `Bearer ${parentAccessToken}`
+              }
+            : {})
         },
         body: JSON.stringify({
           recipientEmail: recipientEmail.trim(),
@@ -149,6 +164,7 @@ export function OrderActions({
     <section className="grid two">
       <article className="card">
         <h2>Parent Retry</h2>
+        {!parentAccessToken ? <p>Parent session missing. Return to create/redeem flow and reopen this order.</p> : null}
         <p>
           Retries used: <strong>{retryPolicy.used}</strong> / {retryPolicy.limit} (remaining {retryPolicy.remaining})
         </p>
@@ -168,6 +184,7 @@ export function OrderActions({
 
       <article className="card">
         <h2>Gift Mode</h2>
+        {!parentAccessToken ? <p>Parent session missing. Return to create/redeem flow and reopen this order.</p> : null}
         {latestGiftLink ? (
           <p>
             Latest gift link status: <strong>{latestGiftLink.status}</strong> (token suffix {latestGiftLink.tokenHint})
@@ -200,7 +217,7 @@ export function OrderActions({
           <option value="no">No, I will share it manually</option>
         </select>
 
-        <button disabled={giftLoading} onClick={createGiftLink}>
+        <button disabled={giftLoading || !parentAccessToken} onClick={createGiftLink}>
           Create Gift Redemption Link
         </button>
 

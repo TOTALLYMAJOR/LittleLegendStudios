@@ -339,6 +339,7 @@ interface ComposeShotPlanEntry {
   shotType: 'narration' | 'dialogue';
   audioDurationSec: number;
   audioAsset: ComposeAudioAsset | null;
+  musicBedAsset: ComposeAudioAsset | null;
 }
 
 interface ComposeAudioAsset {
@@ -378,6 +379,54 @@ function estimateVoiceTrackDurationSec(text: string, preferredDurationSec?: numb
   }
 
   return Math.max(1, Math.round(text.trim().length / 12));
+}
+
+function assetDirectory(assetKey: string | null | undefined): string | null {
+  if (!assetKey) {
+    return null;
+  }
+
+  const separatorIndex = assetKey.lastIndexOf('/');
+  if (separatorIndex < 0) {
+    return null;
+  }
+
+  return assetKey.slice(0, separatorIndex);
+}
+
+function readMusicBedAssetKey(meta: Record<string, unknown>): string | null {
+  const candidates = [
+    getByPath(meta, ['audio', 'musicBed']),
+    getByPath(meta, ['sceneRenderSpec', 'audio', 'musicBed']),
+    getByPath(meta, ['soundBed']),
+    getByPath(meta, ['sceneRenderSpec', 'soundBed'])
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate !== 'string') {
+      continue;
+    }
+
+    const trimmed = candidate.trim();
+    if (!trimmed) {
+      continue;
+    }
+
+    if (trimmed.includes('/')) {
+      return trimmed;
+    }
+
+    const baseAssetDir =
+      assetDirectory(String(getByPath(meta, ['assets', 'bgLoop']) ?? '')) ??
+      assetDirectory(String(getByPath(meta, ['sceneRenderSpec', 'assets', 'bgLoop']) ?? ''));
+    if (baseAssetDir) {
+      return `${baseAssetDir}/${trimmed}`;
+    }
+
+    return trimmed;
+  }
+
+  return null;
 }
 
 function buildShotAudioArtifactKey(args: {
@@ -1070,7 +1119,16 @@ function buildComposeShotPlan(args: {
       subtitleText,
       shotType,
       audioDurationSec: shotAudioDurationSec(scriptShot),
-      audioAsset: args.shotAudioByKey.get(`${shotType}:${String(shotNumber)}`) ?? null
+      audioAsset: args.shotAudioByKey.get(`${shotType}:${String(shotNumber)}`) ?? null,
+      musicBedAsset: (() => {
+        const musicBedAssetKey = readMusicBedAssetKey(artifactMeta);
+        return musicBedAssetKey
+          ? {
+              assetKey: musicBedAssetKey,
+              sourceUrl: buildAssetDownloadUrl(musicBedAssetKey)
+            }
+          : null;
+      })()
     };
   });
 }
@@ -1127,6 +1185,48 @@ function buildAudioClips(args: {
   return clips;
 }
 
+function buildMusicClips(args: {
+  shotPlan: ComposeShotPlanEntry[];
+  narrationAsset: ComposeAudioAsset | null;
+  dialogueAsset: ComposeAudioAsset | null;
+  musicDuckingEnabled: boolean;
+}): Record<string, unknown>[] {
+  const clips: Record<string, unknown>[] = [];
+  let timelineCursor = 0;
+  const trimByAssetKey = new Map<string, number>();
+
+  for (const shot of args.shotPlan) {
+    if (!shot.musicBedAsset) {
+      timelineCursor += shot.durationSec;
+      continue;
+    }
+
+    const fallbackVoiceAsset = shot.shotType === 'dialogue' ? args.dialogueAsset : args.narrationAsset;
+    const hasForegroundVoice = Boolean(shot.audioAsset ?? fallbackVoiceAsset);
+    const volume = args.musicDuckingEnabled && hasForegroundVoice ? 0.18 : 0.38;
+    const trimSec = trimByAssetKey.get(shot.musicBedAsset.assetKey) ?? 0;
+
+    clips.push({
+      asset: {
+        type: 'audio',
+        src: shot.musicBedAsset.sourceUrl,
+        trim: trimSec,
+        volume,
+        fadeIn: 0.35,
+        fadeOut: 0.45
+      },
+      start: timelineCursor,
+      length: shot.durationSec
+    });
+
+    trimByAssetKey.set(shot.musicBedAsset.assetKey, trimSec + shot.durationSec);
+
+    timelineCursor += shot.durationSec;
+  }
+
+  return clips;
+}
+
 async function queueShotstackRender(args: {
   orderId: string;
   themeName: string;
@@ -1150,6 +1250,12 @@ async function queueShotstackRender(args: {
     shotPlan: args.shotPlan,
     narrationAsset: args.narrationAudioAsset,
     dialogueAsset: args.dialogueAudioAsset
+  });
+  const musicClips = buildMusicClips({
+    shotPlan: args.shotPlan,
+    narrationAsset: args.narrationAudioAsset,
+    dialogueAsset: args.dialogueAudioAsset,
+    musicDuckingEnabled: args.finalMix?.musicDucking !== false
   });
   const titleClips: Record<string, unknown>[] = [
     {
@@ -1214,6 +1320,13 @@ async function queueShotstackRender(args: {
             ? [
                 {
                   clips: subtitleClips
+                }
+              ]
+            : []),
+          ...(musicClips.length > 0
+            ? [
+                {
+                  clips: musicClips
                 }
               ]
             : []),
@@ -2362,7 +2475,8 @@ export function registerProviderRoutes(app: FastifyInstance): void {
               durationSec: shot.durationSec,
               sceneName: shot.sceneName,
               audioDurationSec: shot.audioDurationSec,
-              audioAssetKey: shot.audioAsset?.assetKey ?? null
+              audioAssetKey: shot.audioAsset?.assetKey ?? null,
+              musicBedAssetKey: shot.musicBedAsset?.assetKey ?? null
             }))
           },
           output: {
@@ -2389,8 +2503,10 @@ export function registerProviderRoutes(app: FastifyInstance): void {
             audioTracksUsed: {
               narration: audioArtifacts.narration?.assetKey ?? null,
               dialogue: audioArtifacts.dialogue?.assetKey ?? null,
-              shotAudioCount: shotAudioByKey.size
+              shotAudioCount: shotAudioByKey.size,
+              musicBedCount: shotPlan.filter((shot) => shot.musicBedAsset).length
             },
+            musicDuckingEnabled: latestScript?.finalMix?.musicDucking !== false,
             shotPlan: shotPlan.map((shot) => ({
               shotNumber: shot.shotNumber,
               shotType: shot.shotType,
@@ -2398,7 +2514,8 @@ export function registerProviderRoutes(app: FastifyInstance): void {
               sceneName: shot.sceneName,
               subtitleText: shot.subtitleText,
               audioDurationSec: shot.audioDurationSec,
-              audioAssetKey: shot.audioAsset?.assetKey ?? null
+              audioAssetKey: shot.audioAsset?.assetKey ?? null,
+              musicBedAssetKey: shot.musicBedAsset?.assetKey ?? null
             })),
             integrationMode: env.PROVIDER_INTEGRATION_MODE
           },

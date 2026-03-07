@@ -1,3 +1,4 @@
+import { writeAssetBytes } from './asset-store.js';
 import { query } from './db.js';
 
 interface SeedTheme {
@@ -24,6 +25,77 @@ interface SeedTheme {
 
 function sceneSlug(name: string): string {
   return name.toLowerCase().replaceAll(/[^a-z0-9]+/g, '_').replaceAll(/^_|_$/g, '');
+}
+
+function buildStubMp3Bytes(label: string): Buffer {
+  return Buffer.from(`ID3LittleLegend:${label}`, 'utf8');
+}
+
+function assetDirectory(assetKey: string): string {
+  const separatorIndex = assetKey.lastIndexOf('/');
+  return separatorIndex >= 0 ? assetKey.slice(0, separatorIndex) : '';
+}
+
+function resolveSceneAudioAssetKey(scene: Record<string, unknown>, fileName: string): string | null {
+  const assets = scene.assets;
+  if (!assets || typeof assets !== 'object') {
+    return null;
+  }
+
+  const bgLoop = (assets as Record<string, unknown>).bgLoop;
+  if (typeof bgLoop !== 'string' || !bgLoop.trim()) {
+    return null;
+  }
+
+  const baseDir = assetDirectory(bgLoop);
+  if (!baseDir) {
+    return null;
+  }
+
+  return `${baseDir}/${fileName}`;
+}
+
+async function materializeThemeAudioAssets(scenes: Record<string, unknown>[]): Promise<void> {
+  const writes = new Map<string, Buffer>();
+
+  for (const scene of scenes) {
+    const sceneId = typeof scene.id === 'string' ? scene.id : 'scene';
+    const soundBed = typeof scene.soundBed === 'string' ? scene.soundBed.trim() : '';
+    if (soundBed) {
+      const assetKey = resolveSceneAudioAssetKey(scene, soundBed);
+      if (assetKey && !writes.has(assetKey)) {
+        writes.set(assetKey, buildStubMp3Bytes(JSON.stringify({ kind: 'soundBed', sceneId, assetKey })));
+      }
+    }
+
+    const audio = scene.audio;
+    if (!audio || typeof audio !== 'object') {
+      continue;
+    }
+
+    const audioRecord = audio as Record<string, unknown>;
+    const musicBed = typeof audioRecord.musicBed === 'string' ? audioRecord.musicBed.trim() : '';
+    if (musicBed) {
+      const assetKey = resolveSceneAudioAssetKey(scene, musicBed);
+      if (assetKey && !writes.has(assetKey)) {
+        writes.set(assetKey, buildStubMp3Bytes(JSON.stringify({ kind: 'musicBed', sceneId, assetKey })));
+      }
+    }
+
+    const sfx = Array.isArray(audioRecord.sfx) ? (audioRecord.sfx as unknown[]) : [];
+    for (const sfxEntry of sfx) {
+      if (typeof sfxEntry !== 'string' || !sfxEntry.trim()) {
+        continue;
+      }
+
+      const assetKey = resolveSceneAudioAssetKey(scene, `${sfxEntry.trim()}.mp3`);
+      if (assetKey && !writes.has(assetKey)) {
+        writes.set(assetKey, buildStubMp3Bytes(JSON.stringify({ kind: 'sfx', sceneId, assetKey, cue: sfxEntry.trim() })));
+      }
+    }
+  }
+
+  await Promise.all(Array.from(writes.entries()).map(([assetKey, bytes]) => writeAssetBytes(assetKey, bytes)));
 }
 
 function buildSceneManifest(themeSlug: string, sceneNames: string[]): Record<string, unknown>[] {
@@ -353,6 +425,9 @@ export async function seedThemes(): Promise<void> {
   await query('UPDATE themes SET is_active = false WHERE NOT (slug = ANY($1::text[]))', [activeSlugs]);
 
   for (const theme of defaultThemes) {
+    const scenes = buildSceneManifest(theme.slug, theme.sceneNames);
+    await materializeThemeAudioAssets(scenes);
+
     await query(
       `
       INSERT INTO themes (
@@ -382,7 +457,7 @@ export async function seedThemes(): Promise<void> {
         40,
         JSON.stringify({
           ...theme.manifest,
-          scenes: buildSceneManifest(theme.slug, theme.sceneNames)
+          scenes
         })
       ]
     );

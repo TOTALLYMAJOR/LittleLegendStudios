@@ -7,7 +7,7 @@
 - [x] Unauthorized/session-expired recovery path (parent experience)
 - [x] Admin page for `email_notifications` failures
 - [x] Retry history view from `order_retry_requests`
-- [ ] Provider task failure triage view
+- [x] Provider task failure triage view
 
 ## Done
 
@@ -31,6 +31,10 @@
   - API exposes a token-gated retry request feed with actor/outcome filters
   - web admin page shows accepted and rejected retry requests with order context
   - home page now links into the retry history view
+- [x] Provider task failure triage view:
+  - API exposes provider task list/detail/retry routes for failed-task operations
+  - web admin page filters failed tasks by provider and order, shows provider output payloads, and supports refresh/retry actions
+  - home page now links into the provider task triage view
 - [x] Parent auth + order ownership enforcement:
   - protect `POST /orders/:orderId/retry`
   - protect `POST /orders/:orderId/gift-link`
@@ -53,7 +57,7 @@
   - revoke/regenerate gift link UX
   - clearer unauthorized/session-expired recovery path
 
-- [ ] Support/admin visibility:
+- [x] Support/admin visibility:
   - done: admin page for `email_notifications` failures
   - done: retry history view from `order_retry_requests`
-  - provider task failure triage view
+  - done: provider task failure triage view

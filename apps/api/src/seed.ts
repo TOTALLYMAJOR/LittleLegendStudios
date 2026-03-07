@@ -12,6 +12,12 @@ interface SeedTheme {
     sceneArchitecture: string;
     durationMinSec: number;
     durationMaxSec: number;
+    palette?: string[];
+    globalFx?: string[];
+    defaultShotCount?: number;
+    targetAspectRatio?: string;
+    targetDurationSec?: number;
+    shotTemplates?: Record<string, unknown>[];
     scenes: Record<string, unknown>[];
   };
 }
@@ -44,7 +50,21 @@ function buildSceneManifest(themeSlug: string, sceneNames: string[]): Record<str
       assets: {
         bgLoop: `themes/${themeSlug}/${id}/bg_loop.mp4`,
         particlesOverlay: `themes/${themeSlug}/${id}/particles.mp4`,
-        lut: `themes/${themeSlug}/${id}/lut.cube`
+        lut: `themes/${themeSlug}/${id}/lut.cube`,
+        atmosphereOverlay: `themes/${themeSlug}/${id}/atmosphere.mp4`,
+        foregroundOverlay: `themes/${themeSlug}/${id}/foreground.mp4`
+      },
+      palette: ['story_gold', 'midnight_blue', 'glow_cyan'],
+      globalFx: ['ambient_particles', 'soft_bloom'],
+      audio: {
+        musicBed: `${id}_music.mp3`,
+        sfx: ['whoosh_transition', 'ambient_wind']
+      },
+      cameraMove: index % 2 === 0 ? 'slow_push_in' : 'hero_pan',
+      parallaxStrength: index === 0 ? 0.65 : 0.8,
+      grade: {
+        lut: `themes/${themeSlug}/${id}/lut.cube`,
+        intensity: 0.85
       }
     };
   });
@@ -74,6 +94,35 @@ const defaultThemes = [
       sceneArchitecture: '2.5d-parallax',
       durationMinSec: 20,
       durationMaxSec: 40,
+      palette: ['nebula_purple', 'crystal_blue', 'sun_gold'],
+      globalFx: ['dust_particles', 'soft_bloom'],
+      defaultShotCount: 4,
+      targetAspectRatio: '16:9',
+      targetDurationSec: 30,
+      shotTemplates: [
+        { id: 'intro', shotType: 'narration', label: 'Intro', targetDurationSec: 7, characterPresence: 'offscreen' },
+        {
+          id: 'hero_moment',
+          shotType: 'dialogue',
+          label: 'Hero Moment',
+          targetDurationSec: 6,
+          characterPresence: 'hero',
+          emotion: 'confident',
+          gesture: 'point_forward',
+          onScreenSpeaking: true
+        },
+        { id: 'adventure', shotType: 'narration', label: 'Adventure', targetDurationSec: 9, characterPresence: 'offscreen' },
+        {
+          id: 'ending',
+          shotType: 'dialogue',
+          label: 'Ending',
+          targetDurationSec: 8,
+          characterPresence: 'hero',
+          emotion: 'joyful',
+          gesture: 'celebrate',
+          onScreenSpeaking: true
+        }
+      ],
       scenes: []
     }
   },
@@ -100,6 +149,35 @@ const defaultThemes = [
       sceneArchitecture: '2.5d-parallax',
       durationMinSec: 20,
       durationMaxSec: 40,
+      palette: ['jungle_green', 'amber_sunlight', 'volcanic_orange'],
+      globalFx: ['drifting_mist', 'pollen_particles'],
+      defaultShotCount: 4,
+      targetAspectRatio: '16:9',
+      targetDurationSec: 30,
+      shotTemplates: [
+        { id: 'intro', shotType: 'narration', label: 'Intro', targetDurationSec: 7, characterPresence: 'offscreen' },
+        {
+          id: 'hero_moment',
+          shotType: 'dialogue',
+          label: 'Hero Moment',
+          targetDurationSec: 6,
+          characterPresence: 'hero',
+          emotion: 'confident',
+          gesture: 'point_forward',
+          onScreenSpeaking: true
+        },
+        { id: 'adventure', shotType: 'narration', label: 'Adventure', targetDurationSec: 9, characterPresence: 'offscreen' },
+        {
+          id: 'ending',
+          shotType: 'dialogue',
+          label: 'Ending',
+          targetDurationSec: 8,
+          characterPresence: 'hero',
+          emotion: 'joyful',
+          gesture: 'celebrate',
+          onScreenSpeaking: true
+        }
+      ],
       scenes: []
     }
   },
@@ -126,6 +204,35 @@ const defaultThemes = [
       sceneArchitecture: '2.5d-parallax',
       durationMinSec: 20,
       durationMaxSec: 40,
+      palette: ['hero_red', 'electric_blue', 'chrome_silver'],
+      globalFx: ['energy_trails', 'light_flares'],
+      defaultShotCount: 4,
+      targetAspectRatio: '16:9',
+      targetDurationSec: 30,
+      shotTemplates: [
+        { id: 'intro', shotType: 'narration', label: 'Intro', targetDurationSec: 7, characterPresence: 'offscreen' },
+        {
+          id: 'hero_moment',
+          shotType: 'dialogue',
+          label: 'Hero Moment',
+          targetDurationSec: 6,
+          characterPresence: 'hero',
+          emotion: 'confident',
+          gesture: 'point_forward',
+          onScreenSpeaking: true
+        },
+        { id: 'adventure', shotType: 'narration', label: 'Adventure', targetDurationSec: 9, characterPresence: 'offscreen' },
+        {
+          id: 'ending',
+          shotType: 'dialogue',
+          label: 'Ending',
+          targetDurationSec: 8,
+          characterPresence: 'hero',
+          emotion: 'joyful',
+          gesture: 'celebrate',
+          onScreenSpeaking: true
+        }
+      ],
       scenes: []
     }
   },
@@ -152,6 +259,35 @@ const defaultThemes = [
       sceneArchitecture: '2.5d-parallax',
       durationMinSec: 20,
       durationMaxSec: 40,
+      palette: ['aqua_blue', 'coral_pink', 'gold_rays'],
+      globalFx: ['bubbles', 'caustic_light'],
+      defaultShotCount: 4,
+      targetAspectRatio: '16:9',
+      targetDurationSec: 30,
+      shotTemplates: [
+        { id: 'intro', shotType: 'narration', label: 'Intro', targetDurationSec: 7, characterPresence: 'offscreen' },
+        {
+          id: 'hero_moment',
+          shotType: 'dialogue',
+          label: 'Hero Moment',
+          targetDurationSec: 6,
+          characterPresence: 'hero',
+          emotion: 'confident',
+          gesture: 'point_forward',
+          onScreenSpeaking: true
+        },
+        { id: 'adventure', shotType: 'narration', label: 'Adventure', targetDurationSec: 9, characterPresence: 'offscreen' },
+        {
+          id: 'ending',
+          shotType: 'dialogue',
+          label: 'Ending',
+          targetDurationSec: 8,
+          characterPresence: 'hero',
+          emotion: 'joyful',
+          gesture: 'celebrate',
+          onScreenSpeaking: true
+        }
+      ],
       scenes: []
     }
   },
@@ -178,6 +314,35 @@ const defaultThemes = [
       sceneArchitecture: '2.5d-parallax',
       durationMinSec: 20,
       durationMaxSec: 40,
+      palette: ['emerald_green', 'warm_gold', 'lavender_sky'],
+      globalFx: ['fireflies', 'volumetric_haze'],
+      defaultShotCount: 4,
+      targetAspectRatio: '16:9',
+      targetDurationSec: 30,
+      shotTemplates: [
+        { id: 'intro', shotType: 'narration', label: 'Intro', targetDurationSec: 7, characterPresence: 'offscreen' },
+        {
+          id: 'hero_moment',
+          shotType: 'dialogue',
+          label: 'Hero Moment',
+          targetDurationSec: 6,
+          characterPresence: 'hero',
+          emotion: 'confident',
+          gesture: 'point_forward',
+          onScreenSpeaking: true
+        },
+        { id: 'adventure', shotType: 'narration', label: 'Adventure', targetDurationSec: 9, characterPresence: 'offscreen' },
+        {
+          id: 'ending',
+          shotType: 'dialogue',
+          label: 'Ending',
+          targetDurationSec: 8,
+          characterPresence: 'hero',
+          emotion: 'joyful',
+          gesture: 'celebrate',
+          onScreenSpeaking: true
+        }
+      ],
       scenes: []
     }
   }

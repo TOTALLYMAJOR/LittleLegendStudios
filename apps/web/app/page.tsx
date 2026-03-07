@@ -20,7 +20,10 @@ export default function HomePage(): JSX.Element {
           <p>
             <Link href={'/admin/email-notifications' as Route}>Review email notification failures</Link>
           </p>
-          <Link href={'/admin/retry-history' as Route}>Review retry request history</Link>
+          <p>
+            <Link href={'/admin/retry-history' as Route}>Review retry request history</Link>
+          </p>
+          <Link href={'/admin/provider-task-triage' as Route}>Triage provider task failures</Link>
         </article>
       </section>
     </main>

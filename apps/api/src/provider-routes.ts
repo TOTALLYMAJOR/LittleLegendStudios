@@ -45,13 +45,39 @@ const shotLineSchema = z.object({
   durationSec: z.number().int().positive(),
   shotType: z.enum(['narration', 'dialogue']),
   sceneId: z.string().min(1),
+  sceneName: z.string().min(1).optional(),
   camera: z.string().min(1),
   lighting: z.string().min(1),
   environmentMotion: z.array(z.string()).default([]),
   soundDesignCues: z.array(z.string()).default([]),
   action: z.string(),
   dialogue: z.string(),
-  narration: z.string()
+  narration: z.string(),
+  onScreenSpeaking: z.boolean().optional(),
+  speakingDurationSec: z.number().int().nonnegative().optional(),
+  characterDirection: z
+    .object({
+      presence: z.enum(['offscreen', 'hero', 'supporting', 'cameo']),
+      emotion: z.string().min(1).optional(),
+      expression: z.string().min(1).optional(),
+      gesture: z.string().min(1).optional()
+    })
+    .optional(),
+  companions: z
+    .array(
+      z.object({
+        type: z.enum(['pet', 'family']),
+        companionId: z.string().min(1),
+        presence: z.enum(['cameo', 'supporting', 'hero'])
+      })
+    )
+    .optional(),
+  overrides: z
+    .object({
+      sfx: z.array(z.string().min(1)).optional(),
+      environmentMotion: z.array(z.string().min(1)).optional()
+    })
+    .optional()
 });
 
 const sceneRenderSpecSchema = z.object({
@@ -66,14 +92,43 @@ const sceneRenderSpecSchema = z.object({
   assets: z.object({
     bgLoop: z.string().min(1),
     particlesOverlay: z.string().min(1),
-    lut: z.string().min(1)
+    lut: z.string().min(1),
+    atmosphereOverlay: z.string().min(1).nullable().optional(),
+    foregroundOverlay: z.string().min(1).nullable().optional(),
+    depthMap: z.string().min(1).nullable().optional()
   }),
   anchors: z.object({
     child: z.object({
       x: z.number(),
       y: z.number(),
       scale: z.number().positive()
-    })
+    }),
+    petOptional: z
+      .object({
+        x: z.number(),
+        y: z.number(),
+        scale: z.number().positive()
+      })
+      .optional(),
+    familyOptional: z
+      .object({
+        x: z.number(),
+        y: z.number(),
+        scale: z.number().positive()
+      })
+      .optional()
+  }),
+  palette: z.array(z.string().min(1)).default([]),
+  globalFx: z.array(z.string().min(1)).default([]),
+  audio: z.object({
+    musicBed: z.string().min(1).nullable().optional(),
+    sfx: z.array(z.string().min(1)).optional()
+  }),
+  cameraMove: z.string().min(1).optional(),
+  parallaxStrength: z.number().nonnegative().optional(),
+  grade: z.object({
+    lut: z.string().min(1),
+    intensity: z.number().nonnegative().optional()
   }),
   modelProfile: z.object({
     avatarModel: z.string().min(1),
@@ -88,6 +143,29 @@ const themeManifestSchema = z.object({
   sceneArchitecture: z.string().min(1),
   durationMinSec: z.number().int().positive(),
   durationMaxSec: z.number().int().positive(),
+  palette: z.array(z.string().min(1)).optional(),
+  globalFx: z.array(z.string().min(1)).optional(),
+  defaultShotCount: z.number().int().positive().optional(),
+  targetAspectRatio: z.string().min(1).optional(),
+  targetDurationSec: z.number().int().positive().optional(),
+  shotTemplates: z
+    .array(
+      z.object({
+        id: z.string().min(1),
+        shotType: z.enum(['narration', 'dialogue']),
+        label: z.string().min(1).optional(),
+        targetDurationSec: z.number().int().positive(),
+        durationRangeSec: z.tuple([z.number().int().positive(), z.number().int().positive()]).optional(),
+        preferredSceneId: z.string().min(1).optional(),
+        camera: z.string().min(1).optional(),
+        lighting: z.string().min(1).optional(),
+        characterPresence: z.enum(['offscreen', 'hero', 'supporting', 'cameo']).optional(),
+        emotion: z.string().min(1).optional(),
+        gesture: z.string().min(1).optional(),
+        onScreenSpeaking: z.boolean().optional()
+      })
+    )
+    .optional(),
   scenes: z
     .array(
       z.object({
@@ -102,13 +180,46 @@ const themeManifestSchema = z.object({
             x: z.number(),
             y: z.number(),
             scale: z.number().positive()
-          })
+          }),
+          petOptional: z
+            .object({
+              x: z.number(),
+              y: z.number(),
+              scale: z.number().positive()
+            })
+            .optional(),
+          familyOptional: z
+            .object({
+              x: z.number(),
+              y: z.number(),
+              scale: z.number().positive()
+            })
+            .optional()
         }),
         assets: z.object({
           bgLoop: z.string().min(1),
           particlesOverlay: z.string().min(1),
-          lut: z.string().min(1)
-        })
+          lut: z.string().min(1),
+          atmosphereOverlay: z.string().min(1).nullable().optional(),
+          foregroundOverlay: z.string().min(1).nullable().optional(),
+          depthMap: z.string().min(1).nullable().optional()
+        }),
+        palette: z.array(z.string().min(1)).optional(),
+        globalFx: z.array(z.string().min(1)).optional(),
+        audio: z
+          .object({
+            musicBed: z.string().min(1).nullable().optional(),
+            sfx: z.array(z.string().min(1)).optional()
+          })
+          .optional(),
+        cameraMove: z.string().min(1).optional(),
+        parallaxStrength: z.number().nonnegative().optional(),
+        grade: z
+          .object({
+            lut: z.string().min(1),
+            intensity: z.number().nonnegative().optional()
+          })
+          .optional()
       })
     )
     .min(1)
@@ -126,7 +237,17 @@ const voiceRenderRequestSchema = z.object({
   voiceCloneId: z.string().min(1),
   scriptTitle: z.string().min(1),
   narrationLines: z.array(z.string()),
-  dialogueLines: z.array(z.string())
+  dialogueLines: z.array(z.string()),
+  shots: z.array(
+    z.object({
+      shotNumber: z.number().int().positive(),
+      shotType: z.enum(['narration', 'dialogue']),
+      durationSec: z.number().int().positive(),
+      narration: z.string(),
+      dialogue: z.string(),
+      speakingDurationSec: z.number().int().nonnegative().optional()
+    })
+  )
 });
 
 const characterPackRequestSchema = z.object({
@@ -193,6 +314,46 @@ interface ProviderTaskRow {
   updated_at: string;
 }
 
+interface LatestScriptRow {
+  script_json: ScriptPayload;
+}
+
+interface ArtifactMetaRow {
+  s3_key: string;
+  meta_json: Record<string, unknown>;
+}
+
+interface LatestAudioArtifactRow {
+  kind: 'audio_narration' | 'audio_dialogue';
+  s3_key: string;
+  meta_json: Record<string, unknown>;
+}
+
+interface ComposeShotPlanEntry {
+  assetKey: string;
+  sourceUrl: string;
+  durationSec: number;
+  shotNumber: number;
+  sceneName: string;
+  subtitleText: string;
+  shotType: 'narration' | 'dialogue';
+  audioDurationSec: number;
+  audioAsset: ComposeAudioAsset | null;
+}
+
+interface ComposeAudioAsset {
+  assetKey: string;
+  sourceUrl: string;
+  estimatedDurationSec?: number;
+}
+
+interface VoiceRenderShotTrack {
+  shotNumber: number;
+  shotType: 'narration' | 'dialogue';
+  artifactKey: string;
+  meta: Record<string, unknown>;
+}
+
 class ProviderRequestError extends Error {
   constructor(
     readonly statusCode: number,
@@ -209,6 +370,29 @@ function hashHex(seed: string, length = 12): string {
 function pickDeterministic<T>(seed: string, options: readonly T[]): T {
   const numeric = Number.parseInt(hashHex(seed, 8), 16);
   return options[numeric % options.length];
+}
+
+function estimateVoiceTrackDurationSec(text: string, preferredDurationSec?: number): number {
+  if (preferredDurationSec && Number.isFinite(preferredDurationSec)) {
+    return Math.max(1, Math.round(preferredDurationSec));
+  }
+
+  return Math.max(1, Math.round(text.trim().length / 12));
+}
+
+function buildShotAudioArtifactKey(args: {
+  userId: string;
+  orderId: string;
+  voiceCloneId: string;
+  shotNumber: number;
+  shotType: 'narration' | 'dialogue';
+  text: string;
+}): string {
+  const suffix = hashHex(
+    `${args.orderId}:${args.voiceCloneId}:${args.shotType}:${String(args.shotNumber)}:${args.text}`,
+    8
+  );
+  return `${args.userId}/${args.orderId}/audio/shot-${String(args.shotNumber).padStart(2, '0')}-${args.shotType}-${suffix}.mp3`;
 }
 
 function parseAuthHeaderToken(value: string | string[] | undefined): string | null {
@@ -518,6 +702,121 @@ async function fetchSourceAssetBytes(upload: ProviderUpload): Promise<{ contentT
   };
 }
 
+async function loadLatestScript(orderId: string): Promise<ScriptPayload | null> {
+  const rows = await query<LatestScriptRow>(
+    `
+    SELECT script_json
+    FROM scripts
+    WHERE order_id = $1
+    ORDER BY approved_at DESC NULLS LAST, version DESC
+    LIMIT 1
+    `,
+    [orderId]
+  );
+
+  return rows[0]?.script_json ?? null;
+}
+
+async function loadArtifactMetadata(orderId: string, assetKeys: string[]): Promise<Map<string, Record<string, unknown>>> {
+  if (assetKeys.length === 0) {
+    return new Map();
+  }
+
+  const rows = await query<ArtifactMetaRow>(
+    `
+    SELECT s3_key, meta_json
+    FROM artifacts
+    WHERE order_id = $1
+      AND s3_key = ANY($2::text[])
+    `,
+    [orderId, assetKeys]
+  );
+
+  return new Map(rows.map((row) => [row.s3_key, row.meta_json ?? {}]));
+}
+
+async function loadLatestAudioArtifacts(orderId: string): Promise<{
+  narration: ComposeAudioAsset | null;
+  dialogue: ComposeAudioAsset | null;
+}> {
+  const rows = await query<LatestAudioArtifactRow>(
+    `
+    SELECT DISTINCT ON (kind)
+      kind,
+      s3_key,
+      meta_json
+    FROM artifacts
+    WHERE order_id = $1
+      AND kind IN ('audio_narration', 'audio_dialogue')
+      AND COALESCE(meta_json->>'trackScope', 'aggregate') = 'aggregate'
+    ORDER BY kind, created_at DESC
+    `,
+    [orderId]
+  );
+
+  const narrationRow = rows.find((row) => row.kind === 'audio_narration') ?? null;
+  const dialogueRow = rows.find((row) => row.kind === 'audio_dialogue') ?? null;
+
+  return {
+    narration: narrationRow
+      ? {
+          assetKey: narrationRow.s3_key,
+          sourceUrl: buildAssetDownloadUrl(narrationRow.s3_key),
+          estimatedDurationSec:
+            typeof narrationRow.meta_json?.estimatedDurationSec === 'number' ? narrationRow.meta_json.estimatedDurationSec : undefined
+        }
+      : null,
+    dialogue: dialogueRow
+      ? {
+          assetKey: dialogueRow.s3_key,
+          sourceUrl: buildAssetDownloadUrl(dialogueRow.s3_key),
+          estimatedDurationSec:
+            typeof dialogueRow.meta_json?.estimatedDurationSec === 'number' ? dialogueRow.meta_json.estimatedDurationSec : undefined
+        }
+      : null
+  };
+}
+
+async function loadShotAudioArtifacts(orderId: string): Promise<Map<string, ComposeAudioAsset>> {
+  const rows = await query<LatestAudioArtifactRow>(
+    `
+    SELECT DISTINCT ON (kind, meta_json->>'shotNumber')
+      kind,
+      s3_key,
+      meta_json
+    FROM artifacts
+    WHERE order_id = $1
+      AND kind IN ('audio_narration', 'audio_dialogue')
+      AND meta_json->>'trackScope' = 'shot'
+      AND meta_json ? 'shotNumber'
+    ORDER BY kind, meta_json->>'shotNumber', created_at DESC
+    `,
+    [orderId]
+  );
+
+  const byShotKey = new Map<string, ComposeAudioAsset>();
+  for (const row of rows) {
+    const shotNumberValue = row.meta_json?.shotNumber;
+    const shotNumber =
+      typeof shotNumberValue === 'number' && Number.isInteger(shotNumberValue)
+        ? shotNumberValue
+        : Number.parseInt(String(shotNumberValue ?? ''), 10);
+    if (!Number.isInteger(shotNumber) || shotNumber <= 0) {
+      continue;
+    }
+
+    const shotType = row.kind === 'audio_dialogue' ? 'dialogue' : 'narration';
+    byShotKey.set(`${shotType}:${String(shotNumber)}`, {
+      assetKey: row.s3_key,
+      sourceUrl: buildAssetDownloadUrl(row.s3_key),
+      estimatedDurationSec:
+        typeof row.meta_json?.estimatedDurationSec === 'number' ? row.meta_json.estimatedDurationSec : undefined
+    });
+  }
+
+  return byShotKey;
+}
+
 async function createElevenLabsClone(args: {
   orderId: string;
   userId: string;
@@ -580,7 +879,10 @@ async function createElevenLabsClone(args: {
   };
 }
 
-async function renderElevenLabsTrack(args: { voiceId: string; text: string }): Promise<{ byteLength: number; requestId: string | null }> {
+async function renderElevenLabsTrack(args: {
+  voiceId: string;
+  text: string;
+}): Promise<{ byteLength: number; requestId: string | null; audioBuffer: ArrayBuffer }> {
   if (!env.ELEVENLABS_API_KEY) {
     throw new Error('ELEVENLABS_API_KEY is not configured.');
   }
@@ -588,7 +890,8 @@ async function renderElevenLabsTrack(args: { voiceId: string; text: string }): P
   if (args.text.trim().length === 0) {
     return {
       byteLength: 0,
-      requestId: null
+      requestId: null,
+      audioBuffer: new ArrayBuffer(0)
     };
   }
 
@@ -616,7 +919,8 @@ async function renderElevenLabsTrack(args: { voiceId: string; text: string }): P
   const audio = await response.arrayBuffer();
   return {
     byteLength: audio.byteLength,
-    requestId: response.headers.get('request-id') ?? response.headers.get('x-request-id')
+    requestId: response.headers.get('request-id') ?? response.headers.get('x-request-id'),
+    audioBuffer: audio
   };
 }
 
@@ -639,10 +943,25 @@ async function queueHeyGenShot(args: {
     `${args.sceneRenderSpec.sceneArchitecture} composition`,
     `${args.sceneRenderSpec.camera} camera`,
     `${args.sceneRenderSpec.lighting} lighting`,
+    args.sceneRenderSpec.cameraMove ? `${args.sceneRenderSpec.cameraMove} camera move` : null,
+    args.sceneRenderSpec.parallaxStrength !== undefined
+      ? `parallax strength ${String(args.sceneRenderSpec.parallaxStrength)}`
+      : null,
     `environment motion ${args.sceneRenderSpec.environmentMotion.join(', ') || 'ambient particles'}`,
+    args.sceneRenderSpec.palette.length > 0 ? `palette ${args.sceneRenderSpec.palette.join(', ')}` : null,
+    args.sceneRenderSpec.globalFx.length > 0 ? `global fx ${args.sceneRenderSpec.globalFx.join(', ')}` : null,
+    args.sceneRenderSpec.audio.sfx && args.sceneRenderSpec.audio.sfx.length > 0
+      ? `sfx ${args.sceneRenderSpec.audio.sfx.join(', ')}`
+      : null,
     args.shot.shotType === 'dialogue' ? `child speaks: ${args.shot.dialogue}` : `narration beat: ${args.shot.narration}`,
+    args.shot.characterDirection
+      ? `character direction ${JSON.stringify(args.shot.characterDirection)}`
+      : null,
+    args.shot.companions && args.shot.companions.length > 0 ? `companions ${JSON.stringify(args.shot.companions)}` : null,
     `character id ${args.characterProfile.characterId}`
-  ].join('; ');
+  ]
+    .filter((part): part is string => Boolean(part))
+    .join('; ');
 
   const payload = await postJson({
     url: endpoint,
@@ -676,18 +995,205 @@ async function queueHeyGenShot(args: {
   return { providerTaskId };
 }
 
+function inferOutputResolution(deliverables: string[] | undefined, totalDurationSec: number): { shotstack: 'hd' | 'sd'; label: '1080p' | '720p' } {
+  if (deliverables?.includes('1080p_mp4')) {
+    return { shotstack: 'hd', label: '1080p' };
+  }
+
+  if (deliverables?.includes('720p_mp4')) {
+    return { shotstack: 'sd', label: '720p' };
+  }
+
+  return totalDurationSec <= 35 ? { shotstack: 'hd', label: '1080p' } : { shotstack: 'sd', label: '720p' };
+}
+
+function subtitleDuration(durationSec: number): number {
+  return Math.max(2, Math.min(durationSec, 3));
+}
+
+function subtitleStart(baseStartSec: number, durationSec: number): number {
+  return baseStartSec + Math.max(0, durationSec - subtitleDuration(durationSec));
+}
+
+function shotAudioDurationSec(shot: ScriptPayload['shots'][number] | null | undefined): number {
+  if (!shot) {
+    return 0;
+  }
+
+  if (shot.shotType === 'dialogue') {
+    return Math.max(1, shot.speakingDurationSec ?? shot.durationSec);
+  }
+
+  return Math.max(1, shot.durationSec);
+}
+
+function buildComposeShotPlan(args: {
+  payload: z.infer<typeof composeFinalRequestSchema>;
+  script: ScriptPayload | null;
+  artifactMetaByKey: Map<string, Record<string, unknown>>;
+  shotAudioByKey: Map<string, ComposeAudioAsset>;
+}): ComposeShotPlanEntry[] {
+  const sortedShots = [...(args.script?.shots ?? [])].sort((left, right) => left.shotNumber - right.shotNumber);
+  const fallbackDuration = Math.max(1, Math.round(args.payload.totalDurationSec / args.payload.shotArtifactKeys.length));
+
+  return args.payload.shotArtifactKeys.map((assetKey, index) => {
+    const artifactMeta = args.artifactMetaByKey.get(assetKey) ?? {};
+    const scriptShot = sortedShots[index];
+    const shotNumberRaw = artifactMeta.shotNumber;
+    const sceneNameRaw = artifactMeta.sceneName;
+    const shotTypeRaw = artifactMeta.shotType;
+    const durationRaw = artifactMeta.durationSec;
+    const shotNumber =
+      typeof shotNumberRaw === 'number' && Number.isInteger(shotNumberRaw)
+        ? shotNumberRaw
+        : scriptShot?.shotNumber ?? index + 1;
+    const durationSec =
+      scriptShot?.durationSec ??
+      (typeof durationRaw === 'number' && Number.isFinite(durationRaw) ? Math.max(1, Math.round(durationRaw)) : fallbackDuration);
+    const shotType =
+      scriptShot?.shotType ??
+      (shotTypeRaw === 'dialogue' || shotTypeRaw === 'narration' ? shotTypeRaw : index % 2 === 0 ? 'narration' : 'dialogue');
+    const subtitleText =
+      shotType === 'dialogue'
+        ? scriptShot?.dialogue?.trim() || `Shot ${String(shotNumber)} dialogue`
+        : scriptShot?.narration?.trim() || `Shot ${String(shotNumber)} narration`;
+
+    return {
+      assetKey,
+      sourceUrl: buildAssetDownloadUrl(assetKey),
+      durationSec,
+      shotNumber,
+      sceneName:
+        typeof sceneNameRaw === 'string' && sceneNameRaw.trim().length > 0
+          ? sceneNameRaw
+          : scriptShot?.sceneName || `Shot ${String(shotNumber)}`,
+      subtitleText,
+      shotType,
+      audioDurationSec: shotAudioDurationSec(scriptShot),
+      audioAsset: args.shotAudioByKey.get(`${shotType}:${String(shotNumber)}`) ?? null
+    };
+  });
+}
+
+function buildAudioClips(args: {
+  shotPlan: ComposeShotPlanEntry[];
+  narrationAsset: ComposeAudioAsset | null;
+  dialogueAsset: ComposeAudioAsset | null;
+}): Record<string, unknown>[] {
+  const clips: Record<string, unknown>[] = [];
+  let timelineCursor = 0;
+  let narrationTrimSec = 0;
+  let dialogueTrimSec = 0;
+
+  for (const shot of args.shotPlan) {
+    const useDialogue = shot.shotType === 'dialogue';
+    const fallbackAudioAsset = useDialogue ? args.dialogueAsset : args.narrationAsset;
+    const audioAsset = shot.audioAsset ?? fallbackAudioAsset;
+    const clipDurationSec = Math.max(1, shot.audioDurationSec || shot.durationSec);
+
+    if (audioAsset) {
+      const clip: Record<string, unknown> = {
+        asset: {
+          type: 'audio',
+          src: audioAsset.sourceUrl,
+          volume: 1
+        },
+        start: timelineCursor,
+        length: clipDurationSec
+      };
+
+      if (!shot.audioAsset) {
+        const trimSec = useDialogue ? dialogueTrimSec : narrationTrimSec;
+        clip.asset = {
+          type: 'audio',
+          src: audioAsset.sourceUrl,
+          trim: trimSec,
+          volume: 1
+        };
+
+        if (useDialogue) {
+          dialogueTrimSec += clipDurationSec;
+        } else {
+          narrationTrimSec += clipDurationSec;
+        }
+      }
+
+      clips.push(clip);
+    }
+
+    timelineCursor += shot.durationSec;
+  }
+
+  return clips;
+}
+
 async function queueShotstackRender(args: {
   orderId: string;
   themeName: string;
   totalDurationSec: number;
-  shotCount: number;
+  shotPlan: ComposeShotPlanEntry[];
   characterProfile: CharacterProfile;
+  finalMix?: ScriptPayload['finalMix'];
+  narrationAudioAsset: ComposeAudioAsset | null;
+  dialogueAudioAsset: ComposeAudioAsset | null;
 }): Promise<{ providerTaskId: string }> {
   if (!env.SHOTSTACK_API_KEY) {
     throw new Error('SHOTSTACK_API_KEY is not configured.');
   }
 
   const endpoint = `${normalizeBaseUrl(env.SHOTSTACK_BASE_URL)}/edit/${env.SHOTSTACK_STAGE}/render`;
+  const resolution = inferOutputResolution(args.finalMix?.deliverables, args.totalDurationSec);
+  let timelineCursor = 0;
+  const videoClips: Record<string, unknown>[] = [];
+  const subtitleClips: Record<string, unknown>[] = [];
+  const audioClips = buildAudioClips({
+    shotPlan: args.shotPlan,
+    narrationAsset: args.narrationAudioAsset,
+    dialogueAsset: args.dialogueAudioAsset
+  });
+  const titleClips: Record<string, unknown>[] = [
+    {
+      asset: {
+        type: 'title',
+        text: `${args.themeName}\nStarring ${args.characterProfile.characterId}`,
+        style: 'minimal',
+        size: 'small',
+        color: '#F6F1E8'
+      },
+      start: 0,
+      length: Math.min(2.5, Math.max(1.5, args.shotPlan[0]?.durationSec ?? 2))
+    }
+  ];
+
+  for (const shot of args.shotPlan) {
+    videoClips.push({
+      asset: {
+        type: 'video',
+        src: shot.sourceUrl,
+        volume: 0
+      },
+      start: timelineCursor,
+      length: shot.durationSec,
+      fit: 'cover'
+    });
+
+    if (args.finalMix?.subtitleStyle !== 'none' && shot.subtitleText.trim().length > 0) {
+      subtitleClips.push({
+        asset: {
+          type: 'title',
+          text: shot.subtitleText,
+          style: args.finalMix?.subtitleStyle ?? 'minimal',
+          position: 'bottom',
+          size: 'small',
+          color: '#F6F1E8'
+        },
+        start: subtitleStart(timelineCursor, shot.durationSec),
+        length: subtitleDuration(shot.durationSec)
+      });
+    }
+
+    timelineCursor += shot.durationSec;
+  }
 
   const payload = await postJson({
     url: endpoint,
@@ -696,25 +1202,33 @@ async function queueShotstackRender(args: {
     },
     body: {
       timeline: {
+        background: '#091412',
         tracks: [
           {
-            clips: [
-              {
-                asset: {
-                  type: 'title',
-                  text: `${args.themeName}: ${args.characterProfile.characterId}`,
-                  style: 'minimal'
-                },
-                start: 0,
-                length: Math.max(4, Math.min(args.totalDurationSec, 20))
-              }
-            ]
-          }
+            clips: videoClips
+          },
+          {
+            clips: titleClips
+          },
+          ...(subtitleClips.length > 0
+            ? [
+                {
+                  clips: subtitleClips
+                }
+              ]
+            : []),
+          ...(audioClips.length > 0
+            ? [
+                {
+                  clips: audioClips
+                }
+              ]
+            : [])
         ]
       },
       output: {
         format: 'mp4',
-        resolution: args.totalDurationSec <= 35 ? 'hd' : 'sd'
+        resolution: resolution.shotstack
       }
     }
   });
@@ -1022,19 +1536,27 @@ function buildSceneRenderSpec(args: {
   return {
     shotNumber: payload.shot.shotNumber,
     sceneId: scene.id,
-    sceneName: explicitSpec?.sceneName || scene.name,
+    sceneName: explicitSpec?.sceneName || payload.shot.sceneName || scene.name,
     sceneArchitecture: explicitSpec?.sceneArchitecture || sceneArchitecture,
     camera: explicitSpec?.camera || payload.shot.camera || scene.cameraPreset,
     lighting: explicitSpec?.lighting || payload.shot.lighting || scene.lightingPreset,
     environmentMotion:
       explicitSpec?.environmentMotion && explicitSpec.environmentMotion.length > 0
         ? explicitSpec.environmentMotion
+        : payload.shot.overrides?.environmentMotion && payload.shot.overrides.environmentMotion.length > 0
+          ? payload.shot.overrides.environmentMotion
         : payload.shot.environmentMotion.length > 0
           ? payload.shot.environmentMotion
           : scene.environmentMotionDefaults,
     soundBed: explicitSpec?.soundBed || scene.soundBed,
     assets: explicitSpec?.assets || scene.assets,
     anchors: explicitSpec?.anchors || scene.anchors,
+    palette: explicitSpec?.palette && explicitSpec.palette.length > 0 ? explicitSpec.palette : scene.palette ?? [],
+    globalFx: explicitSpec?.globalFx && explicitSpec.globalFx.length > 0 ? explicitSpec.globalFx : scene.globalFx ?? [],
+    audio: explicitSpec?.audio || scene.audio || { musicBed: null, sfx: [] },
+    cameraMove: explicitSpec?.cameraMove || scene.cameraMove,
+    parallaxStrength: explicitSpec?.parallaxStrength ?? scene.parallaxStrength,
+    grade: explicitSpec?.grade || scene.grade || { lut: scene.assets.lut },
     modelProfile: explicitSpec?.modelProfile || {
       avatarModel: payload.shot.shotType === 'dialogue' ? 'avatar_speech_v1' : 'avatar_idle_v1',
       compositorModel: integrationModeAllowsExternal() ? 'provider_scene_compositor_v1' : 'scene_parallax_compositor_v1_stub'
@@ -1067,6 +1589,41 @@ function buildFallbackVoiceRender(payload: z.infer<typeof voiceRenderRequestSche
   const dialogueChars = payload.dialogueLines.join(' ').trim().length;
   const totalChars = narrationChars + dialogueChars;
   const estimatedDurationSec = Math.max(8, Math.round(totalChars / 12));
+  const shotAudioTracks: VoiceRenderShotTrack[] = payload.shots
+    .map((shot) => {
+      const text = shot.shotType === 'dialogue' ? shot.dialogue.trim() : shot.narration.trim();
+      if (!text || text === 'Narration only.') {
+        return null;
+      }
+
+      return {
+        shotNumber: shot.shotNumber,
+        shotType: shot.shotType,
+        artifactKey: buildShotAudioArtifactKey({
+          userId: payload.userId,
+          orderId: payload.orderId,
+          voiceCloneId: payload.voiceCloneId,
+          shotNumber: shot.shotNumber,
+          shotType: shot.shotType,
+          text
+        }),
+        meta: {
+          scriptTitle: payload.scriptTitle,
+          voiceCloneId: payload.voiceCloneId,
+          shotNumber: shot.shotNumber,
+          shotType: shot.shotType,
+          trackScope: 'shot',
+          sourceText: text,
+          estimatedDurationSec: estimateVoiceTrackDurationSec(
+            text,
+            shot.shotType === 'dialogue' ? shot.speakingDurationSec ?? shot.durationSec : shot.durationSec
+          ),
+          fallbackReason: reason,
+          integrationMode: env.PROVIDER_INTEGRATION_MODE
+        }
+      };
+    })
+    .filter((track): track is NonNullable<typeof track> => Boolean(track));
 
   const narrationArtifactKey = `${payload.userId}/${payload.orderId}/audio/narration-${hashHex(
     `${payload.orderId}:${payload.voiceCloneId}:narration:${payload.narrationLines.join('|')}`,
@@ -1085,6 +1642,7 @@ function buildFallbackVoiceRender(payload: z.infer<typeof voiceRenderRequestSche
       model: 'narration_tts_v1_stub',
       characterCount: narrationChars,
       estimatedDurationSec,
+      trackScope: 'aggregate',
       fallbackReason: reason,
       integrationMode: env.PROVIDER_INTEGRATION_MODE
     },
@@ -1094,9 +1652,11 @@ function buildFallbackVoiceRender(payload: z.infer<typeof voiceRenderRequestSche
       model: 'dialogue_tts_v1_stub',
       characterCount: dialogueChars,
       estimatedDurationSec,
+      trackScope: 'aggregate',
       fallbackReason: reason,
       integrationMode: env.PROVIDER_INTEGRATION_MODE
-    }
+    },
+    shotAudioTracks
   };
 }
 
@@ -1142,7 +1702,7 @@ function buildFallbackFinalCompose(args: {
   reason: string;
 }) {
   const { payload, context, reason } = args;
-  const resolution = payload.totalDurationSec <= 35 ? '1080p' : '720p';
+  const resolution = inferOutputResolution(undefined, payload.totalDurationSec);
   const finalHash = hashHex(
     `${payload.orderId}:${payload.characterProfile.characterId}:${payload.shotArtifactKeys.join('|')}:${payload.totalDurationSec}`,
     8
@@ -1156,10 +1716,10 @@ function buildFallbackFinalCompose(args: {
       themeName: context.themeName,
       shotCount: payload.shotArtifactKeys.length,
       durationSec: payload.totalDurationSec,
-      resolution,
+      resolution: resolution.label,
       codecVideo: 'h264',
       codecAudio: 'aac',
-      fallbackUsed: resolution === '720p',
+      fallbackUsed: resolution.label === '720p',
       fallbackReason: reason,
       integrationMode: env.PROVIDER_INTEGRATION_MODE
     },
@@ -1447,16 +2007,65 @@ export function registerProviderRoutes(app: FastifyInstance): void {
       try {
         const narrationText = payload.narrationLines.join(' ').trim();
         const dialogueText = payload.dialogueLines.join(' ').trim();
+        const renderTrack = async (text: string) => {
+          if (!text) {
+            return null;
+          }
 
-        const narration = await renderElevenLabsTrack({
-          voiceId: effectiveVoiceId,
-          text: narrationText
-        });
+          const audio = await renderElevenLabsTrack({
+            voiceId: effectiveVoiceId,
+            text
+          });
 
-        const dialogue = await renderElevenLabsTrack({
-          voiceId: effectiveVoiceId,
-          text: dialogueText
-        });
+          return {
+            ...audio,
+            base64Audio: Buffer.from(audio.audioBuffer).toString('base64')
+          };
+        };
+
+        const narration = await renderTrack(narrationText);
+        const dialogue = await renderTrack(dialogueText);
+        const shotAudioTracks: VoiceRenderShotTrack[] = [];
+
+        for (const shot of payload.shots) {
+          const text = shot.shotType === 'dialogue' ? shot.dialogue.trim() : shot.narration.trim();
+          if (!text || text === 'Narration only.') {
+            continue;
+          }
+
+          const renderedShot = await renderTrack(text);
+          shotAudioTracks.push({
+            shotNumber: shot.shotNumber,
+            shotType: shot.shotType,
+            artifactKey: buildShotAudioArtifactKey({
+              userId: payload.userId,
+              orderId: payload.orderId,
+              voiceCloneId: payload.voiceCloneId,
+              shotNumber: shot.shotNumber,
+              shotType: shot.shotType,
+              text
+            }),
+            meta: {
+              scriptTitle: payload.scriptTitle,
+              voiceCloneId: payload.voiceCloneId,
+              resolvedVoiceId: effectiveVoiceId,
+              model: env.ELEVENLABS_MODEL_ID,
+              outputFormat: env.ELEVENLABS_OUTPUT_FORMAT,
+              shotNumber: shot.shotNumber,
+              shotType: shot.shotType,
+              trackScope: 'shot',
+              sourceText: text,
+              estimatedDurationSec: estimateVoiceTrackDurationSec(
+                text,
+                shot.shotType === 'dialogue' ? shot.speakingDurationSec ?? shot.durationSec : shot.durationSec
+              ),
+              generatedAudioBytes: renderedShot?.byteLength ?? 0,
+              providerRequestId: renderedShot?.requestId ?? null,
+              ...(renderedShot ? { base64Audio: renderedShot.base64Audio } : {}),
+              integrationMode: env.PROVIDER_INTEGRATION_MODE
+            }
+          });
+        }
 
         const narrationArtifactKey = `${payload.userId}/${payload.orderId}/audio/narration-${hashHex(
           `${payload.orderId}:${effectiveVoiceId}:narration:${payload.narrationLines.join('|')}`,
@@ -1475,8 +2084,11 @@ export function registerProviderRoutes(app: FastifyInstance): void {
             model: env.ELEVENLABS_MODEL_ID,
             outputFormat: env.ELEVENLABS_OUTPUT_FORMAT,
             voiceId: effectiveVoiceId,
-            generatedAudioBytes: narration.byteLength,
-            providerRequestId: narration.requestId,
+            generatedAudioBytes: narration?.byteLength ?? 0,
+            providerRequestId: narration?.requestId ?? null,
+            trackScope: 'aggregate',
+            estimatedDurationSec: estimateVoiceTrackDurationSec(narrationText),
+            ...(narration ? { base64Audio: narration.base64Audio } : {}),
             integrationMode: env.PROVIDER_INTEGRATION_MODE
           },
           dialogueArtifactKey,
@@ -1485,10 +2097,14 @@ export function registerProviderRoutes(app: FastifyInstance): void {
             resolvedVoiceId: effectiveVoiceId,
             model: env.ELEVENLABS_MODEL_ID,
             outputFormat: env.ELEVENLABS_OUTPUT_FORMAT,
-            generatedAudioBytes: dialogue.byteLength,
-            providerRequestId: dialogue.requestId,
+            generatedAudioBytes: dialogue?.byteLength ?? 0,
+            providerRequestId: dialogue?.requestId ?? null,
+            trackScope: 'aggregate',
+            estimatedDurationSec: estimateVoiceTrackDurationSec(dialogueText),
+            ...(dialogue ? { base64Audio: dialogue.base64Audio } : {}),
             integrationMode: env.PROVIDER_INTEGRATION_MODE
-          }
+          },
+          shotAudioTracks
         });
       } catch (error) {
         const message = (error as Error).message;
@@ -1629,11 +2245,17 @@ export function registerProviderRoutes(app: FastifyInstance): void {
             camera: sceneRenderSpec.camera,
             lighting: sceneRenderSpec.lighting,
             environmentMotion: sceneRenderSpec.environmentMotion,
-            assets: sceneRenderSpec.assets,
-            anchors: sceneRenderSpec.anchors,
-            soundBed: sceneRenderSpec.soundBed,
-            sceneArchitecture: sceneRenderSpec.sceneArchitecture,
-            renderModel: sceneRenderSpec.modelProfile.avatarModel,
+              assets: sceneRenderSpec.assets,
+              anchors: sceneRenderSpec.anchors,
+              palette: sceneRenderSpec.palette,
+              globalFx: sceneRenderSpec.globalFx,
+              audio: sceneRenderSpec.audio,
+              cameraMove: sceneRenderSpec.cameraMove,
+              parallaxStrength: sceneRenderSpec.parallaxStrength,
+              grade: sceneRenderSpec.grade,
+              soundBed: sceneRenderSpec.soundBed,
+              sceneArchitecture: sceneRenderSpec.sceneArchitecture,
+              renderModel: sceneRenderSpec.modelProfile.avatarModel,
             modelProfile: sceneRenderSpec.modelProfile,
             providerTaskId: shotQueue.providerTaskId,
             characterId: payload.characterProfile.characterId,
@@ -1667,6 +2289,17 @@ export function registerProviderRoutes(app: FastifyInstance): void {
         throw new ProviderRequestError(400, 'At least one shot artifact key is required.');
       }
 
+      const latestScript = await loadLatestScript(payload.orderId);
+      const artifactMetaByKey = await loadArtifactMetadata(payload.orderId, payload.shotArtifactKeys);
+      const audioArtifacts = await loadLatestAudioArtifacts(payload.orderId);
+      const shotAudioByKey = await loadShotAudioArtifacts(payload.orderId);
+      const shotPlan = buildComposeShotPlan({
+        payload,
+        script: latestScript,
+        artifactMetaByKey,
+        shotAudioByKey
+      });
+
       const fallback = (reason: string) =>
         buildFallbackFinalCompose({
           payload,
@@ -1691,11 +2324,14 @@ export function registerProviderRoutes(app: FastifyInstance): void {
           orderId: payload.orderId,
           themeName: context.themeName,
           totalDurationSec: payload.totalDurationSec,
-          shotCount: payload.shotArtifactKeys.length,
-          characterProfile: payload.characterProfile
+          shotPlan,
+          characterProfile: payload.characterProfile,
+          finalMix: latestScript?.finalMix,
+          narrationAudioAsset: audioArtifacts.narration,
+          dialogueAudioAsset: audioArtifacts.dialogue
         });
 
-        const resolution = payload.totalDurationSec <= 35 ? '1080p' : '720p';
+        const resolution = inferOutputResolution(latestScript?.finalMix?.deliverables, payload.totalDurationSec);
         const finalHash = hashHex(
           `${payload.orderId}:${payload.characterProfile.characterId}:${payload.shotArtifactKeys.join('|')}:${payload.totalDurationSec}`,
           8
@@ -1713,7 +2349,21 @@ export function registerProviderRoutes(app: FastifyInstance): void {
           input: {
             shotCount: payload.shotArtifactKeys.length,
             totalDurationSec: payload.totalDurationSec,
-            characterId: payload.characterProfile.characterId
+            characterId: payload.characterProfile.characterId,
+            finalMix: latestScript?.finalMix ?? null,
+            audioArtifacts: {
+              narration: audioArtifacts.narration?.assetKey ?? null,
+              dialogue: audioArtifacts.dialogue?.assetKey ?? null,
+              shotAudioCount: shotAudioByKey.size
+            },
+            shotPlan: shotPlan.map((shot) => ({
+              shotNumber: shot.shotNumber,
+              shotType: shot.shotType,
+              durationSec: shot.durationSec,
+              sceneName: shot.sceneName,
+              audioDurationSec: shot.audioDurationSec,
+              audioAssetKey: shot.audioAsset?.assetKey ?? null
+            }))
           },
           output: {
             queuedAt: new Date().toISOString(),
@@ -1728,12 +2378,28 @@ export function registerProviderRoutes(app: FastifyInstance): void {
             themeName: context.themeName,
             shotCount: payload.shotArtifactKeys.length,
             durationSec: payload.totalDurationSec,
-            resolution,
+            resolution: resolution.label,
             codecVideo: 'h264',
             codecAudio: 'aac',
-            fallbackUsed: resolution === '720p',
+            fallbackUsed: resolution.label === '720p',
             renderModel: 'shotstack_composer',
             providerTaskId: compose.providerTaskId,
+            subtitleStyle: latestScript?.finalMix?.subtitleStyle ?? 'minimal',
+            deliverables: latestScript?.finalMix?.deliverables ?? ['1080p_mp4', 'thumbnail_jpg'],
+            audioTracksUsed: {
+              narration: audioArtifacts.narration?.assetKey ?? null,
+              dialogue: audioArtifacts.dialogue?.assetKey ?? null,
+              shotAudioCount: shotAudioByKey.size
+            },
+            shotPlan: shotPlan.map((shot) => ({
+              shotNumber: shot.shotNumber,
+              shotType: shot.shotType,
+              durationSec: shot.durationSec,
+              sceneName: shot.sceneName,
+              subtitleText: shot.subtitleText,
+              audioDurationSec: shot.audioDurationSec,
+              audioAssetKey: shot.audioAsset?.assetKey ?? null
+            })),
             integrationMode: env.PROVIDER_INTEGRATION_MODE
           },
           thumbnailArtifactKey,

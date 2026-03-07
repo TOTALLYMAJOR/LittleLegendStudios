@@ -37,6 +37,12 @@ export interface VoiceRenderResult {
   narrationMeta: Record<string, unknown>;
   dialogueArtifactKey: string;
   dialogueMeta: Record<string, unknown>;
+  shotAudioTracks: Array<{
+    shotNumber: number;
+    shotType: 'narration' | 'dialogue';
+    artifactKey: string;
+    meta: Record<string, unknown>;
+  }>;
 }
 
 export interface CharacterPackResult {
@@ -83,6 +89,14 @@ export interface VoiceProvider {
     scriptTitle: string;
     narrationLines: string[];
     dialogueLines: string[];
+    shots: Array<{
+      shotNumber: number;
+      shotType: 'narration' | 'dialogue';
+      durationSec: number;
+      narration: string;
+      dialogue: string;
+      speakingDurationSec?: number;
+    }>;
   }): Promise<VoiceRenderResult>;
 }
 
@@ -146,6 +160,21 @@ function deterministicCharacterProfile(args: {
   };
 }
 
+function buildShotAudioArtifactKey(args: {
+  userId: string;
+  orderId: string;
+  voiceCloneId: string;
+  shotNumber: number;
+  shotType: 'narration' | 'dialogue';
+  text: string;
+}): string {
+  const suffix = hashHex(
+    `${args.orderId}:${args.voiceCloneId}:${args.shotType}:${String(args.shotNumber)}:${args.text}`,
+    8
+  );
+  return `${args.userId}/${args.orderId}/audio/shot-${String(args.shotNumber).padStart(2, '0')}-${args.shotType}-${suffix}.mp3`;
+}
+
 class StubVoiceProvider implements VoiceProvider {
   async createVoiceClone(args: {
     orderId: string;
@@ -174,22 +203,63 @@ class StubVoiceProvider implements VoiceProvider {
     scriptTitle: string;
     narrationLines: string[];
     dialogueLines: string[];
+    shots: Array<{
+      shotNumber: number;
+      shotType: 'narration' | 'dialogue';
+      durationSec: number;
+      narration: string;
+      dialogue: string;
+      speakingDurationSec?: number;
+    }>;
   }): Promise<VoiceRenderResult> {
     const narrationArtifactKey = `${args.userId}/${args.orderId}/audio/narration-${hashHex(`${args.orderId}:narration`, 8)}.mp3`;
     const dialogueArtifactKey = `${args.userId}/${args.orderId}/audio/dialogue-${hashHex(`${args.orderId}:dialogue`, 8)}.mp3`;
+    const shotAudioTracks = args.shots
+      .map((shot) => {
+        const text = shot.shotType === 'dialogue' ? shot.dialogue.trim() : shot.narration.trim();
+        if (!text || text === 'Narration only.') {
+          return null;
+        }
+
+        return {
+          shotNumber: shot.shotNumber,
+          shotType: shot.shotType,
+          artifactKey: buildShotAudioArtifactKey({
+            userId: args.userId,
+            orderId: args.orderId,
+            voiceCloneId: args.voiceCloneId,
+            shotNumber: shot.shotNumber,
+            shotType: shot.shotType,
+            text
+          }),
+          meta: {
+            scriptTitle: args.scriptTitle,
+            voiceCloneId: args.voiceCloneId,
+            shotNumber: shot.shotNumber,
+            shotType: shot.shotType,
+            trackScope: 'shot',
+            sourceText: text,
+            estimatedDurationSec: shot.shotType === 'dialogue' ? Math.max(1, shot.speakingDurationSec ?? shot.durationSec) : shot.durationSec
+          }
+        };
+      })
+      .filter((track): track is NonNullable<typeof track> => Boolean(track));
 
     return {
       provider: 'stub_voice',
       narrationArtifactKey,
       narrationMeta: {
         scriptTitle: args.scriptTitle,
-        narrationLines: args.narrationLines
+        narrationLines: args.narrationLines,
+        trackScope: 'aggregate'
       },
       dialogueArtifactKey,
       dialogueMeta: {
         dialogueLines: args.dialogueLines,
-        voiceCloneId: args.voiceCloneId
-      }
+        voiceCloneId: args.voiceCloneId,
+        trackScope: 'aggregate'
+      },
+      shotAudioTracks
     };
   }
 }
@@ -241,6 +311,12 @@ class StubSceneProvider implements SceneProvider {
         environmentMotion: args.sceneRenderSpec.environmentMotion,
         assets: args.sceneRenderSpec.assets,
         anchors: args.sceneRenderSpec.anchors,
+        palette: args.sceneRenderSpec.palette,
+        globalFx: args.sceneRenderSpec.globalFx,
+        audio: args.sceneRenderSpec.audio,
+        cameraMove: args.sceneRenderSpec.cameraMove,
+        parallaxStrength: args.sceneRenderSpec.parallaxStrength,
+        grade: args.sceneRenderSpec.grade,
         soundBed: args.sceneRenderSpec.soundBed,
         modelProfile: args.sceneRenderSpec.modelProfile,
         durationSec: args.shot.durationSec,
@@ -302,7 +378,17 @@ const voiceRenderResponseSchema = z.object({
   narrationArtifactKey: z.string().min(1),
   narrationMeta: z.record(z.unknown()).optional(),
   dialogueArtifactKey: z.string().min(1),
-  dialogueMeta: z.record(z.unknown()).optional()
+  dialogueMeta: z.record(z.unknown()).optional(),
+  shotAudioTracks: z
+    .array(
+      z.object({
+        shotNumber: z.number().int().positive(),
+        shotType: z.enum(['narration', 'dialogue']),
+        artifactKey: z.string().min(1),
+        meta: z.record(z.unknown()).optional()
+      })
+    )
+    .optional()
 });
 
 const characterPackResponseSchema = z.object({
@@ -403,6 +489,14 @@ class HttpVoiceProvider implements VoiceProvider {
     scriptTitle: string;
     narrationLines: string[];
     dialogueLines: string[];
+    shots: Array<{
+      shotNumber: number;
+      shotType: 'narration' | 'dialogue';
+      durationSec: number;
+      narration: string;
+      dialogue: string;
+      speakingDurationSec?: number;
+    }>;
   }): Promise<VoiceRenderResult> {
     const response = await this.post(
       '/voice/render',
@@ -412,7 +506,8 @@ class HttpVoiceProvider implements VoiceProvider {
         voiceCloneId: args.voiceCloneId,
         scriptTitle: args.scriptTitle,
         narrationLines: args.narrationLines,
-        dialogueLines: args.dialogueLines
+        dialogueLines: args.dialogueLines,
+        shots: args.shots
       },
       voiceRenderResponseSchema
     );
@@ -422,7 +517,13 @@ class HttpVoiceProvider implements VoiceProvider {
       narrationArtifactKey: response.narrationArtifactKey,
       narrationMeta: response.narrationMeta ?? {},
       dialogueArtifactKey: response.dialogueArtifactKey,
-      dialogueMeta: response.dialogueMeta ?? {}
+      dialogueMeta: response.dialogueMeta ?? {},
+      shotAudioTracks: (response.shotAudioTracks ?? []).map((track) => ({
+        shotNumber: track.shotNumber,
+        shotType: track.shotType,
+        artifactKey: track.artifactKey,
+        meta: track.meta ?? {}
+      }))
     };
   }
 }

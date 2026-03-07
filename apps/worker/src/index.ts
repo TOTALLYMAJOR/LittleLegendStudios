@@ -350,14 +350,25 @@ function resolveSceneRenderSpec(args: {
   return {
     shotNumber: args.shot.shotNumber,
     sceneId: scene.id,
-    sceneName: scene.name,
+    sceneName: args.shot.sceneName || scene.name,
     sceneArchitecture: args.context.manifest.sceneArchitecture,
     camera: args.shot.camera || scene.cameraPreset,
     lighting: args.shot.lighting || scene.lightingPreset,
-    environmentMotion: args.shot.environmentMotion.length > 0 ? args.shot.environmentMotion : scene.environmentMotionDefaults,
+    environmentMotion:
+      args.shot.overrides?.environmentMotion && args.shot.overrides.environmentMotion.length > 0
+        ? args.shot.overrides.environmentMotion
+        : args.shot.environmentMotion.length > 0
+          ? args.shot.environmentMotion
+          : scene.environmentMotionDefaults,
     soundBed: scene.soundBed,
     assets: scene.assets,
     anchors: scene.anchors,
+    palette: scene.palette ?? args.context.manifest.palette ?? [],
+    globalFx: scene.globalFx ?? args.context.manifest.globalFx ?? [],
+    audio: scene.audio ?? { musicBed: null, sfx: [] },
+    cameraMove: scene.cameraMove,
+    parallaxStrength: scene.parallaxStrength,
+    grade: scene.grade ?? { lut: scene.assets.lut },
     modelProfile: {
       avatarModel: args.shot.shotType === 'dialogue' ? 'avatar_speech_v1' : 'avatar_idle_v1',
       compositorModel: env.SCENE_PROVIDER_MODE === 'http' ? 'provider_scene_compositor_v1' : 'scene_parallax_compositor_v1_stub'
@@ -388,6 +399,31 @@ async function createArtifact(
     `,
     [orderId, kind, s3Key, JSON.stringify(meta)]
   );
+}
+
+function stripInlineAudioPayload(meta: Record<string, unknown>): Record<string, unknown> {
+  const { base64Audio, ...rest } = meta;
+  return rest;
+}
+
+async function persistAudioArtifact(args: {
+  orderId: string;
+  kind: Extract<ArtifactKind, 'audio_narration' | 'audio_dialogue'>;
+  assetKey: string;
+  meta: Record<string, unknown>;
+}): Promise<void> {
+  const sanitizedMeta = stripInlineAudioPayload(args.meta);
+  const materialization = await materializeArtifactFile({
+    kind: args.kind,
+    assetKey: args.assetKey,
+    payload: args.meta
+  });
+
+  await createArtifact(args.orderId, args.kind, args.assetKey, {
+    ...sanitizedMeta,
+    ...materialization,
+    signedDownloadUrl: createSignedDownloadUrl(args.assetKey)
+  });
 }
 
 function extractProviderTaskId(meta: Record<string, unknown>): string | null {
@@ -514,6 +550,14 @@ async function materializeArtifactFile(args: {
     } catch (error) {
       providerOutputFetchError = (error as Error).message;
     }
+  }
+
+  const inlineAudioBase64 = typeof args.payload.base64Audio === 'string' ? args.payload.base64Audio.trim() : '';
+  if (!bytes && inlineAudioBase64 && (args.kind === 'audio_narration' || args.kind === 'audio_dialogue')) {
+    contentType = 'audio/mpeg';
+    bytes = Buffer.from(inlineAudioBase64, 'base64');
+    placeholderAsset = false;
+    providerOutputIngested = true;
   }
 
   if (!bytes) {
@@ -883,7 +927,15 @@ async function runPipeline(orderId: string, attempt: number): Promise<void> {
     voiceCloneId: voiceClone.voiceCloneId,
     scriptTitle: scriptPayload.title,
     narrationLines: scriptPayload.narration,
-    dialogueLines
+    dialogueLines,
+    shots: shotPlan.map((shot) => ({
+      shotNumber: shot.shotNumber,
+      shotType: shot.shotType,
+      durationSec: shot.durationSec,
+      narration: shot.narration,
+      dialogue: shot.dialogue,
+      speakingDurationSec: shot.speakingDurationSec
+    }))
   });
 
   await runStepWithInput(
@@ -899,42 +951,46 @@ async function runPipeline(orderId: string, attempt: number): Promise<void> {
       ok: true,
       provider: voiceTracks.provider,
       narrationTrackKey: voiceTracks.narrationArtifactKey,
-      dialogueTrackKey: voiceTracks.dialogueArtifactKey
+      dialogueTrackKey: voiceTracks.dialogueArtifactKey,
+      shotAudioTrackCount: voiceTracks.shotAudioTracks.length
     },
     voiceTracks.provider
   );
 
-  const narrationMaterialization = await materializeArtifactFile({
+  await persistAudioArtifact({
+    orderId,
     kind: 'audio_narration',
     assetKey: voiceTracks.narrationArtifactKey,
-    payload: {
+    meta: {
       ...voiceTracks.narrationMeta,
       provider: voiceTracks.provider,
       scriptTitle: scriptPayload.title
     }
   });
 
-  await createArtifact(orderId, 'audio_narration', voiceTracks.narrationArtifactKey, {
-    ...voiceTracks.narrationMeta,
-    ...narrationMaterialization,
-    signedDownloadUrl: createSignedDownloadUrl(voiceTracks.narrationArtifactKey)
-  });
-
-  const dialogueMaterialization = await materializeArtifactFile({
+  await persistAudioArtifact({
+    orderId,
     kind: 'audio_dialogue',
     assetKey: voiceTracks.dialogueArtifactKey,
-    payload: {
+    meta: {
       ...voiceTracks.dialogueMeta,
       provider: voiceTracks.provider,
       voiceCloneId: voiceClone.voiceCloneId
     }
   });
 
-  await createArtifact(orderId, 'audio_dialogue', voiceTracks.dialogueArtifactKey, {
-    ...voiceTracks.dialogueMeta,
-    ...dialogueMaterialization,
-    signedDownloadUrl: createSignedDownloadUrl(voiceTracks.dialogueArtifactKey)
-  });
+  for (const track of voiceTracks.shotAudioTracks) {
+    await persistAudioArtifact({
+      orderId,
+      kind: track.shotType === 'dialogue' ? 'audio_dialogue' : 'audio_narration',
+      assetKey: track.artifactKey,
+      meta: {
+        ...track.meta,
+        provider: voiceTracks.provider,
+        voiceCloneId: voiceClone.voiceCloneId
+      }
+    });
+  }
 
   const characterPack = await providers.scene.createCharacterPack({
     orderId,

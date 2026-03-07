@@ -1159,14 +1159,25 @@ function buildScenePlan(args: { script: ScriptPayload; manifest: ThemeManifest }
     const sceneRenderSpec: SceneRenderSpec = {
       shotNumber: shot.shotNumber,
       sceneId: scene.id,
-      sceneName: scene.name,
+      sceneName: shot.sceneName || scene.name,
       sceneArchitecture: args.manifest.sceneArchitecture,
       camera: shot.camera || scene.cameraPreset,
       lighting: shot.lighting || scene.lightingPreset,
-      environmentMotion: shot.environmentMotion.length > 0 ? shot.environmentMotion : scene.environmentMotionDefaults,
+      environmentMotion:
+        shot.overrides?.environmentMotion && shot.overrides.environmentMotion.length > 0
+          ? shot.overrides.environmentMotion
+          : shot.environmentMotion.length > 0
+            ? shot.environmentMotion
+            : scene.environmentMotionDefaults,
       soundBed: scene.soundBed,
       assets: scene.assets,
       anchors: scene.anchors,
+      palette: scene.palette ?? args.manifest.palette ?? [],
+      globalFx: scene.globalFx ?? args.manifest.globalFx ?? [],
+      audio: scene.audio ?? { musicBed: null, sfx: [] },
+      cameraMove: scene.cameraMove,
+      parallaxStrength: scene.parallaxStrength,
+      grade: scene.grade ?? { lut: scene.assets.lut },
       modelProfile: {
         avatarModel: shot.shotType === 'dialogue' ? 'avatar_speech_v1' : 'avatar_idle_v1',
         compositorModel: env.PROVIDER_INTEGRATION_MODE === 'stub' ? 'scene_parallax_compositor_v1_stub' : 'provider_scene_compositor_v1'

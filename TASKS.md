@@ -75,6 +75,7 @@ This file is the canonical build ledger for the repo.
   - thumbnail artifact generation path
 
 - [x] Provider integrations + orchestration
+  - moderation provider contract and route
   - internal provider routes for voice, scene render, and final compose
   - ElevenLabs integration path for voice clone + voice render
   - HeyGen integration path for shot generation
@@ -126,8 +127,14 @@ This file is the canonical build ledger for the repo.
   - file signature validation
   - byte-count integrity checks
   - photo-set uniqueness heuristics
-  - voice-duration heuristics
+  - image dimension and framing heuristics
+  - WAV voice-duration, silence, level, and sample-rate heuristics
   - still not provider-grade CV/audio moderation
+
+- [x] Moderation provider contract exists
+  - worker can call dedicated moderation provider through `stub` or `http` mode
+  - API exposes `/moderation/check` with structured category-level outcomes
+  - local heuristics remain the hard baseline in the worker
 
 - [x] Character system is functional scaffold, not reusable identity product
   - deterministic profile generation exists

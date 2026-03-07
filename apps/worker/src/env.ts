@@ -17,6 +17,12 @@ const schema = z.object({
   ASSET_SIGNING_SECRET: z.string().min(16).default('dev_asset_signing_secret_change_me'),
   ASSET_UPLOAD_URL_TTL_SEC: z.coerce.number().int().positive().default(900),
   ASSET_DOWNLOAD_URL_TTL_SEC: z.coerce.number().int().positive().default(3600),
+  MODERATION_PROVIDER_MODE: z.enum(['stub', 'http']).default('stub'),
+  MODERATION_PROVIDER_BASE_URL: z
+    .string()
+    .url()
+    .optional()
+    .transform((value) => (value && value.trim().length > 0 ? value : undefined)),
   VOICE_PROVIDER_MODE: z.enum(['stub', 'http']).default('stub'),
   VOICE_PROVIDER_BASE_URL: z
     .string()

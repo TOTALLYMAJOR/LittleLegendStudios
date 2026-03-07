@@ -21,6 +21,16 @@ import { createRefund, isStripeRefundEnabled } from './stripe.js';
 const QUEUE_NAME = 'render-orders';
 const providers = buildProviderRegistry();
 
+class ModerationFailure extends Error {
+  constructor(
+    message: string,
+    readonly output: Record<string, unknown>,
+    readonly provider: string
+  ) {
+    super(message);
+  }
+}
+
 interface OrderRow {
   id: string;
   status: OrderStatus;
@@ -1042,31 +1052,65 @@ async function runPipeline(orderId: string, attempt: number): Promise<void> {
   };
 
   try {
-    const moderationResult = await runLocalModerationChecks({
+    const localModerationResult = await runLocalModerationChecks({
       orderId,
       photoUploads,
       voiceUpload
     });
+    const providerModerationResult = await providers.moderation.checkIntake({
+      orderId,
+      userId: order.user_id,
+      photoUploads: photoUploads.map(toWorkerUpload),
+      voiceUpload: voiceUpload ? toWorkerUpload(voiceUpload) : null
+    });
 
-    await runStepWithInput(orderId, 'moderation', attempt, moderationInput, moderationResult, 'local_moderation');
+    if (!providerModerationResult.approved) {
+      const message = providerModerationResult.summary.join(' ') || 'Provider moderation rejected intake.';
+      throw new ModerationFailure(
+        message,
+        {
+          ok: false,
+          localChecks: localModerationResult,
+          providerChecks: providerModerationResult
+        },
+        providerModerationResult.provider
+      );
+    }
+
+    await runStepWithInput(
+      orderId,
+      'moderation',
+      attempt,
+      moderationInput,
+      {
+        ok: true,
+        localChecks: localModerationResult,
+        providerChecks: providerModerationResult
+      },
+      providerModerationResult.provider
+    );
   } catch (error) {
     const message = (error as Error).message;
+    const failedOutput =
+      error instanceof ModerationFailure
+        ? error.output
+        : {
+            ok: false,
+            checks: {
+              faceDetect: 'failed',
+              nsfw: 'failed',
+              audioQuality: 'failed'
+            },
+            mode: 'local_heuristic'
+          };
     await runFailedStepWithInput(
       orderId,
       'moderation',
       attempt,
       moderationInput,
       message,
-      {
-        ok: false,
-        checks: {
-          faceDetect: 'failed',
-          nsfw: 'failed',
-          audioQuality: 'failed'
-        },
-        mode: 'local_heuristic'
-      },
-      'local_moderation'
+      failedOutput,
+      error instanceof ModerationFailure ? error.provider : 'local_moderation'
     );
     throw error;
   }

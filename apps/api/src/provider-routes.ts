@@ -231,6 +231,13 @@ const voiceCloneRequestSchema = z.object({
   voiceUpload: providerUploadSchema.nullable()
 });
 
+const moderationCheckRequestSchema = z.object({
+  orderId: z.string().uuid(),
+  userId: z.string().uuid(),
+  photoUploads: z.array(providerUploadSchema),
+  voiceUpload: providerUploadSchema.nullable()
+});
+
 const voiceRenderRequestSchema = z.object({
   orderId: z.string().uuid(),
   userId: z.string().uuid(),
@@ -748,6 +755,419 @@ async function fetchSourceAssetBytes(upload: ProviderUpload): Promise<{ contentT
     contentType: upload.contentType,
     bytes,
     sourceUrl
+  };
+}
+
+function hasPrefix(bytes: Uint8Array, prefix: number[]): boolean {
+  return prefix.every((value, index) => bytes[index] === value);
+}
+
+function containsAscii(bytes: Uint8Array, start: number, text: string): boolean {
+  if (bytes.length < start + text.length) {
+    return false;
+  }
+
+  for (let index = 0; index < text.length; index += 1) {
+    if (bytes[start + index] !== text.charCodeAt(index)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function matchesUploadSignature(upload: ProviderUpload, bytes: Uint8Array): boolean {
+  switch (upload.contentType) {
+    case 'image/jpeg':
+      return bytes.length >= 3 && hasPrefix(bytes, [0xff, 0xd8, 0xff]);
+    case 'image/png':
+      return bytes.length >= 8 && hasPrefix(bytes, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    case 'audio/wav':
+    case 'audio/x-wav':
+      return bytes.length >= 12 && containsAscii(bytes, 0, 'RIFF') && containsAscii(bytes, 8, 'WAVE');
+    case 'audio/m4a':
+    case 'audio/x-m4a':
+    case 'audio/mp4':
+      return bytes.length >= 12 && containsAscii(bytes, 4, 'ftyp');
+    default:
+      return false;
+  }
+}
+
+function estimateVoiceDurationSec(upload: ProviderUpload, bytesLength: number): number {
+  switch (upload.contentType) {
+    case 'audio/wav':
+    case 'audio/x-wav':
+      return Math.max(1, Math.round(bytesLength / 32000));
+    case 'audio/m4a':
+    case 'audio/x-m4a':
+    case 'audio/mp4':
+      return Math.max(1, Math.round(bytesLength / 16000));
+    default:
+      return Math.max(1, Math.round(bytesLength / 16000));
+  }
+}
+
+function readUint32BigEndian(bytes: Uint8Array, offset: number): number {
+  return (bytes[offset] << 24) | (bytes[offset + 1] << 16) | (bytes[offset + 2] << 8) | bytes[offset + 3];
+}
+
+function readUint16BigEndian(bytes: Uint8Array, offset: number): number {
+  return (bytes[offset] << 8) | bytes[offset + 1];
+}
+
+function extractPngDimensions(bytes: Uint8Array): { width: number; height: number } | null {
+  if (bytes.length < 24 || !hasPrefix(bytes, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) {
+    return null;
+  }
+
+  const chunkType = String.fromCharCode(bytes[12], bytes[13], bytes[14], bytes[15]);
+  if (chunkType !== 'IHDR') {
+    return null;
+  }
+
+  const width = readUint32BigEndian(bytes, 16);
+  const height = readUint32BigEndian(bytes, 20);
+  if (width <= 0 || height <= 0) {
+    return null;
+  }
+
+  return { width, height };
+}
+
+function extractJpegDimensions(bytes: Uint8Array): { width: number; height: number } | null {
+  if (bytes.length < 4 || !hasPrefix(bytes, [0xff, 0xd8, 0xff])) {
+    return null;
+  }
+
+  let offset = 2;
+  while (offset + 9 < bytes.length) {
+    while (offset < bytes.length && bytes[offset] !== 0xff) {
+      offset += 1;
+    }
+
+    if (offset + 1 >= bytes.length) {
+      return null;
+    }
+
+    const marker = bytes[offset + 1];
+    offset += 2;
+
+    if (marker === 0xd8 || marker === 0xd9) {
+      continue;
+    }
+
+    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
+      continue;
+    }
+
+    if (offset + 2 > bytes.length) {
+      return null;
+    }
+
+    const segmentLength = readUint16BigEndian(bytes, offset);
+    if (segmentLength < 2 || offset + segmentLength > bytes.length) {
+      return null;
+    }
+
+    const isStartOfFrame =
+      (marker >= 0xc0 && marker <= 0xc3) ||
+      (marker >= 0xc5 && marker <= 0xc7) ||
+      (marker >= 0xc9 && marker <= 0xcb) ||
+      (marker >= 0xcd && marker <= 0xcf);
+
+    if (isStartOfFrame && segmentLength >= 7) {
+      const height = readUint16BigEndian(bytes, offset + 3);
+      const width = readUint16BigEndian(bytes, offset + 5);
+      if (width > 0 && height > 0) {
+        return { width, height };
+      }
+      return null;
+    }
+
+    offset += segmentLength;
+  }
+
+  return null;
+}
+
+function extractImageDimensions(upload: ProviderUpload, bytes: Uint8Array): { width: number; height: number } | null {
+  if (upload.contentType === 'image/png') {
+    return extractPngDimensions(bytes);
+  }
+  if (upload.contentType === 'image/jpeg') {
+    return extractJpegDimensions(bytes);
+  }
+  return null;
+}
+
+function readUint16LittleEndian(bytes: Uint8Array, offset: number): number {
+  return bytes[offset] | (bytes[offset + 1] << 8);
+}
+
+function readUint32LittleEndian(bytes: Uint8Array, offset: number): number {
+  return bytes[offset] | (bytes[offset + 1] << 8) | (bytes[offset + 2] << 16) | (bytes[offset + 3] << 24);
+}
+
+function analyzeWavMetrics(bytes: Uint8Array): {
+  durationSec: number;
+  sampleRate: number;
+  channels: number;
+  bitsPerSample: number;
+  rms: number | null;
+  silenceRatio: number | null;
+} | null {
+  if (bytes.length < 44 || !containsAscii(bytes, 0, 'RIFF') || !containsAscii(bytes, 8, 'WAVE')) {
+    return null;
+  }
+
+  let offset = 12;
+  let sampleRate = 0;
+  let channels = 0;
+  let bitsPerSample = 0;
+  let dataOffset = -1;
+  let dataSize = 0;
+
+  while (offset + 8 <= bytes.length) {
+    const chunkId = String.fromCharCode(bytes[offset], bytes[offset + 1], bytes[offset + 2], bytes[offset + 3]);
+    const chunkSize = readUint32LittleEndian(bytes, offset + 4);
+    const chunkDataOffset = offset + 8;
+    if (chunkDataOffset + chunkSize > bytes.length) {
+      break;
+    }
+
+    if (chunkId === 'fmt ' && chunkSize >= 16) {
+      channels = readUint16LittleEndian(bytes, chunkDataOffset + 2);
+      sampleRate = readUint32LittleEndian(bytes, chunkDataOffset + 4);
+      bitsPerSample = readUint16LittleEndian(bytes, chunkDataOffset + 14);
+    } else if (chunkId === 'data') {
+      dataOffset = chunkDataOffset;
+      dataSize = chunkSize;
+    }
+
+    offset = chunkDataOffset + chunkSize + (chunkSize % 2);
+  }
+
+  if (sampleRate <= 0 || channels <= 0 || bitsPerSample <= 0 || dataOffset < 0 || dataSize <= 0) {
+    return null;
+  }
+
+  const bytesPerSample = Math.max(1, Math.ceil(bitsPerSample / 8));
+  const frameSize = channels * bytesPerSample;
+  if (frameSize <= 0) {
+    return null;
+  }
+
+  const totalFrames = Math.floor(dataSize / frameSize);
+  if (totalFrames <= 0) {
+    return null;
+  }
+
+  const durationSec = totalFrames / sampleRate;
+  let rmsAccumulator = 0;
+  let silenceFrames = 0;
+  const framesToInspect = Math.min(totalFrames, 48_000);
+
+  for (let frameIndex = 0; frameIndex < framesToInspect; frameIndex += 1) {
+    let framePeak = 0;
+    const frameOffset = dataOffset + frameIndex * frameSize;
+
+    for (let channelIndex = 0; channelIndex < channels; channelIndex += 1) {
+      const sampleOffset = frameOffset + channelIndex * bytesPerSample;
+      let normalized = 0;
+
+      if (bitsPerSample === 16 && sampleOffset + 1 < bytes.length) {
+        const raw = readUint16LittleEndian(bytes, sampleOffset);
+        const signed = raw > 0x7fff ? raw - 0x10000 : raw;
+        normalized = signed / 32768;
+      } else if (bitsPerSample === 8 && sampleOffset < bytes.length) {
+        normalized = (bytes[sampleOffset] - 128) / 128;
+      }
+
+      framePeak = Math.max(framePeak, Math.abs(normalized));
+      rmsAccumulator += normalized * normalized;
+    }
+
+    if (framePeak < 0.01) {
+      silenceFrames += 1;
+    }
+  }
+
+  const rms = Math.sqrt(rmsAccumulator / Math.max(1, framesToInspect * channels));
+  return {
+    durationSec,
+    sampleRate,
+    channels,
+    bitsPerSample,
+    rms,
+    silenceRatio: silenceFrames / framesToInspect
+  };
+}
+
+async function runModerationCheck(args: {
+  photoUploads: ProviderUpload[];
+  voiceUpload: ProviderUpload | null;
+}): Promise<{
+  approved: boolean;
+  checks: {
+    photoQuality: string;
+    facePresence: string;
+    safety: string;
+    voiceQuality: string;
+  };
+  summary: string[];
+  details: Record<string, unknown>;
+}> {
+  const summary: string[] = [];
+  const checks = {
+    photoQuality: 'pass_local_heuristic',
+    facePresence: 'pass_local_heuristic',
+    safety: 'pass_local_heuristic',
+    voiceQuality: 'pass_local_heuristic'
+  };
+
+  const photoPayloads = await Promise.all(
+    args.photoUploads.map(async (upload) => {
+      const source = await fetchSourceAssetBytes(upload);
+      const bytes = new Uint8Array(source.bytes);
+      if (!matchesUploadSignature(upload, bytes)) {
+        throw new Error(`Photo upload ${upload.s3Key} failed file signature validation.`);
+      }
+      if (source.bytes.byteLength !== upload.bytes) {
+        throw new Error(`Photo upload ${upload.s3Key} bytes do not match upload metadata.`);
+      }
+      const dimensions = extractImageDimensions(upload, bytes);
+      return {
+        bytes: source.bytes.byteLength,
+        sha256: upload.sha256,
+        dimensions
+      };
+    })
+  );
+
+  if (args.photoUploads.length < 5 || args.photoUploads.length > 15) {
+    checks.photoQuality = 'fail_photo_count';
+    checks.facePresence = 'fail_photo_count';
+    summary.push(`Expected 5-15 photos, received ${String(args.photoUploads.length)}.`);
+  }
+
+  const undersizedPhotos = photoPayloads.filter((photo) => photo.bytes < 15_000).length;
+  if (undersizedPhotos > 0) {
+    checks.photoQuality = 'fail_photo_resolution_heuristic';
+    summary.push(`${String(undersizedPhotos)} photo uploads are too small for reliable likeness generation.`);
+  }
+
+  const unresolvedDimensions = photoPayloads.filter((photo) => !photo.dimensions).length;
+  if (unresolvedDimensions > 0) {
+    checks.photoQuality = 'fail_photo_dimension_parse';
+    summary.push(`${String(unresolvedDimensions)} photo uploads could not be dimension-validated.`);
+  }
+
+  const lowResolutionPhotos = photoPayloads.filter((photo) => {
+    if (!photo.dimensions) {
+      return false;
+    }
+    const { width, height } = photo.dimensions;
+    return Math.min(width, height) < 512 || width * height < 350_000;
+  }).length;
+  if (lowResolutionPhotos > 0) {
+    checks.photoQuality = 'fail_photo_resolution_heuristic';
+    summary.push(`${String(lowResolutionPhotos)} photo uploads are below the minimum effective resolution threshold.`);
+  }
+
+  const portraitFriendlyPhotos = photoPayloads.filter((photo) => {
+    if (!photo.dimensions) {
+      return false;
+    }
+    const { width, height } = photo.dimensions;
+    const aspectRatio = width / height;
+    return Math.min(width, height) >= 720 && aspectRatio >= 0.6 && aspectRatio <= 1.8;
+  }).length;
+
+  if (portraitFriendlyPhotos < Math.min(3, args.photoUploads.length)) {
+    checks.facePresence = 'fail_face_framing_heuristic';
+    summary.push('Too few photos meet portrait-framing heuristics for reliable face extraction.');
+  }
+
+  const uniquePhotoHashes = new Set(photoPayloads.map((photo) => photo.sha256).filter((value): value is string => Boolean(value)));
+  if (uniquePhotoHashes.size < Math.min(3, args.photoUploads.length)) {
+    checks.facePresence = 'fail_photo_uniqueness_heuristic';
+    summary.push('Photo set does not contain enough unique source images.');
+  }
+
+  const extremeAspectPhotos = photoPayloads.filter((photo) => {
+    if (!photo.dimensions) {
+      return false;
+    }
+    const { width, height } = photo.dimensions;
+    const aspectRatio = width / height;
+    return aspectRatio < 0.45 || aspectRatio > 2.2;
+  }).length;
+  if (extremeAspectPhotos > Math.floor(args.photoUploads.length / 2)) {
+    checks.safety = 'review_required_extreme_crop_heuristic';
+    summary.push('Most photos have extreme aspect ratios and should be reviewed for safe/usable framing.');
+  }
+
+  let voiceBytes = 0;
+  let estimatedVoiceDurationSec = 0;
+  let wavMetrics: ReturnType<typeof analyzeWavMetrics> = null;
+  if (!args.voiceUpload) {
+    checks.voiceQuality = 'fail_missing_voice';
+    summary.push('Voice sample is missing.');
+  } else {
+    const voiceSource = await fetchSourceAssetBytes(args.voiceUpload);
+    voiceBytes = voiceSource.bytes.byteLength;
+    const voiceBytesArray = new Uint8Array(voiceSource.bytes);
+    if (!matchesUploadSignature(args.voiceUpload, voiceBytesArray)) {
+      throw new Error(`Voice upload ${args.voiceUpload.s3Key} failed file signature validation.`);
+    }
+    if (voiceSource.bytes.byteLength !== args.voiceUpload.bytes) {
+      throw new Error(`Voice upload ${args.voiceUpload.s3Key} bytes do not match upload metadata.`);
+    }
+    if (voiceSource.bytes.byteLength < 80_000) {
+      checks.voiceQuality = 'fail_voice_too_small';
+      summary.push('Voice sample is too small for reliable synthesis.');
+    }
+    wavMetrics = analyzeWavMetrics(voiceBytesArray);
+    estimatedVoiceDurationSec = wavMetrics ? Math.round(wavMetrics.durationSec) : estimateVoiceDurationSec(args.voiceUpload, voiceSource.bytes.byteLength);
+    if (estimatedVoiceDurationSec < 25 || estimatedVoiceDurationSec > 75) {
+      checks.voiceQuality = 'fail_voice_duration_heuristic';
+      summary.push(`Estimated voice duration ${String(estimatedVoiceDurationSec)}s is outside the accepted range.`);
+    }
+    if (wavMetrics) {
+      if (wavMetrics.sampleRate < 16_000) {
+        checks.voiceQuality = 'fail_voice_sample_rate';
+        summary.push(`Voice sample rate ${String(wavMetrics.sampleRate)}Hz is below the accepted threshold.`);
+      }
+      if (wavMetrics.rms !== null && wavMetrics.rms < 0.015) {
+        checks.voiceQuality = 'fail_voice_low_energy';
+        summary.push('Voice sample appears too quiet for reliable synthesis.');
+      }
+      if (wavMetrics.silenceRatio !== null && wavMetrics.silenceRatio > 0.95) {
+        checks.voiceQuality = 'fail_voice_silence';
+        summary.push('Voice sample appears mostly silent.');
+      }
+    }
+  }
+
+  return {
+    approved: summary.length === 0,
+    checks,
+    summary: summary.length > 0 ? summary : ['Moderation heuristics accepted the intake media set.'],
+    details: {
+      mode: 'api_local_heuristic',
+      photoCount: args.photoUploads.length,
+      uniquePhotoCount: uniquePhotoHashes.size,
+      undersizedPhotos,
+      lowResolutionPhotos,
+      portraitFriendlyPhotos,
+      extremeAspectPhotos,
+      unresolvedDimensions,
+      imageDimensions: photoPayloads.map((photo) => photo.dimensions),
+      voiceBytes,
+      estimatedVoiceDurationSec,
+      wavMetrics
+    }
   };
 }
 
@@ -2067,6 +2487,26 @@ export function registerProviderRoutes(app: FastifyInstance): void {
         providerTaskId: payload.providerTaskId,
         status: payload.status
       });
+    } catch (error) {
+      return sendProviderError(reply, request, error);
+    }
+  });
+
+  app.post('/moderation/check', async (request, reply) => {
+    if (!hasProviderAuth(request)) {
+      return reply.status(401).send({ message: 'Unauthorized provider request.' });
+    }
+
+    try {
+      const payload = moderationCheckRequestSchema.parse(request.body);
+      await loadOrderContext(payload.orderId, payload.userId);
+
+      const result = await runModerationCheck({
+        photoUploads: payload.photoUploads,
+        voiceUpload: payload.voiceUpload
+      });
+
+      return reply.send(result);
     } catch (error) {
       return sendProviderError(reply, request, error);
     }

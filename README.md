@@ -104,7 +104,8 @@ This repo is no longer just a thin scaffold. The current build includes:
   - signed watermarked preview artifact (`preview_video`)
 
 - Render pipeline
-  - moderation step with local heuristic media checks
+  - moderation step with structured media checks (file signature, image dimensions, framing heuristics, and WAV voice analysis)
+  - moderation provider contract via `/moderation/check`
   - voice clone + voice render
   - aggregate narration/dialogue tracks plus per-shot audio artifacts
   - character profile scaffold generation
@@ -160,6 +161,8 @@ For the full build ledger, use [TASKS.md](/home/totallymajor/projects/LittleLege
   - `PARENT_AUTH_SECRET` (HMAC secret for signed parent access tokens)
   - `PARENT_AUTH_TTL_SEC` (token lifetime)
 - To run model + scene generation through local API provider routes, set worker envs:
+  - `MODERATION_PROVIDER_MODE=http`
+  - `MODERATION_PROVIDER_BASE_URL=http://localhost:4000`
   - `VOICE_PROVIDER_MODE=http`
   - `VOICE_PROVIDER_BASE_URL=http://localhost:4000`
   - `SCENE_PROVIDER_MODE=http`

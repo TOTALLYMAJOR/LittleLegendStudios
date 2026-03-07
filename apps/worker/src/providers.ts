@@ -24,6 +24,19 @@ export interface CharacterProfile {
   modelStyle: string;
 }
 
+export interface ModerationResult {
+  provider: string;
+  approved: boolean;
+  checks: {
+    photoQuality: string;
+    facePresence: string;
+    safety: string;
+    voiceQuality: string;
+  };
+  summary: string[];
+  details: Record<string, unknown>;
+}
+
 export interface VoiceCloneResult {
   provider: string;
   voiceCloneId: string;
@@ -74,6 +87,15 @@ export interface ProviderTaskStatusResult {
   output: Record<string, unknown>;
   errorText: string | null;
   lastPolledAt: string | null;
+}
+
+export interface ModerationProvider {
+  checkIntake(args: {
+    orderId: string;
+    userId: string;
+    photoUploads: WorkerUpload[];
+    voiceUpload: WorkerUpload | null;
+  }): Promise<ModerationResult>;
 }
 
 export interface VoiceProvider {
@@ -127,6 +149,7 @@ export interface SceneProvider {
 }
 
 export interface ProviderRegistry {
+  moderation: ModerationProvider;
   voice: VoiceProvider;
   scene: SceneProvider;
 }
@@ -264,6 +287,37 @@ class StubVoiceProvider implements VoiceProvider {
   }
 }
 
+class StubModerationProvider implements ModerationProvider {
+  async checkIntake(args: {
+    orderId: string;
+    userId: string;
+    photoUploads: WorkerUpload[];
+    voiceUpload: WorkerUpload | null;
+  }): Promise<ModerationResult> {
+    const photoCount = args.photoUploads.length;
+    const approved = photoCount >= 5 && photoCount <= 15 && Boolean(args.voiceUpload);
+
+    return {
+      provider: 'stub_moderation',
+      approved,
+      checks: {
+        photoQuality: approved ? 'pass_stub_metadata' : 'fail_stub_metadata',
+        facePresence: approved ? 'pass_stub_metadata' : 'fail_stub_metadata',
+        safety: 'pass_stub_metadata',
+        voiceQuality: args.voiceUpload ? 'pass_stub_metadata' : 'fail_stub_metadata'
+      },
+      summary: approved
+        ? ['Stub moderation accepted intake based on metadata shape.']
+        : ['Stub moderation rejected intake due to missing required upload counts.'],
+      details: {
+        orderId: args.orderId,
+        photoCount,
+        voiceUploadPresent: Boolean(args.voiceUpload)
+      }
+    };
+  }
+}
+
 class StubSceneProvider implements SceneProvider {
   async createCharacterPack(args: {
     orderId: string;
@@ -372,6 +426,18 @@ const voiceCloneResponseSchema = z.object({
   voiceCloneId: z.string().min(1),
   voiceCloneArtifactKey: z.string().min(1).optional(),
   voiceCloneMeta: z.record(z.unknown()).optional()
+});
+
+const moderationResponseSchema = z.object({
+  approved: z.boolean(),
+  checks: z.object({
+    photoQuality: z.string().min(1),
+    facePresence: z.string().min(1),
+    safety: z.string().min(1),
+    voiceQuality: z.string().min(1)
+  }),
+  summary: z.array(z.string()),
+  details: z.record(z.unknown()).optional()
 });
 
 const voiceRenderResponseSchema = z.object({
@@ -524,6 +590,63 @@ class HttpVoiceProvider implements VoiceProvider {
         artifactKey: track.artifactKey,
         meta: track.meta ?? {}
       }))
+    };
+  }
+}
+
+class HttpModerationProvider implements ModerationProvider {
+  constructor(
+    private readonly baseUrl: string,
+    private readonly timeoutMs: number,
+    private readonly authToken?: string
+  ) {}
+
+  private async post<T extends z.ZodTypeAny>(path: string, body: Record<string, unknown>, schema: T): Promise<z.infer<T>> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    try {
+      const response = await fetch(`${this.baseUrl}${path}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(this.authToken ? { Authorization: `Bearer ${this.authToken}` } : {})
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status} from ${path}`);
+      }
+      const json = await response.json();
+      return schema.parse(json);
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  async checkIntake(args: {
+    orderId: string;
+    userId: string;
+    photoUploads: WorkerUpload[];
+    voiceUpload: WorkerUpload | null;
+  }): Promise<ModerationResult> {
+    const response = await this.post(
+      '/moderation/check',
+      {
+        orderId: args.orderId,
+        userId: args.userId,
+        photoUploads: args.photoUploads,
+        voiceUpload: args.voiceUpload
+      },
+      moderationResponseSchema
+    );
+
+    return {
+      provider: 'http_moderation',
+      approved: response.approved,
+      checks: response.checks,
+      summary: response.summary,
+      details: response.details ?? {}
     };
   }
 }
@@ -694,6 +817,18 @@ function resolveVoiceProvider(): VoiceProvider {
   return new StubVoiceProvider();
 }
 
+function resolveModerationProvider(): ModerationProvider {
+  if (env.MODERATION_PROVIDER_MODE === 'http' && env.MODERATION_PROVIDER_BASE_URL) {
+    return new HttpModerationProvider(
+      normalizeBaseUrl(env.MODERATION_PROVIDER_BASE_URL),
+      env.PROVIDER_HTTP_TIMEOUT_MS,
+      env.PROVIDER_AUTH_TOKEN
+    );
+  }
+
+  return new StubModerationProvider();
+}
+
 function resolveSceneProvider(): SceneProvider {
   if (env.SCENE_PROVIDER_MODE === 'http' && env.SCENE_PROVIDER_BASE_URL) {
     return new HttpSceneProvider(
@@ -708,6 +843,7 @@ function resolveSceneProvider(): SceneProvider {
 
 export function buildProviderRegistry(): ProviderRegistry {
   return {
+    moderation: resolveModerationProvider(),
     voice: resolveVoiceProvider(),
     scene: resolveSceneProvider()
   };

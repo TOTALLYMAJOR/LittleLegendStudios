@@ -23,6 +23,21 @@ interface SeedTheme {
   };
 }
 
+interface PremiumShotTemplateBlueprint {
+  id: string;
+  shotType: 'narration' | 'dialogue';
+  label: string;
+  targetDurationSec: number;
+  durationRangeSec: [number, number];
+  sceneIndex: number;
+  camera?: string;
+  lighting?: string;
+  characterPresence: 'offscreen' | 'hero';
+  emotion?: string;
+  gesture?: string;
+  onScreenSpeaking?: boolean;
+}
+
 function sceneSlug(name: string): string {
   return name.toLowerCase().replaceAll(/[^a-z0-9]+/g, '_').replaceAll(/^_|_$/g, '');
 }
@@ -142,6 +157,130 @@ function buildSceneManifest(themeSlug: string, sceneNames: string[]): Record<str
   });
 }
 
+function buildPremiumShotTemplates(themeSlug: string, sceneNames: string[]): Record<string, unknown>[] {
+  const blueprints: PremiumShotTemplateBlueprint[] = [
+    {
+      id: 'opening_overture',
+      shotType: 'narration',
+      label: 'Opening Overture',
+      targetDurationSec: 8,
+      durationRangeSec: [7, 10],
+      sceneIndex: 0,
+      camera: 'wide_establishing_pan',
+      lighting: 'golden_hour_volumetric',
+      characterPresence: 'offscreen',
+      emotion: 'wonder'
+    },
+    {
+      id: 'call_to_action',
+      shotType: 'dialogue',
+      label: 'Call To Action',
+      targetDurationSec: 7,
+      durationRangeSec: [6, 9],
+      sceneIndex: 1,
+      camera: 'hero_low_angle',
+      lighting: 'cinematic_soft_fill',
+      characterPresence: 'hero',
+      emotion: 'curious',
+      gesture: 'look_up',
+      onScreenSpeaking: true
+    },
+    {
+      id: 'first_discovery',
+      shotType: 'narration',
+      label: 'First Discovery',
+      targetDurationSec: 9,
+      durationRangeSec: [8, 11],
+      sceneIndex: 2,
+      camera: 'tracking_push_in',
+      lighting: 'contrast_rim',
+      characterPresence: 'offscreen',
+      emotion: 'delight'
+    },
+    {
+      id: 'hero_promise',
+      shotType: 'dialogue',
+      label: 'Hero Promise',
+      targetDurationSec: 8,
+      durationRangeSec: [7, 10],
+      sceneIndex: 3,
+      camera: 'hero_low_angle_push',
+      lighting: 'hero_key_fill',
+      characterPresence: 'hero',
+      emotion: 'confident',
+      gesture: 'point_forward',
+      onScreenSpeaking: true
+    },
+    {
+      id: 'rising_adventure',
+      shotType: 'narration',
+      label: 'Rising Adventure',
+      targetDurationSec: 10,
+      durationRangeSec: [8, 12],
+      sceneIndex: 5,
+      camera: 'tracking_action_orbit',
+      lighting: 'cinematic_contrast',
+      characterPresence: 'offscreen',
+      emotion: 'courage'
+    },
+    {
+      id: 'midpoint_turn',
+      shotType: 'dialogue',
+      label: 'Midpoint Turn',
+      targetDurationSec: 8,
+      durationRangeSec: [7, 10],
+      sceneIndex: 6,
+      camera: 'medium_tracking_closeup',
+      lighting: 'contrast_rim',
+      characterPresence: 'hero',
+      emotion: 'surprised',
+      gesture: 'reach_out',
+      onScreenSpeaking: true
+    },
+    {
+      id: 'grand_climax',
+      shotType: 'narration',
+      label: 'Grand Climax',
+      targetDurationSec: 12,
+      durationRangeSec: [10, 14],
+      sceneIndex: 8,
+      camera: 'spiral_orbit_reveal',
+      lighting: 'warm_emotional_glow',
+      characterPresence: 'offscreen',
+      emotion: 'triumph'
+    },
+    {
+      id: 'storybook_ending',
+      shotType: 'dialogue',
+      label: 'Storybook Ending',
+      targetDurationSec: 10,
+      durationRangeSec: [8, 12],
+      sceneIndex: 9,
+      camera: 'emotional_pullback',
+      lighting: 'warm_emotional_glow',
+      characterPresence: 'hero',
+      emotion: 'joyful',
+      gesture: 'celebrate',
+      onScreenSpeaking: true
+    }
+  ];
+
+  return blueprints.map((blueprint) => ({
+    id: blueprint.id,
+    shotType: blueprint.shotType,
+    label: blueprint.label,
+    targetDurationSec: blueprint.targetDurationSec,
+    durationRangeSec: blueprint.durationRangeSec,
+    preferredSceneId: `${themeSlug}_${sceneSlug(sceneNames[blueprint.sceneIndex] ?? sceneNames[0] ?? 'scene')}`,
+    ...(blueprint.camera ? { camera: blueprint.camera } : {}),
+    ...(blueprint.lighting ? { lighting: blueprint.lighting } : {}),
+    characterPresence: blueprint.characterPresence,
+    ...(blueprint.emotion ? { emotion: blueprint.emotion } : {}),
+    ...(blueprint.gesture ? { gesture: blueprint.gesture } : {}),
+    ...(blueprint.onScreenSpeaking !== undefined ? { onScreenSpeaking: blueprint.onScreenSpeaking } : {})
+  }));
+}
+
 const defaultThemes = [
   {
     slug: 'space-adventure',
@@ -160,41 +299,29 @@ const defaultThemes = [
       'Homeward Sky'
     ],
     manifest: {
-      heroShotTemplates: 4,
+      heroShotTemplates: 8,
       environmentCount: 10,
       style: 'cinematic-stylized',
       sceneArchitecture: '2.5d-parallax',
-      durationMinSec: 20,
-      durationMaxSec: 40,
+      durationMinSec: 64,
+      durationMaxSec: 84,
       palette: ['nebula_purple', 'crystal_blue', 'sun_gold'],
       globalFx: ['dust_particles', 'soft_bloom'],
-      defaultShotCount: 4,
+      defaultShotCount: 8,
       targetAspectRatio: '16:9',
-      targetDurationSec: 30,
-      shotTemplates: [
-        { id: 'intro', shotType: 'narration', label: 'Intro', targetDurationSec: 7, characterPresence: 'offscreen' },
-        {
-          id: 'hero_moment',
-          shotType: 'dialogue',
-          label: 'Hero Moment',
-          targetDurationSec: 6,
-          characterPresence: 'hero',
-          emotion: 'confident',
-          gesture: 'point_forward',
-          onScreenSpeaking: true
-        },
-        { id: 'adventure', shotType: 'narration', label: 'Adventure', targetDurationSec: 9, characterPresence: 'offscreen' },
-        {
-          id: 'ending',
-          shotType: 'dialogue',
-          label: 'Ending',
-          targetDurationSec: 8,
-          characterPresence: 'hero',
-          emotion: 'joyful',
-          gesture: 'celebrate',
-          onScreenSpeaking: true
-        }
-      ],
+      targetDurationSec: 72,
+      shotTemplates: buildPremiumShotTemplates('space-adventure', [
+        'Alien Planet Intro',
+        'Rocket Launchpad',
+        'Nebula Ridge',
+        'Asteroid Drift',
+        'Starlight Canyon',
+        'Orbital Bridge',
+        'Crystal Moonbase',
+        'Comet Trail Run',
+        'Zero G Dome',
+        'Homeward Sky'
+      ]),
       scenes: []
     }
   },
@@ -215,41 +342,29 @@ const defaultThemes = [
       'Sunset Roar Ridge'
     ],
     manifest: {
-      heroShotTemplates: 4,
+      heroShotTemplates: 8,
       environmentCount: 10,
       style: 'cinematic-stylized',
       sceneArchitecture: '2.5d-parallax',
-      durationMinSec: 20,
-      durationMaxSec: 40,
+      durationMinSec: 64,
+      durationMaxSec: 84,
       palette: ['jungle_green', 'amber_sunlight', 'volcanic_orange'],
       globalFx: ['drifting_mist', 'pollen_particles'],
-      defaultShotCount: 4,
+      defaultShotCount: 8,
       targetAspectRatio: '16:9',
-      targetDurationSec: 30,
-      shotTemplates: [
-        { id: 'intro', shotType: 'narration', label: 'Intro', targetDurationSec: 7, characterPresence: 'offscreen' },
-        {
-          id: 'hero_moment',
-          shotType: 'dialogue',
-          label: 'Hero Moment',
-          targetDurationSec: 6,
-          characterPresence: 'hero',
-          emotion: 'confident',
-          gesture: 'point_forward',
-          onScreenSpeaking: true
-        },
-        { id: 'adventure', shotType: 'narration', label: 'Adventure', targetDurationSec: 9, characterPresence: 'offscreen' },
-        {
-          id: 'ending',
-          shotType: 'dialogue',
-          label: 'Ending',
-          targetDurationSec: 8,
-          characterPresence: 'hero',
-          emotion: 'joyful',
-          gesture: 'celebrate',
-          onScreenSpeaking: true
-        }
-      ],
+      targetDurationSec: 72,
+      shotTemplates: buildPremiumShotTemplates('dinosaur-explorer', [
+        'Jungle Gate',
+        'Fern Valley',
+        'Volcano Rim',
+        'River Crossing',
+        'Amber Cave',
+        'Dino Footpath',
+        'Rainforest Canopy',
+        'Lava Glow Plains',
+        'Stone Arch Pass',
+        'Sunset Roar Ridge'
+      ]),
       scenes: []
     }
   },
@@ -270,41 +385,29 @@ const defaultThemes = [
       'Victory Overlook'
     ],
     manifest: {
-      heroShotTemplates: 4,
+      heroShotTemplates: 8,
       environmentCount: 10,
       style: 'cinematic-stylized',
       sceneArchitecture: '2.5d-parallax',
-      durationMinSec: 20,
-      durationMaxSec: 40,
+      durationMinSec: 64,
+      durationMaxSec: 84,
       palette: ['hero_red', 'electric_blue', 'chrome_silver'],
       globalFx: ['energy_trails', 'light_flares'],
-      defaultShotCount: 4,
+      defaultShotCount: 8,
       targetAspectRatio: '16:9',
-      targetDurationSec: 30,
-      shotTemplates: [
-        { id: 'intro', shotType: 'narration', label: 'Intro', targetDurationSec: 7, characterPresence: 'offscreen' },
-        {
-          id: 'hero_moment',
-          shotType: 'dialogue',
-          label: 'Hero Moment',
-          targetDurationSec: 6,
-          characterPresence: 'hero',
-          emotion: 'confident',
-          gesture: 'point_forward',
-          onScreenSpeaking: true
-        },
-        { id: 'adventure', shotType: 'narration', label: 'Adventure', targetDurationSec: 9, characterPresence: 'offscreen' },
-        {
-          id: 'ending',
-          shotType: 'dialogue',
-          label: 'Ending',
-          targetDurationSec: 8,
-          characterPresence: 'hero',
-          emotion: 'joyful',
-          gesture: 'celebrate',
-          onScreenSpeaking: true
-        }
-      ],
+      targetDurationSec: 72,
+      shotTemplates: buildPremiumShotTemplates('superhero-city', [
+        'City Skyline Dawn',
+        'Rooftop Sprint',
+        'Neon Avenue',
+        'Skybridge Leap',
+        'Power Core Plaza',
+        'Subway Wind Tunnel',
+        'Hero Tower',
+        'Downtown Rescue',
+        'Rainlit Crosswalk',
+        'Victory Overlook'
+      ]),
       scenes: []
     }
   },
@@ -325,41 +428,29 @@ const defaultThemes = [
       'Surface Light Return'
     ],
     manifest: {
-      heroShotTemplates: 4,
+      heroShotTemplates: 8,
       environmentCount: 10,
       style: 'cinematic-stylized',
       sceneArchitecture: '2.5d-parallax',
-      durationMinSec: 20,
-      durationMaxSec: 40,
+      durationMinSec: 64,
+      durationMaxSec: 84,
       palette: ['aqua_blue', 'coral_pink', 'gold_rays'],
       globalFx: ['bubbles', 'caustic_light'],
-      defaultShotCount: 4,
+      defaultShotCount: 8,
       targetAspectRatio: '16:9',
-      targetDurationSec: 30,
-      shotTemplates: [
-        { id: 'intro', shotType: 'narration', label: 'Intro', targetDurationSec: 7, characterPresence: 'offscreen' },
-        {
-          id: 'hero_moment',
-          shotType: 'dialogue',
-          label: 'Hero Moment',
-          targetDurationSec: 6,
-          characterPresence: 'hero',
-          emotion: 'confident',
-          gesture: 'point_forward',
-          onScreenSpeaking: true
-        },
-        { id: 'adventure', shotType: 'narration', label: 'Adventure', targetDurationSec: 9, characterPresence: 'offscreen' },
-        {
-          id: 'ending',
-          shotType: 'dialogue',
-          label: 'Ending',
-          targetDurationSec: 8,
-          characterPresence: 'hero',
-          emotion: 'joyful',
-          gesture: 'celebrate',
-          onScreenSpeaking: true
-        }
-      ],
+      targetDurationSec: 72,
+      shotTemplates: buildPremiumShotTemplates('underwater-kingdom', [
+        'Coral Gate',
+        'Lantern Reef',
+        'Sunken Archway',
+        'Pearl Garden',
+        'Whale Song Trench',
+        'Kelp Cathedral',
+        'Crystal Tide Hall',
+        'Current Tunnel',
+        'Sea Crown Court',
+        'Surface Light Return'
+      ]),
       scenes: []
     }
   },
@@ -380,41 +471,29 @@ const defaultThemes = [
       'Lantern Road Home'
     ],
     manifest: {
-      heroShotTemplates: 4,
+      heroShotTemplates: 8,
       environmentCount: 10,
       style: 'cinematic-stylized',
       sceneArchitecture: '2.5d-parallax',
-      durationMinSec: 20,
-      durationMaxSec: 40,
+      durationMinSec: 64,
+      durationMaxSec: 84,
       palette: ['emerald_green', 'warm_gold', 'lavender_sky'],
       globalFx: ['fireflies', 'volumetric_haze'],
-      defaultShotCount: 4,
+      defaultShotCount: 8,
       targetAspectRatio: '16:9',
-      targetDurationSec: 30,
-      shotTemplates: [
-        { id: 'intro', shotType: 'narration', label: 'Intro', targetDurationSec: 7, characterPresence: 'offscreen' },
-        {
-          id: 'hero_moment',
-          shotType: 'dialogue',
-          label: 'Hero Moment',
-          targetDurationSec: 6,
-          characterPresence: 'hero',
-          emotion: 'confident',
-          gesture: 'point_forward',
-          onScreenSpeaking: true
-        },
-        { id: 'adventure', shotType: 'narration', label: 'Adventure', targetDurationSec: 9, characterPresence: 'offscreen' },
-        {
-          id: 'ending',
-          shotType: 'dialogue',
-          label: 'Ending',
-          targetDurationSec: 8,
-          characterPresence: 'hero',
-          emotion: 'joyful',
-          gesture: 'celebrate',
-          onScreenSpeaking: true
-        }
-      ],
+      targetDurationSec: 72,
+      shotTemplates: buildPremiumShotTemplates('fantasy-kingdom', [
+        'Castle Courtyard',
+        'Enchanted Grove',
+        'Crystal Bridge',
+        'Dragon Watch Hill',
+        'Moonlit Keep',
+        'Rune Library',
+        'Whispering Woods',
+        'Starfall Meadow',
+        'Royal Great Hall',
+        'Lantern Road Home'
+      ]),
       scenes: []
     }
   }
@@ -453,8 +532,8 @@ export async function seedThemes(): Promise<void> {
         theme.slug,
         theme.name,
         theme.description,
-        20,
-        40,
+        theme.manifest.durationMinSec,
+        theme.manifest.durationMaxSec,
         JSON.stringify({
           ...theme.manifest,
           scenes

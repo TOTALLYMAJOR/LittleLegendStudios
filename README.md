@@ -99,7 +99,7 @@ This repo is no longer just a thin scaffold. The current build includes:
 
 - Script generation + review
   - manifest-driven script planning
-  - 20-40 second seeded outputs
+  - premium seeded 64-84 second outputs with 8-beat theme packs
   - max 3 script versions per order
   - signed watermarked preview artifact (`preview_video`)
 
@@ -117,6 +117,7 @@ This repo is no longer just a thin scaffold. The current build includes:
 
 - Theme system
   - seeded launch themes with 10-scene manifests each
+  - premium 8-shot theme packs with explicit story-beat scene assignments
   - richer scene metadata: anchors, palette, global FX, audio cues, grade, camera motion
   - seeded placeholder audio assets for ambience, music beds, and SFX
 
@@ -136,6 +137,7 @@ This repo is no longer just a thin scaffold. The current build includes:
   - email notification failure view
   - retry request history view
   - provider task failure triage view
+  - retention and purge history view
 
 - Reliability + lifecycle controls
   - Stripe stub + optional real checkout/webhook flow
@@ -145,7 +147,9 @@ This repo is no longer just a thin scaffold. The current build includes:
   - delivery-ready and render-failure email logging
   - manual order data deletion
   - best-effort provider-side cleanup hooks
+  - provider cleanup coverage + verification reporting across discovered provider-owned targets
   - optional retention automation for aged delivered/refunded/expired orders
+  - persisted purge event history for manual cleanup and automated sweeps
 
 For the full build ledger, use [TASKS.md](/home/totallymajor/projects/LittleLegendStudios/TASKS.md).
 
@@ -186,4 +190,7 @@ For the full build ledger, use [TASKS.md](/home/totallymajor/projects/LittleLege
   - `ORDER_DATA_RETENTION_DAYS`
   - `ORDER_DATA_RETENTION_SWEEP_INTERVAL_MS`
   - `ORDER_DATA_RETENTION_SWEEP_LIMIT`
+- Admin visibility routes:
+  - `GET /admin/order-data-purges`
+  - web view at `/admin/retention-history`
 - This is a foundation for Milestones M1-M3 from the product spec.

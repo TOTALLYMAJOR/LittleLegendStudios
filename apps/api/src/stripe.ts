@@ -51,7 +51,7 @@ export async function createCheckoutSession(input: CreateCheckoutSessionInput): 
             unit_amount: input.amountCents,
             product_data: {
               name: 'Little Legend Cinematic Keepsake Video',
-              description: 'Personalized 20-40 second cinematic child story video'
+              description: 'Personalized 64-84 second cinematic child story video'
             }
           }
         }

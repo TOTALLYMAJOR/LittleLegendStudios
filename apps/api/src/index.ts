@@ -85,11 +85,55 @@ interface ProviderTaskStatusRow {
   updated_at: string;
 }
 
-interface ProviderDeleteResult {
+type ProviderDeleteTargetType = 'voice_clone' | 'video' | 'render' | 'hosted_asset';
+type ProviderDeleteIdentifierSource =
+  | 'artifact_meta'
+  | 'provider_task'
+  | 'provider_task_output'
+  | 'artifact_meta_output'
+  | 'provider_lookup';
+type ProviderDeleteVerification =
+  | 'provider_confirmed'
+  | 'already_absent'
+  | 'best_effort'
+  | 'not_supported'
+  | 'not_attempted';
+
+interface ProviderDeleteTarget {
   provider: string;
   target: string;
+  targetType: ProviderDeleteTargetType;
+  identifierSource: ProviderDeleteIdentifierSource;
+}
+
+interface ProviderDeleteResult {
+  provider: ProviderDeleteTarget['provider'];
+  target: ProviderDeleteTarget['target'];
+  targetType: ProviderDeleteTargetType;
+  identifierSource: ProviderDeleteIdentifierSource;
   status: 'deleted' | 'skipped' | 'failed';
+  verification: ProviderDeleteVerification;
   detail: string;
+}
+
+interface ProviderDeletionSummary {
+  discoveredTargetCount: number;
+  attempted: number;
+  deleted: number;
+  skipped: number;
+  failed: number;
+  verified: number;
+  targets: ProviderDeleteTarget[];
+  byProvider: Array<{
+    provider: string;
+    discoveredTargetCount: number;
+    attempted: number;
+    deleted: number;
+    skipped: number;
+    failed: number;
+    verified: number;
+  }>;
+  results: ProviderDeleteResult[];
 }
 
 interface LatestScriptRow {
@@ -197,6 +241,31 @@ interface RetryHistoryRow {
   created_at: string;
 }
 
+interface ProviderTaskCleanupRow {
+  provider_task_id: string;
+  provider: string;
+  output_json: Record<string, unknown>;
+}
+
+type OrderDataPurgeTriggerSource = 'manual_parent' | 'manual_admin' | 'retention_sweep';
+type OrderDataPurgeOutcome = 'succeeded' | 'failed';
+
+interface OrderDataPurgeEventRow {
+  id: string;
+  order_id: string;
+  parent_email: string;
+  trigger_source: OrderDataPurgeTriggerSource;
+  actor: 'parent' | 'admin' | null;
+  previous_order_status: OrderStatus;
+  resulting_order_status: OrderStatus;
+  outcome: OrderDataPurgeOutcome;
+  deleted_asset_count: number;
+  provider_deletion_json: Partial<ProviderDeletionSummary>;
+  retention_window_days: number | null;
+  error_text: string | null;
+  created_at: string;
+}
+
 interface ScenePlanEntry {
   shotNumber: number;
   shotType: 'narration' | 'dialogue';
@@ -282,6 +351,13 @@ const adminRetryHistoryQuerySchema = z.object({
   orderId: z.string().uuid().optional(),
   actor: z.enum(['parent', 'admin']).optional(),
   accepted: z.coerce.boolean().optional()
+});
+
+const adminOrderDataPurgeHistoryQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(25),
+  orderId: z.string().uuid().optional(),
+  triggerSource: z.enum(['manual_parent', 'manual_admin', 'retention_sweep']).optional(),
+  outcome: z.enum(['succeeded', 'failed']).optional()
 });
 
 const parentRetrySchema = z.object({
@@ -1091,26 +1167,33 @@ async function readDeleteResponseText(response: Response): Promise<string> {
   return text.trim().slice(0, 300);
 }
 
-async function deleteElevenLabsVoiceClone(voiceCloneId: string): Promise<ProviderDeleteResult> {
-  if (voiceCloneId.startsWith('voice_')) {
-    return {
-      provider: 'elevenlabs',
-      target: voiceCloneId,
-      status: 'skipped',
-      detail: 'Local/stub voice clone id.'
-    };
+function createProviderDeleteResult(
+  target: ProviderDeleteTarget,
+  status: ProviderDeleteResult['status'],
+  verification: ProviderDeleteVerification,
+  detail: string
+): ProviderDeleteResult {
+  return {
+    provider: target.provider,
+    target: target.target,
+    targetType: target.targetType,
+    identifierSource: target.identifierSource,
+    status,
+    verification,
+    detail
+  };
+}
+
+async function deleteElevenLabsVoiceClone(target: ProviderDeleteTarget): Promise<ProviderDeleteResult> {
+  if (target.target.startsWith('voice_')) {
+    return createProviderDeleteResult(target, 'skipped', 'not_supported', 'Local/stub voice clone id.');
   }
 
   if (!env.ELEVENLABS_API_KEY) {
-    return {
-      provider: 'elevenlabs',
-      target: voiceCloneId,
-      status: 'skipped',
-      detail: 'ELEVENLABS_API_KEY not configured.'
-    };
+    return createProviderDeleteResult(target, 'skipped', 'not_supported', 'ELEVENLABS_API_KEY not configured.');
   }
 
-  const endpoint = `${normalizeBaseUrl(env.ELEVENLABS_BASE_URL)}/v1/voices/${encodeURIComponent(voiceCloneId)}`;
+  const endpoint = `${normalizeBaseUrl(env.ELEVENLABS_BASE_URL)}/v1/voices/${encodeURIComponent(target.target)}`;
   const response = await fetch(endpoint, {
     method: 'DELETE',
     headers: {
@@ -1119,47 +1202,42 @@ async function deleteElevenLabsVoiceClone(voiceCloneId: string): Promise<Provide
   });
 
   if (response.ok || response.status === 404) {
-    return {
-      provider: 'elevenlabs',
-      target: voiceCloneId,
-      status: 'deleted',
-      detail: response.status === 404 ? 'Voice clone already absent at provider.' : 'Voice clone deleted.'
-    };
+    return createProviderDeleteResult(
+      target,
+      'deleted',
+      response.status === 404 ? 'already_absent' : 'provider_confirmed',
+      response.status === 404 ? 'Voice clone already absent at provider.' : 'Voice clone deleted.'
+    );
   }
 
-  return {
-    provider: 'elevenlabs',
-    target: voiceCloneId,
-    status: 'failed',
-    detail: `HTTP ${response.status} ${await readDeleteResponseText(response)}`
-  };
+  return createProviderDeleteResult(
+    target,
+    'failed',
+    'not_attempted',
+    `HTTP ${response.status} ${await readDeleteResponseText(response)}`
+  );
 }
 
-async function deleteHeyGenVideo(videoId: string): Promise<ProviderDeleteResult> {
+async function deleteHeyGenVideo(target: ProviderDeleteTarget): Promise<ProviderDeleteResult> {
   if (!env.HEYGEN_API_KEY) {
-    return {
-      provider: 'heygen',
-      target: videoId,
-      status: 'skipped',
-      detail: 'HEYGEN_API_KEY not configured.'
-    };
+    return createProviderDeleteResult(target, 'skipped', 'not_supported', 'HEYGEN_API_KEY not configured.');
   }
 
   const base = normalizeBaseUrl(env.HEYGEN_BASE_URL);
   const attempts: Array<{ method: 'DELETE' | 'POST'; url: string; body?: Record<string, unknown> }> = [
     {
       method: 'DELETE',
-      url: `${base}/v1/video.delete?video_id=${encodeURIComponent(videoId)}`
+      url: `${base}/v1/video.delete?video_id=${encodeURIComponent(target.target)}`
     },
     {
       method: 'DELETE',
       url: `${base}/v1/video.delete`,
-      body: { video_id: videoId }
+      body: { video_id: target.target }
     },
     {
       method: 'POST',
       url: `${base}/v1/video.delete`,
-      body: { video_id: videoId }
+      body: { video_id: target.target }
     }
   ];
 
@@ -1176,23 +1254,18 @@ async function deleteHeyGenVideo(videoId: string): Promise<ProviderDeleteResult>
     });
 
     if (response.ok || response.status === 404) {
-      return {
-        provider: 'heygen',
-        target: videoId,
-        status: 'deleted',
-        detail: response.status === 404 ? 'Video already absent at provider.' : 'Video deleted.'
-      };
+      return createProviderDeleteResult(
+        target,
+        'deleted',
+        response.status === 404 ? 'already_absent' : 'provider_confirmed',
+        response.status === 404 ? 'Video already absent at provider.' : 'Video deleted.'
+      );
     }
 
     lastFailure = `HTTP ${response.status} ${await readDeleteResponseText(response)}`;
   }
 
-  return {
-    provider: 'heygen',
-    target: videoId,
-    status: 'failed',
-    detail: lastFailure
-  };
+  return createProviderDeleteResult(target, 'failed', 'not_attempted', lastFailure);
 }
 
 function collectShotstackAssetIds(payload: unknown): string[] {
@@ -1250,125 +1323,222 @@ async function lookupShotstackAssetIds(renderId: string): Promise<string[]> {
   return collectShotstackAssetIds(payload);
 }
 
-async function deleteShotstackRenderAssets(renderId: string): Promise<ProviderDeleteResult[]> {
+async function deleteShotstackHostedAsset(assetId: string): Promise<{
+  status: ProviderDeleteResult['status'];
+  verification: ProviderDeleteVerification;
+  detail: string;
+}> {
   if (!env.SHOTSTACK_API_KEY) {
-    return [
-      {
-        provider: 'shotstack',
-        target: renderId,
-        status: 'skipped',
-        detail: 'SHOTSTACK_API_KEY not configured.'
-      }
-    ];
+    return {
+      status: 'skipped',
+      verification: 'not_supported',
+      detail: 'SHOTSTACK_API_KEY not configured.'
+    };
+  }
+
+  const endpoint = `${normalizeBaseUrl(env.SHOTSTACK_BASE_URL)}/serve/${env.SHOTSTACK_STAGE}/assets/${encodeURIComponent(assetId)}`;
+  const response = await fetch(endpoint, {
+    method: 'DELETE',
+    headers: {
+      'x-api-key': env.SHOTSTACK_API_KEY
+    }
+  });
+
+  if (response.ok || response.status === 404) {
+    return {
+      status: 'deleted',
+      verification: response.status === 404 ? 'already_absent' : 'provider_confirmed',
+      detail: response.status === 404 ? 'Hosted asset already absent at provider.' : 'Hosted asset deleted.'
+    };
+  }
+
+  return {
+    status: 'failed',
+    verification: 'not_attempted',
+    detail: `HTTP ${response.status} ${await readDeleteResponseText(response)}`
+  };
+}
+
+async function deleteShotstackRenderAssets(target: ProviderDeleteTarget): Promise<ProviderDeleteResult[]> {
+  if (!env.SHOTSTACK_API_KEY) {
+    return [createProviderDeleteResult(target, 'skipped', 'not_supported', 'SHOTSTACK_API_KEY not configured.')];
   }
 
   try {
-    const assetIds = await lookupShotstackAssetIds(renderId);
+    const assetIds = await lookupShotstackAssetIds(target.target);
     if (assetIds.length === 0) {
-      return [
-        {
-          provider: 'shotstack',
-          target: renderId,
-          status: 'skipped',
-          detail: 'No hosted Shotstack assets found for render.'
-        }
-      ];
+      return [createProviderDeleteResult(target, 'skipped', 'best_effort', 'No hosted Shotstack assets found for render.')];
     }
 
     const results: ProviderDeleteResult[] = [];
     for (const assetId of assetIds) {
-      const endpoint = `${normalizeBaseUrl(env.SHOTSTACK_BASE_URL)}/serve/${env.SHOTSTACK_STAGE}/assets/${encodeURIComponent(assetId)}`;
-      const response = await fetch(endpoint, {
-        method: 'DELETE',
-        headers: {
-          'x-api-key': env.SHOTSTACK_API_KEY
-        }
-      });
-
+      const hostedAssetDelete = await deleteShotstackHostedAsset(assetId);
       results.push({
         provider: 'shotstack',
         target: assetId,
-        status: response.ok || response.status === 404 ? 'deleted' : 'failed',
+        targetType: 'hosted_asset',
+        identifierSource: 'provider_lookup',
+        status: hostedAssetDelete.status,
+        verification: hostedAssetDelete.verification,
         detail:
-          response.ok || response.status === 404
-            ? response.status === 404
-              ? 'Asset already absent at provider.'
-              : `Deleted asset from render ${renderId}.`
-            : `HTTP ${response.status} ${await readDeleteResponseText(response)}`
+          hostedAssetDelete.status === 'deleted' && hostedAssetDelete.verification === 'provider_confirmed'
+            ? `Deleted hosted asset from render ${target.target}.`
+            : hostedAssetDelete.detail
       });
     }
 
     return results;
   } catch (error) {
-    return [
-      {
-        provider: 'shotstack',
-        target: renderId,
-        status: 'failed',
-        detail: (error as Error).message
-      }
-    ];
+    return [createProviderDeleteResult(target, 'failed', 'not_attempted', (error as Error).message)];
   }
 }
 
-async function runProviderDeleteHooks(orderId: string): Promise<ProviderDeleteResult[]> {
-  const results: ProviderDeleteResult[] = [];
-
-  const voiceCloneRows = await query<ArtifactMetaRow>(
-    `
-    SELECT meta_json
-    FROM artifacts
-    WHERE order_id = $1
-      AND kind = 'voice_clone_meta'
-    `,
-    [orderId]
-  );
-
-  const voiceCloneIds = Array.from(
-    new Set(
-      voiceCloneRows
-        .map((row) => row.meta_json?.voiceCloneId)
-        .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
-    )
-  );
-
-  for (const voiceCloneId of voiceCloneIds) {
-    results.push(await deleteElevenLabsVoiceClone(voiceCloneId));
+function dedupeProviderDeleteTargets(targets: ProviderDeleteTarget[]): ProviderDeleteTarget[] {
+  const byKey = new Map<string, ProviderDeleteTarget>();
+  for (const target of targets) {
+    const key = `${target.provider}:${target.targetType}:${target.target}`;
+    if (!byKey.has(key)) {
+      byKey.set(key, target);
+    }
   }
+  return Array.from(byKey.values());
+}
 
-  const providerTasks = await query<{ provider_task_id: string; provider: string }>(
-    `
-    SELECT provider_task_id, provider
-    FROM provider_tasks
-    WHERE order_id = $1
-    `,
-    [orderId]
-  );
+async function discoverProviderDeleteTargets(orderId: string): Promise<ProviderDeleteTarget[]> {
+  const [voiceCloneRows, providerTaskRows, artifactRows] = await Promise.all([
+    query<ArtifactMetaRow>(
+      `
+      SELECT meta_json
+      FROM artifacts
+      WHERE order_id = $1
+        AND kind = 'voice_clone_meta'
+      `,
+      [orderId]
+    ),
+    query<ProviderTaskCleanupRow>(
+      `
+      SELECT provider_task_id, provider, output_json
+      FROM provider_tasks
+      WHERE order_id = $1
+      `,
+      [orderId]
+    ),
+    query<{ kind: string; meta_json: Record<string, unknown> }>(
+      `
+      SELECT kind, meta_json
+      FROM artifacts
+      WHERE order_id = $1
+        AND kind IN ('shot_video', 'final_video', 'thumbnail')
+      `,
+      [orderId]
+    )
+  ]);
 
-  for (const task of providerTasks) {
-    if (task.provider === 'heygen') {
-      results.push(await deleteHeyGenVideo(task.provider_task_id));
-    } else if (task.provider === 'shotstack') {
-      results.push(...(await deleteShotstackRenderAssets(task.provider_task_id)));
+  const targets: ProviderDeleteTarget[] = [];
+
+  for (const row of voiceCloneRows) {
+    const voiceCloneId = row.meta_json?.voiceCloneId;
+    if (typeof voiceCloneId === 'string' && voiceCloneId.trim().length > 0) {
+      targets.push({
+        provider: 'elevenlabs',
+        target: voiceCloneId.trim(),
+        targetType: 'voice_clone',
+        identifierSource: 'artifact_meta'
+      });
     }
   }
 
-  return results;
+  for (const task of providerTaskRows) {
+    if (task.provider === 'heygen') {
+      targets.push({
+        provider: 'heygen',
+        target: task.provider_task_id,
+        targetType: 'video',
+        identifierSource: 'provider_task'
+      });
+    } else if (task.provider === 'shotstack') {
+      targets.push({
+        provider: 'shotstack',
+        target: task.provider_task_id,
+        targetType: 'render',
+        identifierSource: 'provider_task'
+      });
+    }
+  }
+
+  for (const row of artifactRows) {
+    const providerTaskId = row.meta_json?.providerTaskId;
+    if (typeof providerTaskId !== 'string' || providerTaskId.trim().length === 0) {
+      continue;
+    }
+
+    targets.push({
+      provider: row.kind === 'shot_video' ? 'heygen' : 'shotstack',
+      target: providerTaskId.trim(),
+      targetType: row.kind === 'shot_video' ? 'video' : 'render',
+      identifierSource: 'artifact_meta'
+    });
+  }
+
+  return dedupeProviderDeleteTargets(targets);
+}
+
+function summarizeProviderDeletion(targets: ProviderDeleteTarget[], results: ProviderDeleteResult[]): ProviderDeletionSummary {
+  const providers = Array.from(new Set([...targets.map((target) => target.provider), ...results.map((result) => result.provider)]));
+
+  return {
+    discoveredTargetCount: targets.length,
+    attempted: results.length,
+    deleted: results.filter((result) => result.status === 'deleted').length,
+    skipped: results.filter((result) => result.status === 'skipped').length,
+    failed: results.filter((result) => result.status === 'failed').length,
+    verified: results.filter((result) =>
+      result.verification === 'provider_confirmed' || result.verification === 'already_absent'
+    ).length,
+    targets,
+    byProvider: providers
+      .map((provider) => ({
+        provider,
+        discoveredTargetCount: targets.filter((target) => target.provider === provider).length,
+        attempted: results.filter((result) => result.provider === provider).length,
+        deleted: results.filter((result) => result.provider === provider && result.status === 'deleted').length,
+        skipped: results.filter((result) => result.provider === provider && result.status === 'skipped').length,
+        failed: results.filter((result) => result.provider === provider && result.status === 'failed').length,
+        verified: results.filter(
+          (result) =>
+            result.provider === provider &&
+            (result.verification === 'provider_confirmed' || result.verification === 'already_absent')
+        ).length
+      }))
+      .sort((left, right) => left.provider.localeCompare(right.provider)),
+    results
+  };
+}
+
+async function runProviderDeleteHooks(orderId: string): Promise<ProviderDeletionSummary> {
+  const targets = await discoverProviderDeleteTargets(orderId);
+  const results: ProviderDeleteResult[] = [];
+
+  for (const target of targets) {
+    if (target.provider === 'elevenlabs' && target.targetType === 'voice_clone') {
+      results.push(await deleteElevenLabsVoiceClone(target));
+    } else if (target.provider === 'heygen' && target.targetType === 'video') {
+      results.push(await deleteHeyGenVideo(target));
+    } else if (target.provider === 'shotstack' && target.targetType === 'render') {
+      results.push(...(await deleteShotstackRenderAssets(target)));
+    }
+  }
+
+  return summarizeProviderDeletion(targets, results);
 }
 
 async function deleteOrderAssociatedData(orderId: string): Promise<{
   deletedAssetCount: number;
-  providerDeletion: {
-    attempted: number;
-    deleted: number;
-    skipped: number;
-    failed: number;
-    results: ProviderDeleteResult[];
-  };
+  providerDeletion: ProviderDeletionSummary;
 }> {
   const uploadRows = await query<AssetKeyRow>('SELECT s3_key FROM uploads WHERE order_id = $1', [orderId]);
   const artifactRows = await query<AssetKeyRow>('SELECT s3_key FROM artifacts WHERE order_id = $1', [orderId]);
-  const providerDeleteResults = await runProviderDeleteHooks(orderId);
+  const providerDeletion = await runProviderDeleteHooks(orderId);
 
   const assetKeys = Array.from(new Set([...uploadRows, ...artifactRows].map((row) => row.s3_key)));
   await Promise.all(assetKeys.map((assetKey) => deleteAssetByKey(assetKey).catch(() => undefined)));
@@ -1381,14 +1551,51 @@ async function deleteOrderAssociatedData(orderId: string): Promise<{
 
   return {
     deletedAssetCount: assetKeys.length,
-    providerDeletion: {
-      attempted: providerDeleteResults.length,
-      deleted: providerDeleteResults.filter((result) => result.status === 'deleted').length,
-      skipped: providerDeleteResults.filter((result) => result.status === 'skipped').length,
-      failed: providerDeleteResults.filter((result) => result.status === 'failed').length,
-      results: providerDeleteResults
-    }
+    providerDeletion
   };
+}
+
+async function recordOrderDataPurgeEvent(input: {
+  orderId: string;
+  triggerSource: OrderDataPurgeTriggerSource;
+  actor: 'parent' | 'admin' | null;
+  previousOrderStatus: OrderStatus;
+  resultingOrderStatus: OrderStatus;
+  outcome: OrderDataPurgeOutcome;
+  deletedAssetCount: number;
+  providerDeletion?: ProviderDeletionSummary;
+  retentionWindowDays: number | null;
+  errorText: string | null;
+}): Promise<void> {
+  await query(
+    `
+    INSERT INTO order_data_purge_events (
+      order_id,
+      trigger_source,
+      actor,
+      previous_order_status,
+      resulting_order_status,
+      outcome,
+      deleted_asset_count,
+      provider_deletion_json,
+      retention_window_days,
+      error_text
+    )
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10)
+    `,
+    [
+      input.orderId,
+      input.triggerSource,
+      input.actor,
+      input.previousOrderStatus,
+      input.resultingOrderStatus,
+      input.outcome,
+      input.deletedAssetCount,
+      JSON.stringify(input.providerDeletion ?? {}),
+      input.retentionWindowDays,
+      input.errorText
+    ]
+  );
 }
 
 async function runOrderDataRetentionSweep(log: FastifyInstance['log']): Promise<void> {
@@ -1411,22 +1618,48 @@ async function runOrderDataRetentionSweep(log: FastifyInstance['log']): Promise<
   for (const row of candidateRows) {
     try {
       const cleanup = await deleteOrderAssociatedData(row.id);
+      const resultingOrderStatus = row.status === 'delivered' ? 'expired' : row.status;
       if (row.status === 'delivered') {
         await query(`UPDATE orders SET status = 'expired', updated_at = now() WHERE id = $1`, [row.id]);
       } else {
         await query('UPDATE orders SET updated_at = now() WHERE id = $1', [row.id]);
       }
 
+      await recordOrderDataPurgeEvent({
+        orderId: row.id,
+        triggerSource: 'retention_sweep',
+        actor: null,
+        previousOrderStatus: row.status,
+        resultingOrderStatus,
+        outcome: 'succeeded',
+        deletedAssetCount: cleanup.deletedAssetCount,
+        providerDeletion: cleanup.providerDeletion,
+        retentionWindowDays: env.ORDER_DATA_RETENTION_DAYS,
+        errorText: null
+      });
+
       log.info(
         {
           orderId: row.id,
           previousStatus: row.status,
+          resultingOrderStatus,
           deletedAssetCount: cleanup.deletedAssetCount,
           providerDeletion: cleanup.providerDeletion
         },
         'Order data retention sweep cleaned up order data'
       );
     } catch (error) {
+      await recordOrderDataPurgeEvent({
+        orderId: row.id,
+        triggerSource: 'retention_sweep',
+        actor: null,
+        previousOrderStatus: row.status,
+        resultingOrderStatus: row.status,
+        outcome: 'failed',
+        deletedAssetCount: 0,
+        retentionWindowDays: env.ORDER_DATA_RETENTION_DAYS,
+        errorText: error instanceof Error ? error.message : String(error)
+      }).catch(() => undefined);
       log.error({ err: error, orderId: row.id }, 'Order data retention sweep failed for order');
     }
   }
@@ -2526,6 +2759,133 @@ async function buildServer(): Promise<FastifyInstance> {
     });
   });
 
+  app.get('/admin/order-data-purges', async (request, reply) => {
+    if (!hasAdminAccess(request)) {
+      return reply.status(401).send({ message: 'Unauthorized admin request.' });
+    }
+
+    const queryParams = adminOrderDataPurgeHistoryQuerySchema.parse(request.query ?? {});
+    const orderIdFilter = queryParams.orderId ?? null;
+    const triggerSourceFilter = queryParams.triggerSource ?? null;
+    const outcomeFilter = queryParams.outcome ?? null;
+
+    const [eventRows, totalCountRows, triggerCountsRows, outcomeCountsRows, deletedAssetCountRows] = await Promise.all([
+      query<OrderDataPurgeEventRow>(
+        `
+        SELECT
+          e.id,
+          e.order_id,
+          u.email AS parent_email,
+          e.trigger_source,
+          e.actor,
+          e.previous_order_status,
+          e.resulting_order_status,
+          e.outcome,
+          e.deleted_asset_count,
+          e.provider_deletion_json,
+          e.retention_window_days,
+          e.error_text,
+          e.created_at
+        FROM order_data_purge_events e
+        INNER JOIN orders o ON o.id = e.order_id
+        INNER JOIN users u ON u.id = o.user_id
+        WHERE ($1::uuid IS NULL OR e.order_id = $1)
+          AND ($2::text IS NULL OR e.trigger_source = $2)
+          AND ($3::text IS NULL OR e.outcome = $3)
+        ORDER BY e.created_at DESC
+        LIMIT $4
+        `,
+        [orderIdFilter, triggerSourceFilter, outcomeFilter, queryParams.limit]
+      ),
+      query<{ count: number }>(
+        `
+        SELECT COUNT(*)::int AS count
+        FROM order_data_purge_events e
+        WHERE ($1::uuid IS NULL OR e.order_id = $1)
+          AND ($2::text IS NULL OR e.trigger_source = $2)
+          AND ($3::text IS NULL OR e.outcome = $3)
+        `,
+        [orderIdFilter, triggerSourceFilter, outcomeFilter]
+      ),
+      query<{ trigger_source: OrderDataPurgeTriggerSource; count: number }>(
+        `
+        SELECT e.trigger_source, COUNT(*)::int AS count
+        FROM order_data_purge_events e
+        WHERE ($1::uuid IS NULL OR e.order_id = $1)
+          AND ($2::text IS NULL OR e.trigger_source = $2)
+          AND ($3::text IS NULL OR e.outcome = $3)
+        GROUP BY e.trigger_source
+        ORDER BY COUNT(*) DESC, e.trigger_source ASC
+        `,
+        [orderIdFilter, triggerSourceFilter, outcomeFilter]
+      ),
+      query<{ outcome: OrderDataPurgeOutcome; count: number }>(
+        `
+        SELECT e.outcome, COUNT(*)::int AS count
+        FROM order_data_purge_events e
+        WHERE ($1::uuid IS NULL OR e.order_id = $1)
+          AND ($2::text IS NULL OR e.trigger_source = $2)
+          AND ($3::text IS NULL OR e.outcome = $3)
+        GROUP BY e.outcome
+        ORDER BY e.outcome ASC
+        `,
+        [orderIdFilter, triggerSourceFilter, outcomeFilter]
+      ),
+      query<{ deleted_asset_count: number }>(
+        `
+        SELECT COALESCE(SUM(e.deleted_asset_count), 0)::int AS deleted_asset_count
+        FROM order_data_purge_events e
+        WHERE ($1::uuid IS NULL OR e.order_id = $1)
+          AND ($2::text IS NULL OR e.trigger_source = $2)
+          AND ($3::text IS NULL OR e.outcome = $3)
+        `,
+        [orderIdFilter, triggerSourceFilter, outcomeFilter]
+      )
+    ]);
+
+    return reply.send({
+      retention: {
+        enabled: env.ORDER_DATA_RETENTION_ENABLED,
+        windowDays: env.ORDER_DATA_RETENTION_DAYS,
+        intervalMs: env.ORDER_DATA_RETENTION_SWEEP_INTERVAL_MS,
+        batchLimit: env.ORDER_DATA_RETENTION_SWEEP_LIMIT
+      },
+      filters: {
+        orderId: orderIdFilter,
+        triggerSource: triggerSourceFilter,
+        outcome: outcomeFilter,
+        limit: queryParams.limit
+      },
+      summary: {
+        totalEvents: totalCountRows[0]?.count ?? 0,
+        totalDeletedAssets: deletedAssetCountRows[0]?.deleted_asset_count ?? 0,
+        triggerBreakdown: triggerCountsRows.map((row) => ({
+          triggerSource: row.trigger_source,
+          count: row.count
+        })),
+        outcomeBreakdown: outcomeCountsRows.map((row) => ({
+          outcome: row.outcome,
+          count: row.count
+        }))
+      },
+      purgeEvents: eventRows.map((row) => ({
+        id: row.id,
+        orderId: row.order_id,
+        parentEmail: row.parent_email,
+        triggerSource: row.trigger_source,
+        actor: row.actor,
+        previousOrderStatus: row.previous_order_status,
+        resultingOrderStatus: row.resulting_order_status,
+        outcome: row.outcome,
+        deletedAssetCount: row.deleted_asset_count,
+        providerDeletion: row.provider_deletion_json,
+        retentionWindowDays: row.retention_window_days,
+        errorText: row.error_text,
+        createdAt: row.created_at
+      }))
+    });
+  });
+
   app.get('/admin/queue/render/dead-letter', async (request, reply) => {
     if (!hasAdminAccess(request)) {
       return reply.status(401).send({ message: 'Unauthorized admin request.' });
@@ -3125,15 +3485,45 @@ async function buildServer(): Promise<FastifyInstance> {
       return reply.status(401).send({ message: 'Unauthorized delete request.' });
     }
 
-    const cleanup = await deleteOrderAssociatedData(params.orderId);
+    const triggerSource: OrderDataPurgeTriggerSource = hasAdminAccess(request) ? 'manual_admin' : 'manual_parent';
+    const actor: 'admin' | 'parent' = triggerSource === 'manual_admin' ? 'admin' : 'parent';
 
-    return reply.send({
-      deleted: true,
-      orderId: params.orderId,
-      deletedAssetCount: cleanup.deletedAssetCount,
-      providerDeletion: cleanup.providerDeletion,
-      note: 'Order uploads, artifacts, scripts, provider tasks, and jobs were removed locally after best-effort provider cleanup.'
-    });
+    try {
+      const cleanup = await deleteOrderAssociatedData(params.orderId);
+      await recordOrderDataPurgeEvent({
+        orderId: params.orderId,
+        triggerSource,
+        actor,
+        previousOrderStatus: order.status,
+        resultingOrderStatus: order.status,
+        outcome: 'succeeded',
+        deletedAssetCount: cleanup.deletedAssetCount,
+        providerDeletion: cleanup.providerDeletion,
+        retentionWindowDays: null,
+        errorText: null
+      });
+
+      return reply.send({
+        deleted: true,
+        orderId: params.orderId,
+        deletedAssetCount: cleanup.deletedAssetCount,
+        providerDeletion: cleanup.providerDeletion,
+        note: 'Order uploads, artifacts, scripts, provider tasks, and jobs were removed locally after best-effort provider cleanup.'
+      });
+    } catch (error) {
+      await recordOrderDataPurgeEvent({
+        orderId: params.orderId,
+        triggerSource,
+        actor,
+        previousOrderStatus: order.status,
+        resultingOrderStatus: order.status,
+        outcome: 'failed',
+        deletedAssetCount: 0,
+        retentionWindowDays: null,
+        errorText: error instanceof Error ? error.message : String(error)
+      }).catch(() => undefined);
+      throw error;
+    }
   });
 
   return app;

@@ -108,35 +108,98 @@ function resolveTargetDurationSec(manifest: ThemeManifest, templates: ThemeShotT
   return Math.max(manifest.durationMinSec, Math.min(manifest.durationMaxSec, templateTotal));
 }
 
+function normalizeLabel(label: string | undefined, fallback: string): string {
+  return (label ?? fallback).trim().toLowerCase();
+}
+
 function narrationLineForIndex(args: {
   narrationIndex: number;
   totalNarrationShots: number;
   childName: string;
   themeName: string;
   keywords: string[];
+  label?: string;
 }): string {
-  if (args.narrationIndex === 0) {
+  const label = normalizeLabel(args.label, `narration_${args.narrationIndex + 1}`);
+
+  if (label.includes('opening') || args.narrationIndex === 0) {
     const keywordTail = args.keywords.length > 0 ? ` with ${args.keywords.slice(0, 2).join(' and ')}` : '';
     return `I stepped into ${args.themeName}${keywordTail}, and everything around me felt bigger than life.`;
   }
 
-  if (args.narrationIndex === args.totalNarrationShots - 1) {
+  if (label.includes('discovery')) {
+    return `Every corner of ${args.themeName} revealed another impossible surprise, and ${args.childName} leaned into the wonder.`;
+  }
+
+  if (label.includes('rising')) {
+    return `${args.childName} kept moving deeper into the adventure, braver with every new challenge along the way.`;
+  }
+
+  if (label.includes('climax') || args.narrationIndex === args.totalNarrationShots - 1) {
+    return `When the biggest moment arrived, ${args.childName} met it with a full heart and the courage to keep going.`;
+  }
+
+  if (label.includes('ending')) {
     return `When the adventure ended, ${args.childName} came home smiling with a story worth telling again.`;
   }
 
   return `Each new turn brought another surprise, and ${args.childName} kept moving forward with courage.`;
 }
 
-function dialogueLineForIndex(dialogueIndex: number, totalDialogueShots: number): string {
-  if (dialogueIndex === 0) {
+function dialogueLineForIndex(args: {
+  dialogueIndex: number;
+  totalDialogueShots: number;
+  label?: string;
+}): string {
+  const label = normalizeLabel(args.label, `dialogue_${args.dialogueIndex + 1}`);
+
+  if (label.includes('call') || args.dialogueIndex === 0) {
     return `I've got this. Let's go!`;
   }
 
-  if (dialogueIndex === totalDialogueShots - 1) {
+  if (label.includes('promise')) {
+    return `I'm ready for this. I'll keep going no matter what.`;
+  }
+
+  if (label.includes('midpoint')) {
+    return `Whoa. That changed everything, but I'm still in this.`;
+  }
+
+  if (label.includes('ending') || label.includes('storybook') || args.dialogueIndex === args.totalDialogueShots - 1) {
     return `That was amazing. I can't wait for my next adventure!`;
   }
 
   return `We're getting closer. I know we can do this!`;
+}
+
+function soundDesignForTemplate(template: ThemeShotTemplate, shotType: 'narration' | 'dialogue'): string[] {
+  const label = normalizeLabel(template.label, template.id);
+
+  if (shotType === 'dialogue') {
+    if (label.includes('call')) {
+      return ['hero_sting', 'dialogue_focus'];
+    }
+
+    if (label.includes('midpoint')) {
+      return ['surprise_hit', 'dialogue_focus'];
+    }
+
+    if (label.includes('ending') || label.includes('storybook')) {
+      return ['victory_swell', 'dialogue_focus'];
+    }
+
+    return ['dialogue_focus', 'subtle_riser'];
+  }
+
+  if (label.includes('opening')) {
+    return ['orchestral_swell', 'whoosh_transition'];
+  }
+
+  if (label.includes('climax')) {
+    return ['cinematic_boom', 'triumph_rise'];
+  }
+
+  return ['ambient_swell', 'whoosh_transition'];
 }
 
 export function compileCinematicShotPlan(input: CinematicPromptInput): ScriptPayload {
@@ -170,20 +233,25 @@ export function compileCinematicShotPlan(input: CinematicPromptInput): ScriptPay
             totalNarrationShots: narrationTemplates.length,
             childName: input.childName,
             themeName: input.themeName,
-            keywords
+            keywords,
+            label: template.label
           })
         : '';
-    const dialogue = shotType === 'dialogue' ? dialogueLineForIndex(dialogueCursor++, dialogueTemplates.length) : 'Narration only.';
+    const dialogue =
+      shotType === 'dialogue'
+        ? dialogueLineForIndex({
+            dialogueIndex: dialogueCursor++,
+            totalDialogueShots: dialogueTemplates.length,
+            label: template.label
+          })
+        : 'Narration only.';
 
     const action =
       shotType === 'narration'
-        ? `Narrated cinematic beat in scene "${scene.name}" with ${camera} camera and ${lighting} lighting.`
-        : `${input.childName} speaks on-screen in scene "${scene.name}" with ${camera} camera and ${lighting} lighting.`;
+        ? `Narrated ${template.label?.toLowerCase() ?? 'cinematic'} beat in scene "${scene.name}" with ${camera} camera and ${lighting} lighting.`
+        : `${input.childName} delivers the ${template.label?.toLowerCase() ?? 'hero'} beat on-screen in scene "${scene.name}" with ${camera} camera and ${lighting} lighting.`;
 
-    const soundDesignCues =
-      shotType === 'narration'
-        ? ['ambient swell', 'whoosh transition']
-        : ['dialogue focus', 'subtle riser'];
+    const soundDesignCues = soundDesignForTemplate(template, shotType);
 
     const characterDirection: ScriptPayload['shots'][number]['characterDirection'] =
       shotType === 'dialogue'
@@ -226,7 +294,7 @@ export function compileCinematicShotPlan(input: CinematicPromptInput): ScriptPay
     title: `${input.childName}'s ${input.themeName} Adventure`,
     narration: narrationLines,
     totalDurationSec: shots.reduce((sum, shot) => sum + shot.durationSec, 0),
-    version: 'v1-scaffold',
+    version: 'v2-premium-pack',
     themeId: input.manifest.scenes[0]?.id?.split('_').slice(0, -1).join('_') || undefined,
     speakingBudgetSec: shots.reduce((sum, shot) => sum + (shot.speakingDurationSec ?? 0), 0),
     finalMix: {

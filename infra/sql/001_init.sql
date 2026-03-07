@@ -171,6 +171,21 @@ CREATE TABLE IF NOT EXISTS email_notifications (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS order_data_purge_events (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  order_id UUID NOT NULL REFERENCES orders(id),
+  trigger_source TEXT NOT NULL CHECK (trigger_source IN ('manual_parent', 'manual_admin', 'retention_sweep')),
+  actor TEXT CHECK (actor IN ('parent', 'admin')),
+  previous_order_status TEXT NOT NULL,
+  resulting_order_status TEXT NOT NULL,
+  outcome TEXT NOT NULL CHECK (outcome IN ('succeeded', 'failed')),
+  deleted_asset_count INT NOT NULL DEFAULT 0,
+  provider_deletion_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  retention_window_days INT,
+  error_text TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS payment_idempotency_keys (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   order_id UUID NOT NULL REFERENCES orders(id),
@@ -274,6 +289,9 @@ CREATE INDEX IF NOT EXISTS idx_order_retry_requests_order_id ON order_retry_requ
 CREATE INDEX IF NOT EXISTS idx_gift_redemption_links_order_id ON gift_redemption_links(order_id);
 CREATE INDEX IF NOT EXISTS idx_gift_redemption_links_status ON gift_redemption_links(status);
 CREATE INDEX IF NOT EXISTS idx_email_notifications_order_id ON email_notifications(order_id);
+CREATE INDEX IF NOT EXISTS idx_order_data_purge_events_order_id ON order_data_purge_events(order_id);
+CREATE INDEX IF NOT EXISTS idx_order_data_purge_events_created_at ON order_data_purge_events(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_order_data_purge_events_outcome ON order_data_purge_events(outcome);
 CREATE INDEX IF NOT EXISTS idx_payment_idempotency_order_id ON payment_idempotency_keys(order_id);
 CREATE INDEX IF NOT EXISTS idx_render_enqueue_dedupes_order_id ON render_enqueue_dedupes(order_id);
 CREATE INDEX IF NOT EXISTS idx_render_enqueue_dedupes_created_at ON render_enqueue_dedupes(created_at DESC);

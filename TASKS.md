@@ -95,6 +95,7 @@ This file is the canonical build ledger for the repo.
   - email notification failure dashboard
   - retry request history dashboard
   - provider task failure triage dashboard
+  - retention and purge history dashboard
 
 - [x] Email + notifications
   - delivery-ready email
@@ -112,9 +113,11 @@ This file is the canonical build ledger for the repo.
 - [x] Data deletion + retention
   - manual `POST /orders/:orderId/delete-data`
   - best-effort provider cleanup hooks for ElevenLabs, HeyGen, and Shotstack
+  - discovered-target coverage and verification reporting for provider cleanup outcomes
   - local cleanup of uploads, artifacts, scripts, jobs, and provider tasks
   - retention sweep runner on API startup + interval
   - automatic purge for aged `delivered`, `refunded`, and `expired` orders when enabled
+  - persisted purge event history for manual deletes and sweep outcomes
 
 - [x] Delivery + CI
   - GitHub Actions CI
@@ -153,7 +156,8 @@ This file is the canonical build ledger for the repo.
 - [x] Current shipped build definition
   - template-first personalized child story videos
   - web-first parent flow
-  - 20-40 second seeded outputs today
+  - premium seeded 64-84 second outputs today
+  - 8-beat theme packs with explicit scene-to-beat planning
   - manifest-driven shot planning
   - provider-assisted render pipeline
   - async delivery with status tracking and retries
@@ -161,9 +165,6 @@ This file is the canonical build ledger for the repo.
 ## Next Up
 
 - [ ] Replace heuristic moderation with stronger media-quality and safety checks
-- [ ] Add dedicated retention/admin visibility for purge history and retention outcomes
-- [ ] Improve provider deletion coverage and verification reporting
-- [ ] Expand from current seeded 4-shot launch structure into richer premium theme packs
 - [ ] Add reusable character identity lifecycle instead of per-order scaffolded DNA only
 - [ ] Add richer branded subtitle system and more final compose polish
 

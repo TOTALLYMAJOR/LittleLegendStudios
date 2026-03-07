@@ -1064,6 +1064,57 @@ function subtitleStart(baseStartSec: number, durationSec: number): number {
   return baseStartSec + Math.max(0, durationSec - subtitleDuration(durationSec));
 }
 
+function buildSubtitleAsset(text: string, subtitleStyle: string | undefined): Record<string, unknown> {
+  switch (subtitleStyle) {
+    case 'storybook_banner':
+      return {
+        type: 'title',
+        text,
+        style: 'minimal',
+        position: 'bottom',
+        size: 'small',
+        color: '#1F140A',
+        background: '#F7D88A',
+        offset: {
+          y: -0.08
+        },
+        padding: 0.04
+      };
+    case 'hero_caption':
+      return {
+        type: 'title',
+        text,
+        style: 'minimal',
+        position: 'bottom',
+        size: 'medium',
+        color: '#F8F7F2',
+        stroke: '#091412',
+        strokeWidth: 2,
+        background: '#0F2F2A',
+        offset: {
+          y: -0.06
+        },
+        padding: 0.03
+      };
+    case 'cinematic_minimal':
+    default:
+      return {
+        type: 'title',
+        text,
+        style: 'minimal',
+        position: 'bottom',
+        size: 'small',
+        color: '#F6F1E8',
+        background: '#102723',
+        opacity: 0.82,
+        offset: {
+          y: -0.05
+        },
+        padding: 0.025
+      };
+  }
+}
+
 function shotAudioDurationSec(shot: ScriptPayload['shots'][number] | null | undefined): number {
   if (!shot) {
     return 0;
@@ -1285,14 +1336,7 @@ async function queueShotstackRender(args: {
 
     if (args.finalMix?.subtitleStyle !== 'none' && shot.subtitleText.trim().length > 0) {
       subtitleClips.push({
-        asset: {
-          type: 'title',
-          text: shot.subtitleText,
-          style: args.finalMix?.subtitleStyle ?? 'minimal',
-          position: 'bottom',
-          size: 'small',
-          color: '#F6F1E8'
-        },
+        asset: buildSubtitleAsset(shot.subtitleText, args.finalMix?.subtitleStyle),
         start: subtitleStart(timelineCursor, shot.durationSec),
         length: subtitleDuration(shot.durationSec)
       });

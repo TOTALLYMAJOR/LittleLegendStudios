@@ -67,6 +67,10 @@ interface AssetKeyRow {
   s3_key: string;
 }
 
+interface ArtifactMetaRow {
+  meta_json: Record<string, unknown>;
+}
+
 interface ProviderTaskStatusRow {
   provider_task_id: string;
   provider: string;
@@ -79,6 +83,13 @@ interface ProviderTaskStatusRow {
   last_polled_at: string | null;
   created_at: string;
   updated_at: string;
+}
+
+interface ProviderDeleteResult {
+  provider: string;
+  target: string;
+  status: 'deleted' | 'skipped' | 'failed';
+  detail: string;
 }
 
 interface LatestScriptRow {
@@ -1071,6 +1082,356 @@ function normalizeContentType(contentType: string): string {
   return contentType.split(';')[0].trim().toLowerCase();
 }
 
+function normalizeBaseUrl(value: string): string {
+  return value.endsWith('/') ? value.slice(0, -1) : value;
+}
+
+async function readDeleteResponseText(response: Response): Promise<string> {
+  const text = await response.text();
+  return text.trim().slice(0, 300);
+}
+
+async function deleteElevenLabsVoiceClone(voiceCloneId: string): Promise<ProviderDeleteResult> {
+  if (voiceCloneId.startsWith('voice_')) {
+    return {
+      provider: 'elevenlabs',
+      target: voiceCloneId,
+      status: 'skipped',
+      detail: 'Local/stub voice clone id.'
+    };
+  }
+
+  if (!env.ELEVENLABS_API_KEY) {
+    return {
+      provider: 'elevenlabs',
+      target: voiceCloneId,
+      status: 'skipped',
+      detail: 'ELEVENLABS_API_KEY not configured.'
+    };
+  }
+
+  const endpoint = `${normalizeBaseUrl(env.ELEVENLABS_BASE_URL)}/v1/voices/${encodeURIComponent(voiceCloneId)}`;
+  const response = await fetch(endpoint, {
+    method: 'DELETE',
+    headers: {
+      'xi-api-key': env.ELEVENLABS_API_KEY
+    }
+  });
+
+  if (response.ok || response.status === 404) {
+    return {
+      provider: 'elevenlabs',
+      target: voiceCloneId,
+      status: 'deleted',
+      detail: response.status === 404 ? 'Voice clone already absent at provider.' : 'Voice clone deleted.'
+    };
+  }
+
+  return {
+    provider: 'elevenlabs',
+    target: voiceCloneId,
+    status: 'failed',
+    detail: `HTTP ${response.status} ${await readDeleteResponseText(response)}`
+  };
+}
+
+async function deleteHeyGenVideo(videoId: string): Promise<ProviderDeleteResult> {
+  if (!env.HEYGEN_API_KEY) {
+    return {
+      provider: 'heygen',
+      target: videoId,
+      status: 'skipped',
+      detail: 'HEYGEN_API_KEY not configured.'
+    };
+  }
+
+  const base = normalizeBaseUrl(env.HEYGEN_BASE_URL);
+  const attempts: Array<{ method: 'DELETE' | 'POST'; url: string; body?: Record<string, unknown> }> = [
+    {
+      method: 'DELETE',
+      url: `${base}/v1/video.delete?video_id=${encodeURIComponent(videoId)}`
+    },
+    {
+      method: 'DELETE',
+      url: `${base}/v1/video.delete`,
+      body: { video_id: videoId }
+    },
+    {
+      method: 'POST',
+      url: `${base}/v1/video.delete`,
+      body: { video_id: videoId }
+    }
+  ];
+
+  let lastFailure = 'Unknown provider delete failure.';
+  for (const attempt of attempts) {
+    const response = await fetch(attempt.url, {
+      method: attempt.method,
+      headers: {
+        'X-Api-Key': env.HEYGEN_API_KEY,
+        Authorization: `Bearer ${env.HEYGEN_API_KEY}`,
+        ...(attempt.body ? { 'Content-Type': 'application/json' } : {})
+      },
+      ...(attempt.body ? { body: JSON.stringify(attempt.body) } : {})
+    });
+
+    if (response.ok || response.status === 404) {
+      return {
+        provider: 'heygen',
+        target: videoId,
+        status: 'deleted',
+        detail: response.status === 404 ? 'Video already absent at provider.' : 'Video deleted.'
+      };
+    }
+
+    lastFailure = `HTTP ${response.status} ${await readDeleteResponseText(response)}`;
+  }
+
+  return {
+    provider: 'heygen',
+    target: videoId,
+    status: 'failed',
+    detail: lastFailure
+  };
+}
+
+function collectShotstackAssetIds(payload: unknown): string[] {
+  const ids = new Set<string>();
+
+  const visit = (value: unknown): void => {
+    if (!value || typeof value !== 'object') {
+      return;
+    }
+
+    if (Array.isArray(value)) {
+      for (const entry of value) {
+        visit(entry);
+      }
+      return;
+    }
+
+    const record = value as Record<string, unknown>;
+    const maybeId = record.id;
+    if (typeof maybeId === 'string' && maybeId.trim().length > 0) {
+      ids.add(maybeId.trim());
+    }
+
+    for (const nested of Object.values(record)) {
+      visit(nested);
+    }
+  };
+
+  visit(payload);
+  return Array.from(ids);
+}
+
+async function lookupShotstackAssetIds(renderId: string): Promise<string[]> {
+  if (!env.SHOTSTACK_API_KEY) {
+    return [];
+  }
+
+  const endpoint = `${normalizeBaseUrl(env.SHOTSTACK_BASE_URL)}/serve/${env.SHOTSTACK_STAGE}/assets/render/${encodeURIComponent(renderId)}`;
+  const response = await fetch(endpoint, {
+    method: 'GET',
+    headers: {
+      'x-api-key': env.SHOTSTACK_API_KEY
+    }
+  });
+
+  if (response.status === 404) {
+    return [];
+  }
+
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status} ${await readDeleteResponseText(response)}`);
+  }
+
+  const payload = (await response.json()) as unknown;
+  return collectShotstackAssetIds(payload);
+}
+
+async function deleteShotstackRenderAssets(renderId: string): Promise<ProviderDeleteResult[]> {
+  if (!env.SHOTSTACK_API_KEY) {
+    return [
+      {
+        provider: 'shotstack',
+        target: renderId,
+        status: 'skipped',
+        detail: 'SHOTSTACK_API_KEY not configured.'
+      }
+    ];
+  }
+
+  try {
+    const assetIds = await lookupShotstackAssetIds(renderId);
+    if (assetIds.length === 0) {
+      return [
+        {
+          provider: 'shotstack',
+          target: renderId,
+          status: 'skipped',
+          detail: 'No hosted Shotstack assets found for render.'
+        }
+      ];
+    }
+
+    const results: ProviderDeleteResult[] = [];
+    for (const assetId of assetIds) {
+      const endpoint = `${normalizeBaseUrl(env.SHOTSTACK_BASE_URL)}/serve/${env.SHOTSTACK_STAGE}/assets/${encodeURIComponent(assetId)}`;
+      const response = await fetch(endpoint, {
+        method: 'DELETE',
+        headers: {
+          'x-api-key': env.SHOTSTACK_API_KEY
+        }
+      });
+
+      results.push({
+        provider: 'shotstack',
+        target: assetId,
+        status: response.ok || response.status === 404 ? 'deleted' : 'failed',
+        detail:
+          response.ok || response.status === 404
+            ? response.status === 404
+              ? 'Asset already absent at provider.'
+              : `Deleted asset from render ${renderId}.`
+            : `HTTP ${response.status} ${await readDeleteResponseText(response)}`
+      });
+    }
+
+    return results;
+  } catch (error) {
+    return [
+      {
+        provider: 'shotstack',
+        target: renderId,
+        status: 'failed',
+        detail: (error as Error).message
+      }
+    ];
+  }
+}
+
+async function runProviderDeleteHooks(orderId: string): Promise<ProviderDeleteResult[]> {
+  const results: ProviderDeleteResult[] = [];
+
+  const voiceCloneRows = await query<ArtifactMetaRow>(
+    `
+    SELECT meta_json
+    FROM artifacts
+    WHERE order_id = $1
+      AND kind = 'voice_clone_meta'
+    `,
+    [orderId]
+  );
+
+  const voiceCloneIds = Array.from(
+    new Set(
+      voiceCloneRows
+        .map((row) => row.meta_json?.voiceCloneId)
+        .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    )
+  );
+
+  for (const voiceCloneId of voiceCloneIds) {
+    results.push(await deleteElevenLabsVoiceClone(voiceCloneId));
+  }
+
+  const providerTasks = await query<{ provider_task_id: string; provider: string }>(
+    `
+    SELECT provider_task_id, provider
+    FROM provider_tasks
+    WHERE order_id = $1
+    `,
+    [orderId]
+  );
+
+  for (const task of providerTasks) {
+    if (task.provider === 'heygen') {
+      results.push(await deleteHeyGenVideo(task.provider_task_id));
+    } else if (task.provider === 'shotstack') {
+      results.push(...(await deleteShotstackRenderAssets(task.provider_task_id)));
+    }
+  }
+
+  return results;
+}
+
+async function deleteOrderAssociatedData(orderId: string): Promise<{
+  deletedAssetCount: number;
+  providerDeletion: {
+    attempted: number;
+    deleted: number;
+    skipped: number;
+    failed: number;
+    results: ProviderDeleteResult[];
+  };
+}> {
+  const uploadRows = await query<AssetKeyRow>('SELECT s3_key FROM uploads WHERE order_id = $1', [orderId]);
+  const artifactRows = await query<AssetKeyRow>('SELECT s3_key FROM artifacts WHERE order_id = $1', [orderId]);
+  const providerDeleteResults = await runProviderDeleteHooks(orderId);
+
+  const assetKeys = Array.from(new Set([...uploadRows, ...artifactRows].map((row) => row.s3_key)));
+  await Promise.all(assetKeys.map((assetKey) => deleteAssetByKey(assetKey).catch(() => undefined)));
+
+  await query('DELETE FROM uploads WHERE order_id = $1', [orderId]);
+  await query('DELETE FROM artifacts WHERE order_id = $1', [orderId]);
+  await query('DELETE FROM scripts WHERE order_id = $1', [orderId]);
+  await query('DELETE FROM provider_tasks WHERE order_id = $1', [orderId]);
+  await query('DELETE FROM jobs WHERE order_id = $1', [orderId]);
+
+  return {
+    deletedAssetCount: assetKeys.length,
+    providerDeletion: {
+      attempted: providerDeleteResults.length,
+      deleted: providerDeleteResults.filter((result) => result.status === 'deleted').length,
+      skipped: providerDeleteResults.filter((result) => result.status === 'skipped').length,
+      failed: providerDeleteResults.filter((result) => result.status === 'failed').length,
+      results: providerDeleteResults
+    }
+  };
+}
+
+async function runOrderDataRetentionSweep(log: FastifyInstance['log']): Promise<void> {
+  if (!env.ORDER_DATA_RETENTION_ENABLED) {
+    return;
+  }
+
+  const candidateRows = await query<{ id: string; status: OrderStatus }>(
+    `
+    SELECT id, status
+    FROM orders
+    WHERE status IN ('delivered', 'refunded', 'expired')
+      AND updated_at <= now() - make_interval(days => $1)
+    ORDER BY updated_at ASC
+    LIMIT $2
+    `,
+    [env.ORDER_DATA_RETENTION_DAYS, env.ORDER_DATA_RETENTION_SWEEP_LIMIT]
+  );
+
+  for (const row of candidateRows) {
+    try {
+      const cleanup = await deleteOrderAssociatedData(row.id);
+      if (row.status === 'delivered') {
+        await query(`UPDATE orders SET status = 'expired', updated_at = now() WHERE id = $1`, [row.id]);
+      } else {
+        await query('UPDATE orders SET updated_at = now() WHERE id = $1', [row.id]);
+      }
+
+      log.info(
+        {
+          orderId: row.id,
+          previousStatus: row.status,
+          deletedAssetCount: cleanup.deletedAssetCount,
+          providerDeletion: cleanup.providerDeletion
+        },
+        'Order data retention sweep cleaned up order data'
+      );
+    } catch (error) {
+      log.error({ err: error, orderId: row.id }, 'Order data retention sweep failed for order');
+    }
+  }
+}
+
 function isSupportedUploadType(kind: 'photo' | 'voice', contentType: string): boolean {
   const normalized = normalizeContentType(contentType);
   return kind === 'photo' ? photoContentTypes.has(normalized) : voiceContentTypes.has(normalized);
@@ -1259,6 +1620,20 @@ async function buildServer(): Promise<FastifyInstance> {
   });
 
   await seedThemes();
+  await runOrderDataRetentionSweep(app.log);
+
+  const retentionSweepTimer = env.ORDER_DATA_RETENTION_ENABLED
+    ? setInterval(() => {
+        void runOrderDataRetentionSweep(app.log);
+      }, env.ORDER_DATA_RETENTION_SWEEP_INTERVAL_MS)
+    : null;
+
+  if (retentionSweepTimer) {
+    retentionSweepTimer.unref();
+    app.addHook('onClose', async () => {
+      clearInterval(retentionSweepTimer);
+    });
+  }
 
   app.get('/health', async () => ({ ok: true }));
   registerAssetRoutes(app);
@@ -2750,19 +3125,14 @@ async function buildServer(): Promise<FastifyInstance> {
       return reply.status(401).send({ message: 'Unauthorized delete request.' });
     }
 
-    const uploadRows = await query<AssetKeyRow>('SELECT s3_key FROM uploads WHERE order_id = $1', [params.orderId]);
-    const artifactRows = await query<AssetKeyRow>('SELECT s3_key FROM artifacts WHERE order_id = $1', [params.orderId]);
-
-    const assetKeys = [...uploadRows, ...artifactRows].map((row) => row.s3_key);
-    await Promise.all(assetKeys.map((assetKey) => deleteAssetByKey(assetKey).catch(() => undefined)));
-
-    await query('DELETE FROM uploads WHERE order_id = $1', [params.orderId]);
-    await query('DELETE FROM artifacts WHERE order_id = $1', [params.orderId]);
+    const cleanup = await deleteOrderAssociatedData(params.orderId);
 
     return reply.send({
       deleted: true,
       orderId: params.orderId,
-      note: 'Binary assets removed from metadata store. Provider hard-delete hooks should run here.'
+      deletedAssetCount: cleanup.deletedAssetCount,
+      providerDeletion: cleanup.providerDeletion,
+      note: 'Order uploads, artifacts, scripts, provider tasks, and jobs were removed locally after best-effort provider cleanup.'
     });
   });
 

@@ -48,6 +48,14 @@ const schema = z.object({
   PARENT_AUTH_SECRET: z.string().min(16).default('dev_parent_auth_secret_change_me'),
   PARENT_AUTH_TTL_SEC: z.coerce.number().int().positive().default(2592000),
   PARENT_MAX_RETRY_REQUESTS: z.coerce.number().int().min(1).max(10).default(2),
+  ORDER_DATA_RETENTION_ENABLED: z
+    .string()
+    .optional()
+    .default('false')
+    .transform((value) => value.toLowerCase() === 'true'),
+  ORDER_DATA_RETENTION_DAYS: z.coerce.number().int().min(1).max(365).default(30),
+  ORDER_DATA_RETENTION_SWEEP_INTERVAL_MS: z.coerce.number().int().positive().default(21600000),
+  ORDER_DATA_RETENTION_SWEEP_LIMIT: z.coerce.number().int().min(1).max(500).default(25),
   GIFT_REDEMPTION_TTL_DAYS: z.coerce.number().int().min(1).max(365).default(30),
   PROVIDER_TASK_POLL_MIN_INTERVAL_MS: z.coerce.number().int().positive().default(5000),
   PROVIDER_TASK_ASSUME_SUCCESS_AFTER_SEC: z.coerce.number().int().positive().default(45),

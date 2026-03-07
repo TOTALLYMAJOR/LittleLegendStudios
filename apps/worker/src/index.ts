@@ -7,6 +7,7 @@ import {
   buildStubMp3Bytes,
   buildStubMp4Bytes,
   createSignedDownloadUrl,
+  downloadAssetBytes,
   fetchRemoteAssetBytes,
   uploadAssetBytes
 } from './assets.js';
@@ -289,6 +290,41 @@ async function runStepWithInput(
   );
 }
 
+async function runFailedStepWithInput(
+  orderId: string,
+  type: JobType,
+  attempt: number,
+  input: Record<string, unknown>,
+  errorText: string,
+  output?: Record<string, unknown>,
+  provider = 'local_moderation'
+): Promise<void> {
+  const [jobRow] = await query<{ id: string }>(
+    `
+    INSERT INTO jobs (order_id, type, status, attempt, provider, started_at, input_json)
+    VALUES ($1, $2, 'running', $3, $4, now(), $5::jsonb)
+    RETURNING id
+    `,
+    [orderId, type, attempt, provider, JSON.stringify(input)]
+  );
+
+  await query(
+    `
+    UPDATE jobs
+    SET status = 'failed',
+        output_json = $2::jsonb,
+        error_text = $3,
+        finished_at = now()
+    WHERE id = $1
+    `,
+    [
+      jobRow.id,
+      JSON.stringify(output ?? { ok: false, step: type, failedAt: new Date().toISOString() }),
+      errorText
+    ]
+  );
+}
+
 async function loadUploads(orderId: string): Promise<UploadRow[]> {
   return query<UploadRow>(
     `
@@ -383,6 +419,140 @@ function toWorkerUpload(upload: UploadRow): WorkerUpload {
     contentType: upload.content_type,
     bytes: upload.bytes,
     sha256: upload.sha256
+  };
+}
+
+function hasPrefix(bytes: Uint8Array, prefix: number[]): boolean {
+  return prefix.every((value, index) => bytes[index] === value);
+}
+
+function containsAscii(bytes: Uint8Array, start: number, text: string): boolean {
+  if (bytes.length < start + text.length) {
+    return false;
+  }
+
+  for (let index = 0; index < text.length; index += 1) {
+    if (bytes[start + index] !== text.charCodeAt(index)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function matchesUploadSignature(upload: UploadRow, bytes: Uint8Array): boolean {
+  switch (upload.content_type) {
+    case 'image/jpeg':
+      return bytes.length >= 3 && hasPrefix(bytes, [0xff, 0xd8, 0xff]);
+    case 'image/png':
+      return bytes.length >= 8 && hasPrefix(bytes, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    case 'audio/wav':
+    case 'audio/x-wav':
+      return bytes.length >= 12 && containsAscii(bytes, 0, 'RIFF') && containsAscii(bytes, 8, 'WAVE');
+    case 'audio/m4a':
+    case 'audio/x-m4a':
+    case 'audio/mp4':
+      return bytes.length >= 12 && containsAscii(bytes, 4, 'ftyp');
+    default:
+      return false;
+  }
+}
+
+function estimateVoiceDurationSec(upload: UploadRow, bytesLength: number): number {
+  switch (upload.content_type) {
+    case 'audio/wav':
+    case 'audio/x-wav':
+      return Math.max(1, Math.round(bytesLength / 32000));
+    case 'audio/m4a':
+    case 'audio/x-m4a':
+    case 'audio/mp4':
+      return Math.max(1, Math.round(bytesLength / 16000));
+    default:
+      return Math.max(1, Math.round(bytesLength / 16000));
+  }
+}
+
+async function runLocalModerationChecks(args: {
+  orderId: string;
+  photoUploads: UploadRow[];
+  voiceUpload: UploadRow | null;
+}): Promise<{
+  ok: true;
+  checks: {
+    faceDetect: string;
+    nsfw: string;
+    audioQuality: string;
+  };
+  metrics: Record<string, unknown>;
+}> {
+  if (args.photoUploads.length < 5 || args.photoUploads.length > 15) {
+    throw new Error(`Moderation rejected intake: expected 5-15 photos, received ${String(args.photoUploads.length)}.`);
+  }
+
+  if (!args.voiceUpload) {
+    throw new Error('Moderation rejected intake: missing voice sample.');
+  }
+
+  const photoPayloads = await Promise.all(
+    args.photoUploads.map(async (upload) => {
+      const downloaded = await downloadAssetBytes(upload.s3_key);
+      if (!matchesUploadSignature(upload, downloaded.bytes)) {
+        throw new Error(`Moderation rejected photo upload ${upload.s3_key}: file signature does not match ${upload.content_type}.`);
+      }
+      if (downloaded.bytes.byteLength !== upload.bytes) {
+        throw new Error(`Moderation rejected photo upload ${upload.s3_key}: stored bytes do not match upload metadata.`);
+      }
+      if (downloaded.bytes.byteLength < 15_000) {
+        throw new Error(`Moderation rejected photo upload ${upload.s3_key}: image file is too small to be usable.`);
+      }
+
+      return {
+        bytes: downloaded.bytes.byteLength,
+        sha256: upload.sha256
+      };
+    })
+  );
+
+  const uniquePhotoHashes = new Set(photoPayloads.map((photo) => photo.sha256).filter((value): value is string => Boolean(value)));
+  if (uniquePhotoHashes.size < Math.min(3, args.photoUploads.length)) {
+    throw new Error('Moderation rejected intake: photo set does not contain enough unique source images.');
+  }
+
+  const voiceDownloaded = await downloadAssetBytes(args.voiceUpload.s3_key);
+  if (!matchesUploadSignature(args.voiceUpload, voiceDownloaded.bytes)) {
+    throw new Error(`Moderation rejected voice upload ${args.voiceUpload.s3_key}: file signature does not match ${args.voiceUpload.content_type}.`);
+  }
+  if (voiceDownloaded.bytes.byteLength !== args.voiceUpload.bytes) {
+    throw new Error(`Moderation rejected voice upload ${args.voiceUpload.s3_key}: stored bytes do not match upload metadata.`);
+  }
+  if (voiceDownloaded.bytes.byteLength < 80_000) {
+    throw new Error('Moderation rejected voice sample: audio file is too small and likely unusable.');
+  }
+
+  const estimatedVoiceDurationSec = estimateVoiceDurationSec(args.voiceUpload, voiceDownloaded.bytes.byteLength);
+  if (estimatedVoiceDurationSec < 25 || estimatedVoiceDurationSec > 75) {
+    throw new Error(
+      `Moderation rejected voice sample: estimated duration ${String(estimatedVoiceDurationSec)}s is outside the accepted range.`
+    );
+  }
+
+  const averagePhotoBytes = Math.round(photoPayloads.reduce((sum, photo) => sum + photo.bytes, 0) / photoPayloads.length);
+
+  return {
+    ok: true,
+    checks: {
+      faceDetect: 'pass_local_photo_integrity',
+      nsfw: 'pass_local_intake_heuristic',
+      audioQuality: 'pass_local_duration_signature'
+    },
+    metrics: {
+      mode: 'local_heuristic',
+      photoCount: args.photoUploads.length,
+      uniquePhotoCount: uniquePhotoHashes.size,
+      averagePhotoBytes,
+      voiceBytes: voiceDownloaded.bytes.byteLength,
+      estimatedVoiceDurationSec
+    }
   };
 }
 
@@ -865,24 +1035,41 @@ async function runPipeline(orderId: string, attempt: number): Promise<void> {
     .map((shot) => shot.dialogue);
   const totalDurationSec = shotPlan.reduce((sum, shot) => sum + shot.durationSec, 0);
 
-  await runStepWithInput(
+  const moderationInput = {
     orderId,
-    'moderation',
-    attempt,
-    {
+    photoCount: photoUploads.length,
+    voiceCount: voiceUpload ? 1 : 0
+  };
+
+  try {
+    const moderationResult = await runLocalModerationChecks({
       orderId,
-      photoCount: photoUploads.length,
-      voiceCount: voiceUpload ? 1 : 0
-    },
-    {
-      ok: true,
-      checks: {
-        faceDetect: 'pass_stub',
-        nsfw: 'pass_stub',
-        audioQuality: 'pass_stub'
-      }
-    }
-  );
+      photoUploads,
+      voiceUpload
+    });
+
+    await runStepWithInput(orderId, 'moderation', attempt, moderationInput, moderationResult, 'local_moderation');
+  } catch (error) {
+    const message = (error as Error).message;
+    await runFailedStepWithInput(
+      orderId,
+      'moderation',
+      attempt,
+      moderationInput,
+      message,
+      {
+        ok: false,
+        checks: {
+          faceDetect: 'failed',
+          nsfw: 'failed',
+          audioQuality: 'failed'
+        },
+        mode: 'local_heuristic'
+      },
+      'local_moderation'
+    );
+    throw error;
+  }
 
   const voiceClone = await providers.voice.createVoiceClone({
     orderId,

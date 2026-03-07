@@ -1,63 +1,166 @@
-# Build Tasks
+# Build Status
 
-## Next Up (Priority Order)
+This file is the canonical build ledger for the repo.
 
-- [x] Resend gift email action (parent experience)
-- [x] Revoke/regenerate gift link UX (parent experience)
-- [x] Unauthorized/session-expired recovery path (parent experience)
-- [x] Admin page for `email_notifications` failures
-- [x] Retry history view from `order_retry_requests`
-- [x] Provider task failure triage view
+- `README.md` is the high-level product + setup summary.
+- `TASKS.md` is the detailed source of truth for what is built, what is partially hardened, and what is next.
 
-## Done
+## Built End To End
 
-- [x] Resend gift email action (parent experience):
-  - parent order page can resend the latest pending gift-link email
-  - API reuses the latest valid gift link instead of generating a new one
-  - resend attempts are logged in `email_notifications`
-- [x] Revoke/regenerate gift link UX (parent experience):
-  - parent order page can explicitly revoke the current pending gift link
-  - gift link creation flow now doubles as an explicit regenerate action
-  - latest gift-link status and expiry are visible in the parent order UI
-- [x] Unauthorized/session-expired recovery path (parent experience):
-  - order page now links directly into a session recovery flow with return-to order context
-  - create page can restore the parent session and send the parent back to the blocked order
-  - in-page order actions surface session expiry and route the parent into recovery
-- [x] Admin page for `email_notifications` failures:
-  - API exposes a token-gated failed notification feed with summary counts and filters
-  - web admin page loads recent failed notifications with payload/error inspection
-  - home page now links into the admin failure view
-- [x] Retry history view from `order_retry_requests`:
-  - API exposes a token-gated retry request feed with actor/outcome filters
-  - web admin page shows accepted and rejected retry requests with order context
-  - home page now links into the retry history view
-- [x] Provider task failure triage view:
-  - API exposes provider task list/detail/retry routes for failed-task operations
-  - web admin page filters failed tasks by provider and order, shows provider output payloads, and supports refresh/retry actions
-  - home page now links into the provider task triage view
-- [x] Parent auth + order ownership enforcement:
-  - protect `POST /orders/:orderId/retry`
-  - protect `POST /orders/:orderId/gift-link`
-  - protect `GET /orders/:orderId/status`
-  - issue signed parent access token from `/users/upsert` and `/gift/redeem/:token`
-- [x] Add GitHub Actions CI pipeline:
-  - run `npm ci`
-  - run `npm run typecheck`
-  - run `npm run smoke` with Postgres + Redis service containers and stub payment/email mode
-  - workflow is live; required check enforcement is blocked until GitHub billing lock is resolved
-- [x] Payment/render reliability hardening:
-  - idempotency keys for payment + queue enqueue
-  - webhook replay protection + dedupe persistence
-  - dead-letter/retry observability for failed jobs
+- [x] Core platform foundation
+  - monorepo with `web`, `api`, `worker`, and `shared` packages
+  - local Postgres + Redis dev stack
+  - DB migrations and one-command local boot
+  - signed local asset upload/download store
 
-## Backlog
+- [x] Parent intake + order creation
+  - user creation and order creation
+  - theme selection
+  - parental consent capture
+  - signed upload flow for 5-15 photos and exactly 1 voice sample
+  - upload content-type and size validation
 
-- [x] Parent experience polish:
-  - resend gift email action
-  - revoke/regenerate gift link UX
-  - clearer unauthorized/session-expired recovery path
+- [x] Script generation + review
+  - template-based script generation
+  - manifest-driven shot templates and target durations
+  - max 3 script versions per order
+  - script approval before payment
+  - signed watermarked preview artifact for parent review
 
-- [x] Support/admin visibility:
-  - done: admin page for `email_notifications` failures
-  - done: retry history view from `order_retry_requests`
-  - done: provider task failure triage view
+- [x] Parent auth + ownership enforcement
+  - signed parent access token issuance
+  - order status, retry, and gift-link actions gated by ownership
+  - unauthorized/session-expired recovery path in the web flow
+
+- [x] Payment + checkout path
+  - Stripe stub and optional real checkout mode
+  - webhook handling
+  - payment idempotency protection
+  - replay protection for Stripe webhooks
+
+- [x] Worker render pipeline
+  - moderation step
+  - voice clone step
+  - voice render step
+  - character pack step
+  - shot render step
+  - final compose step
+  - delivery notification step
+
+- [x] Theme + scene manifest system
+  - seeded launch themes
+  - 10-scene manifests per theme
+  - scene anchors, asset pointers, palette, FX, grade, camera metadata
+  - shot template metadata for planner-driven scripts
+  - seeded placeholder theme audio assets for ambience, music beds, and SFX
+
+- [x] Character + voice scaffolding
+  - deterministic character profile scaffold from uploaded photos
+  - voice clone metadata persistence
+  - aggregate narration/dialogue track generation
+  - per-shot audio artifact generation and persistence
+
+- [x] Shot planning + render metadata
+  - manifest-driven planner instead of fixed hard-coded shot arrays
+  - speaking budget + final mix metadata in script payloads
+  - per-shot `sceneRenderSpec` resolution in API and worker
+  - persisted shot metadata for compose-time introspection
+
+- [x] Final video composition
+  - real Shotstack timeline assembly from persisted shot artifacts
+  - exact per-shot audio preferred, aggregate-track fallback
+  - seeded theme music bed layering
+  - music ducking support
+  - branded subtitle presets
+  - thumbnail artifact generation path
+
+- [x] Provider integrations + orchestration
+  - internal provider routes for voice, scene render, and final compose
+  - ElevenLabs integration path for voice clone + voice render
+  - HeyGen integration path for shot generation
+  - Shotstack integration path for final compose
+  - hybrid/strict/stub provider execution modes
+  - provider task polling + webhook persistence
+
+- [x] Parent experience
+  - order status page
+  - preview visibility
+  - render lifecycle visibility
+  - parent-facing retry endpoint with limits
+  - gift link create, inspect, redeem, resend, revoke, regenerate
+
+- [x] Admin + support tooling
+  - dead-letter render queue visibility and retry
+  - email notification failure dashboard
+  - retry request history dashboard
+  - provider task failure triage dashboard
+
+- [x] Email + notifications
+  - delivery-ready email
+  - render-failure email
+  - gift redemption email flow
+  - notification outcome logging in `email_notifications`
+
+- [x] Reliability + observability
+  - enqueue dedupe persistence
+  - dead-letter/retry observability
+  - provider task state persistence
+  - order status provider task visibility
+  - scene-plan and render metadata introspection in order status
+
+- [x] Data deletion + retention
+  - manual `POST /orders/:orderId/delete-data`
+  - best-effort provider cleanup hooks for ElevenLabs, HeyGen, and Shotstack
+  - local cleanup of uploads, artifacts, scripts, jobs, and provider tasks
+  - retention sweep runner on API startup + interval
+  - automatic purge for aged `delivered`, `refunded`, and `expired` orders when enabled
+
+- [x] Delivery + CI
+  - GitHub Actions CI
+  - repo typecheck pipeline
+  - smoke test flow for the core happy path
+
+## Built But Still Scaffolded
+
+- [x] Moderation is real local heuristic moderation now
+  - file signature validation
+  - byte-count integrity checks
+  - photo-set uniqueness heuristics
+  - voice-duration heuristics
+  - still not provider-grade CV/audio moderation
+
+- [x] Character system is functional scaffold, not reusable identity product
+  - deterministic profile generation exists
+  - no long-lived reusable character identity lifecycle yet
+
+- [x] Provider cleanup is best-effort
+  - local deletion always completes
+  - provider-side deletion failures are reported but do not block local purge
+
+- [x] Theme audio is seeded placeholder material
+  - compose path is real
+  - production-quality licensed music/SFX pipeline is not built yet
+
+## Current Product Shape
+
+- [x] Current shipped build definition
+  - template-first personalized child story videos
+  - web-first parent flow
+  - 20-40 second seeded outputs today
+  - manifest-driven shot planning
+  - provider-assisted render pipeline
+  - async delivery with status tracking and retries
+
+## Next Up
+
+- [ ] Replace heuristic moderation with stronger media-quality and safety checks
+- [ ] Add dedicated retention/admin visibility for purge history and retention outcomes
+- [ ] Improve provider deletion coverage and verification reporting
+- [ ] Expand from current seeded 4-shot launch structure into richer premium theme packs
+- [ ] Add reusable character identity lifecycle instead of per-order scaffolded DNA only
+- [ ] Add richer branded subtitle system and more final compose polish
+
+## Notes
+
+- When `ORDER_DATA_RETENTION_ENABLED=false`, retention automation is disabled and cleanup remains manual.
+- This file replaces the older narrow task list; update this ledger when features land so build status stays accurate from start to finish.

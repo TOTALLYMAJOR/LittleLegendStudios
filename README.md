@@ -87,62 +87,66 @@ Notes:
 - Start API + worker first (`npm run dev:boot` in a separate terminal).
 - If `STRIPE_SECRET_KEY` is set, `/pay` uses live checkout and smoke exits by design. Use stub mode for automation.
 
-## Current Vertical Slice
+## Built Features
 
-- Create user + order
-- Signed upload/download URL flow with local binary asset store (`/assets/upload/*`, `/assets/download/*`)
-- Intake gating before script generation:
-  - parental consent required
-  - 5-15 photos (JPEG/PNG)
-  - exactly 1 voice sample (WAV/M4A)
-- Script generation + approval (deterministic 4-shot, 20-40s structure, max 3 versions/order)
-- Script generation now also creates a signed watermarked preview artifact (`preview_video`) for parent review
-- Cinematic Prompt Engine scaffold (scene-aware shot plan with camera/lighting/environment cues)
-- Theme scene packs in template manifests (10 scenes per launch theme with anchors and asset pointers)
-- Character DNA scaffold in worker (deterministic `character_refs` profile derived from uploaded photos)
-- Expanded lifecycle states for retries/refunds (`failed_soft`, `failed_hard`, `refund_queued`, `manual_review`)
-- Stripe checkout + webhook path (real when Stripe env vars are set, stub fallback otherwise)
-- Payment idempotency support via `Idempotency-Key` / `X-Idempotency-Key` on `POST /orders/:orderId/pay`
-- Worker pipeline consumes shot plans and writes `voice_clone_meta`, `audio_*`, `character_refs`, `shot_video`, and final artifacts
-- Worker now materializes binary placeholder files for generated artifact keys so signed download links resolve immediately
-- Worker attempts to ingest provider output URLs (when available from task polling) before falling back to placeholders
-- Worker now compiles per-shot `sceneRenderSpec` payloads from theme manifests (assets, anchors, camera, lighting, environment motion, model profile)
-- Worker provider adapters support `stub` and `http` modes for voice + scene generation services
-- API now exposes internal provider endpoints for model + scene generation (`/voice/clone`, `/voice/render`, `/scene/*`)
-- API provider endpoints support real integration attempts for ElevenLabs (voice), HeyGen (shot generation), and Shotstack (final compose) with fallback behavior.
-- Provider task tracking with polling/webhook endpoints (`GET /provider-tasks/:id`, `POST /provider-tasks/webhook`) and DB persistence
-- Provider task admin routes for monitoring/retry (`GET /provider-tasks`, `POST /provider-tasks/:id/retry`)
-- Stripe webhook replay protection with persisted dedupe records in `stripe_webhook_events`
-- Render queue enqueue dedupe persistence in `render_enqueue_dedupes`
-- Render queue dead-letter visibility + retry:
-  - `GET /admin/queue/render/dead-letter`
-  - `POST /admin/queue/render/dead-letter/:jobId/retry`
-- Email notification failure visibility:
-  - `GET /admin/email-notifications/failures`
-  - web view at `/admin/email-notifications`
-- Retry request history visibility:
-  - `GET /admin/retry-requests`
-  - web view at `/admin/retry-history`
-- Provider task failure triage:
-  - `GET /provider-tasks?status=failed`
-  - `GET /provider-tasks/:providerTaskId`
-  - `POST /provider-tasks/:providerTaskId/retry`
-  - web view at `/admin/provider-task-triage`
-- Order status now includes provider task rows for live visibility in the status page
-- Order status/create UI surfaces latest watermarked preview links when available
-- Order status now includes computed per-shot scene plans with model profile tags (camera/lighting/assets/anchors) for render introspection
-- Admin order retry endpoint: `POST /admin/orders/:orderId/retry` (token-gated via `ADMIN_API_TOKEN`)
-- Parent-facing retry endpoint with limits: `POST /orders/:orderId/retry` (limit from `PARENT_MAX_RETRY_REQUESTS`)
-- Parent token auth + ownership checks now gate:
-  - `GET /orders/:orderId/status`
-  - `POST /orders/:orderId/retry`
-  - `POST /orders/:orderId/gift-link`
-- Gift redemption link flow:
-  - create link: `POST /orders/:orderId/gift-link`
-  - inspect link: `GET /gift/redeem/:token`
-  - redeem link: `POST /gift/redeem/:token`
-- Worker now sends delivery-ready and render-failure emails, and logs outcomes in `email_notifications`
-- Status polling + final artifact link stub
+This repo is no longer just a thin scaffold. The current build includes:
+
+- Parent intake + order creation
+  - create user + order
+  - signed upload/download URL flow with local binary asset store (`/assets/upload/*`, `/assets/download/*`)
+  - parental consent gating
+  - 5-15 photo uploads and exactly 1 voice upload
+
+- Script generation + review
+  - manifest-driven script planning
+  - 20-40 second seeded outputs
+  - max 3 script versions per order
+  - signed watermarked preview artifact (`preview_video`)
+
+- Render pipeline
+  - moderation step with local heuristic media checks
+  - voice clone + voice render
+  - aggregate narration/dialogue tracks plus per-shot audio artifacts
+  - character profile scaffold generation
+  - shot render orchestration with per-shot `sceneRenderSpec`
+  - real Shotstack final timeline assembly from persisted shot assets
+  - per-shot voice tracks preferred with aggregate fallback
+  - seeded theme music bed layering + music ducking
+  - branded subtitle presets in final compose
+
+- Theme system
+  - seeded launch themes with 10-scene manifests each
+  - richer scene metadata: anchors, palette, global FX, audio cues, grade, camera motion
+  - seeded placeholder audio assets for ambience, music beds, and SFX
+
+- Provider integrations
+  - internal provider routes: `/voice/clone`, `/voice/render`, `/scene/*`
+  - ElevenLabs integration path for voice clone + render
+  - HeyGen integration path for shot generation
+  - Shotstack integration path for final compose
+  - provider task persistence, polling, webhook ingestion, and retry tooling
+
+- Parent + admin experience
+  - parent order status page with provider-task visibility
+  - parent retry endpoint with limits
+  - parent auth + ownership enforcement
+  - gift link create / inspect / redeem / resend / revoke / regenerate
+  - admin dead-letter retry view
+  - email notification failure view
+  - retry request history view
+  - provider task failure triage view
+
+- Reliability + lifecycle controls
+  - Stripe stub + optional real checkout/webhook flow
+  - payment idempotency
+  - webhook replay protection
+  - render enqueue dedupe persistence
+  - delivery-ready and render-failure email logging
+  - manual order data deletion
+  - best-effort provider-side cleanup hooks
+  - optional retention automation for aged delivered/refunded/expired orders
+
+For the full build ledger, use [TASKS.md](/home/totallymajor/projects/LittleLegendStudios/TASKS.md).
 
 ## Notes
 
@@ -174,4 +178,9 @@ Notes:
   - `HEYGEN_API_KEY`
   - `SHOTSTACK_API_KEY`
 - Optionally protect provider routes with `PROVIDER_AUTH_TOKEN` (set in API + worker env).
+- Optional retention automation:
+  - `ORDER_DATA_RETENTION_ENABLED=true`
+  - `ORDER_DATA_RETENTION_DAYS`
+  - `ORDER_DATA_RETENTION_SWEEP_INTERVAL_MS`
+  - `ORDER_DATA_RETENTION_SWEEP_LIMIT`
 - This is a foundation for Milestones M1-M3 from the product spec.

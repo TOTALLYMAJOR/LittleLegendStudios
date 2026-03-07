@@ -22,6 +22,29 @@ export function createSignedDownloadUrl(assetKey: string): string {
   });
 }
 
+export async function downloadAssetBytes(assetKey: string): Promise<{ contentType: string; bytes: Uint8Array }> {
+  const signedDownloadUrl = createSignedDownloadUrl(assetKey);
+  const response = await fetch(signedDownloadUrl, {
+    method: 'GET'
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Failed to download asset ${assetKey}: ${response.status} ${text.slice(0, 300)}`);
+  }
+
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  if (bytes.byteLength === 0) {
+    throw new Error(`Downloaded asset ${assetKey} is empty.`);
+  }
+
+  const contentTypeHeader = response.headers.get('content-type');
+  return {
+    contentType: contentTypeHeader?.split(';')[0]?.trim() || 'application/octet-stream',
+    bytes
+  };
+}
+
 export async function uploadAssetBytes(args: {
   assetKey: string;
   contentType: string;

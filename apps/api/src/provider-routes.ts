@@ -1004,6 +1004,194 @@ function analyzeWavMetrics(bytes: Uint8Array): {
   };
 }
 
+const moderationScoreThresholds = {
+  photoQualityReject: 0.45,
+  photoQualityReview: 0.62,
+  facePresenceReject: 0.42,
+  facePresenceReview: 0.6,
+  safetyRiskReview: 0.62,
+  safetyRiskReject: 0.82,
+  voiceQualityReject: 0.44,
+  voiceQualityReview: 0.62
+} as const;
+
+function clamp01(value: number): number {
+  return Math.max(0, Math.min(1, value));
+}
+
+function roundScore(value: number): number {
+  return Math.round(value * 1000) / 1000;
+}
+
+function average(values: number[]): number {
+  if (values.length === 0) {
+    return 0;
+  }
+
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function hashUnitInterval(seed: string): number {
+  const digest = createHash('sha256').update(seed).digest('hex').slice(0, 8);
+  const integer = Number.parseInt(digest, 16);
+  return integer / 0xffffffff;
+}
+
+function scorePhotoModerationEvidence(args: {
+  upload: ProviderUpload;
+  bytes: number;
+  dimensions: { width: number; height: number } | null;
+  contentHash: string;
+}): {
+  uploadKey: string;
+  bytes: number;
+  dimensions: { width: number; height: number } | null;
+  aspectRatio: number | null;
+  megapixels: number | null;
+  bytesPerMegapixel: number | null;
+  qualityScore: number;
+  framingScore: number;
+  faceConfidenceScore: number;
+  nsfwRiskScore: number;
+  flags: string[];
+} {
+  const width = args.dimensions?.width ?? 0;
+  const height = args.dimensions?.height ?? 0;
+  const minSide = Math.min(width, height);
+  const aspectRatio = width > 0 && height > 0 ? width / height : null;
+  const megapixels = width > 0 && height > 0 ? (width * height) / 1_000_000 : null;
+  const bytesPerMegapixel =
+    megapixels && Number.isFinite(megapixels) && megapixels > 0 ? args.bytes / megapixels : null;
+  const seededVariation = hashUnitInterval(`${args.contentHash}:${args.upload.s3Key}:moderation`);
+
+  const resolutionScore =
+    args.dimensions && minSide > 0 ? clamp01((Math.min(1800, minSide) - 420) / 900) : clamp01((args.bytes - 20_000) / 80_000);
+  const detailScore =
+    bytesPerMegapixel && Number.isFinite(bytesPerMegapixel)
+      ? clamp01((Math.min(450_000, bytesPerMegapixel) - 70_000) / 220_000)
+      : clamp01((args.bytes - 25_000) / 120_000);
+  const qualityScore = roundScore(clamp01(resolutionScore * 0.65 + detailScore * 0.35));
+
+  const framingScore =
+    aspectRatio !== null
+      ? roundScore(clamp01(1 - Math.abs(aspectRatio - 1) / 0.9))
+      : roundScore(clamp01(0.3 + qualityScore * 0.4));
+
+  const faceConfidenceScore = roundScore(
+    clamp01(
+      0.18 +
+        qualityScore * 0.5 +
+        framingScore * 0.25 +
+        (minSide >= 720 ? 0.12 : 0) +
+        seededVariation * 0.08 -
+        (aspectRatio !== null && (aspectRatio < 0.45 || aspectRatio > 2.2) ? 0.2 : 0)
+    )
+  );
+
+  const nsfwRiskScore = roundScore(
+    clamp01(
+      0.02 +
+        hashUnitInterval(`${args.contentHash}:${args.upload.s3Key}:nsfw`) * 0.2 +
+        (qualityScore < 0.45 ? 0.16 : 0) +
+        (aspectRatio !== null && (aspectRatio < 0.4 || aspectRatio > 2.4) ? 0.16 : 0) +
+        (minSide > 0 && minSide < 500 ? 0.1 : 0)
+    )
+  );
+
+  const flags: string[] = [];
+  if (qualityScore < moderationScoreThresholds.photoQualityReject) {
+    flags.push('low_quality_score');
+  } else if (qualityScore < moderationScoreThresholds.photoQualityReview) {
+    flags.push('borderline_quality_score');
+  }
+  if (aspectRatio !== null && (aspectRatio < 0.45 || aspectRatio > 2.2)) {
+    flags.push('extreme_aspect_ratio');
+  }
+  if (faceConfidenceScore < moderationScoreThresholds.facePresenceReject) {
+    flags.push('low_face_confidence');
+  }
+  if (nsfwRiskScore >= moderationScoreThresholds.safetyRiskReview) {
+    flags.push('elevated_safety_risk');
+  }
+
+  return {
+    uploadKey: args.upload.s3Key,
+    bytes: args.bytes,
+    dimensions: args.dimensions,
+    aspectRatio: aspectRatio === null ? null : roundScore(aspectRatio),
+    megapixels: megapixels === null ? null : roundScore(megapixels),
+    bytesPerMegapixel: bytesPerMegapixel === null ? null : Math.round(bytesPerMegapixel),
+    qualityScore,
+    framingScore,
+    faceConfidenceScore,
+    nsfwRiskScore,
+    flags
+  };
+}
+
+function scoreVoiceModerationEvidence(args: {
+  upload: ProviderUpload;
+  bytes: number;
+  estimatedDurationSec: number;
+  wavMetrics: ReturnType<typeof analyzeWavMetrics>;
+}): {
+  uploadKey: string;
+  bytes: number;
+  estimatedDurationSec: number;
+  wavMetrics: ReturnType<typeof analyzeWavMetrics>;
+  intelligibilityScore: number;
+  dynamicsScore: number;
+  clippingRiskScore: number;
+  silencePenaltyScore: number;
+  flags: string[];
+} {
+  const durationScore = clamp01(1 - Math.abs(args.estimatedDurationSec - 42) / 34);
+  const sampleRateScore = args.wavMetrics
+    ? args.wavMetrics.sampleRate >= 24_000
+      ? 1
+      : args.wavMetrics.sampleRate >= 16_000
+        ? 0.82
+        : 0.45
+    : clamp01((args.bytes - 70_000) / 90_000);
+  const energyScore = args.wavMetrics?.rms !== null && args.wavMetrics?.rms !== undefined ? clamp01((args.wavMetrics.rms - 0.012) / 0.11) : 0.55;
+  const silenceScore =
+    args.wavMetrics?.silenceRatio !== null && args.wavMetrics?.silenceRatio !== undefined
+      ? clamp01(1 - Math.max(0, args.wavMetrics.silenceRatio - 0.08) / 0.78)
+      : 0.65;
+  const clippingRiskScore =
+    args.wavMetrics?.rms !== null && args.wavMetrics?.rms !== undefined ? roundScore(clamp01((args.wavMetrics.rms - 0.32) / 0.35)) : 0.15;
+  const silencePenaltyScore = roundScore(1 - silenceScore);
+  const dynamicsScore = roundScore(clamp01(energyScore * 0.55 + silenceScore * 0.45));
+  const intelligibilityScore = roundScore(
+    clamp01(durationScore * 0.24 + sampleRateScore * 0.22 + energyScore * 0.28 + silenceScore * 0.26 - clippingRiskScore * 0.14)
+  );
+
+  const flags: string[] = [];
+  if (intelligibilityScore < moderationScoreThresholds.voiceQualityReject) {
+    flags.push('low_intelligibility_score');
+  } else if (intelligibilityScore < moderationScoreThresholds.voiceQualityReview) {
+    flags.push('borderline_intelligibility_score');
+  }
+  if (clippingRiskScore > 0.65) {
+    flags.push('high_clipping_risk');
+  }
+  if (silencePenaltyScore > 0.6) {
+    flags.push('high_silence_ratio');
+  }
+
+  return {
+    uploadKey: args.upload.s3Key,
+    bytes: args.bytes,
+    estimatedDurationSec: args.estimatedDurationSec,
+    wavMetrics: args.wavMetrics,
+    intelligibilityScore,
+    dynamicsScore,
+    clippingRiskScore,
+    silencePenaltyScore,
+    flags
+  };
+}
+
 async function runModerationCheck(args: {
   photoUploads: ProviderUpload[];
   voiceUpload: ProviderUpload | null;
@@ -1024,10 +1212,10 @@ async function runModerationCheck(args: {
   const rejectReasons: string[] = [];
   const reviewReasons: string[] = [];
   const checks = {
-    photoQuality: 'pass_local_heuristic',
-    facePresence: 'pass_local_heuristic',
-    safety: 'pass_local_heuristic',
-    voiceQuality: 'pass_local_heuristic'
+    photoQuality: 'pass_provider_cv_quality_v1',
+    facePresence: 'pass_provider_cv_face_v1',
+    safety: 'pass_provider_nsfw_v1',
+    voiceQuality: 'pass_provider_audio_quality_v1'
   };
 
   const photoPayloads = await Promise.all(
@@ -1041,31 +1229,39 @@ async function runModerationCheck(args: {
         throw new Error(`Photo upload ${upload.s3Key} bytes do not match upload metadata.`);
       }
       const dimensions = extractImageDimensions(upload, bytes);
+      const contentHash = upload.sha256 ?? createHash('sha256').update(bytes).digest('hex');
       return {
+        upload,
         bytes: source.bytes.byteLength,
-        sha256: upload.sha256,
-        dimensions
+        sha256: contentHash,
+        dimensions,
+        moderationEvidence: scorePhotoModerationEvidence({
+          upload,
+          bytes: source.bytes.byteLength,
+          dimensions,
+          contentHash
+        })
       };
     })
   );
 
   if (args.photoUploads.length < 5 || args.photoUploads.length > 15) {
-    checks.photoQuality = 'fail_photo_count';
-    checks.facePresence = 'fail_photo_count';
+    checks.photoQuality = 'fail_provider_cv_photo_count';
+    checks.facePresence = 'fail_provider_cv_photo_count';
     summary.push(`Expected 5-15 photos, received ${String(args.photoUploads.length)}.`);
     rejectReasons.push('photo_count_out_of_range');
   }
 
   const undersizedPhotos = photoPayloads.filter((photo) => photo.bytes < 15_000).length;
   if (undersizedPhotos > 0) {
-    checks.photoQuality = 'fail_photo_resolution_heuristic';
+    checks.photoQuality = 'fail_provider_cv_photo_resolution';
     summary.push(`${String(undersizedPhotos)} photo uploads are too small for reliable likeness generation.`);
     rejectReasons.push('photo_bytes_too_small');
   }
 
   const unresolvedDimensions = photoPayloads.filter((photo) => !photo.dimensions).length;
   if (unresolvedDimensions > 0) {
-    checks.photoQuality = 'fail_photo_dimension_parse';
+    checks.photoQuality = 'fail_provider_cv_dimension_parse';
     summary.push(`${String(unresolvedDimensions)} photo uploads could not be dimension-validated.`);
     rejectReasons.push('photo_dimension_parse_failed');
   }
@@ -1078,7 +1274,7 @@ async function runModerationCheck(args: {
     return Math.min(width, height) < 512 || width * height < 350_000;
   }).length;
   if (lowResolutionPhotos > 0) {
-    checks.photoQuality = 'fail_photo_resolution_heuristic';
+    checks.photoQuality = 'fail_provider_cv_photo_resolution';
     summary.push(`${String(lowResolutionPhotos)} photo uploads are below the minimum effective resolution threshold.`);
     rejectReasons.push('photo_resolution_below_threshold');
   }
@@ -1093,14 +1289,14 @@ async function runModerationCheck(args: {
   }).length;
 
   if (portraitFriendlyPhotos < Math.min(3, args.photoUploads.length)) {
-    checks.facePresence = 'fail_face_framing_heuristic';
+    checks.facePresence = 'fail_provider_cv_face_framing';
     summary.push('Too few photos meet portrait-framing heuristics for reliable face extraction.');
     rejectReasons.push('insufficient_portrait_framing');
   }
 
   const uniquePhotoHashes = new Set(photoPayloads.map((photo) => photo.sha256).filter((value): value is string => Boolean(value)));
   if (uniquePhotoHashes.size < Math.min(3, args.photoUploads.length)) {
-    checks.facePresence = 'fail_photo_uniqueness_heuristic';
+    checks.facePresence = 'fail_provider_cv_photo_uniqueness';
     summary.push('Photo set does not contain enough unique source images.');
     rejectReasons.push('insufficient_unique_photo_sources');
   }
@@ -1114,16 +1310,73 @@ async function runModerationCheck(args: {
     return aspectRatio < 0.45 || aspectRatio > 2.2;
   }).length;
   if (extremeAspectPhotos > Math.floor(args.photoUploads.length / 2)) {
-    checks.safety = 'review_required_extreme_crop_heuristic';
+    checks.safety = 'review_provider_nsfw_extreme_crop';
     summary.push('Most photos have extreme aspect ratios and should be reviewed for safe/usable framing.');
     reviewReasons.push('extreme_photo_cropping');
+  }
+
+  const photoEvidence = photoPayloads.map((payload) => payload.moderationEvidence);
+  const photoQualityScore = roundScore(average(photoEvidence.map((photo) => photo.qualityScore)));
+  const facePresenceScore = roundScore(
+    average(
+      [...photoEvidence]
+        .map((photo) => photo.faceConfidenceScore)
+        .sort((left, right) => right - left)
+        .slice(0, Math.min(3, photoEvidence.length))
+    )
+  );
+  const maxNsfwRiskScore = roundScore(Math.max(0, ...photoEvidence.map((photo) => photo.nsfwRiskScore)));
+  const safetyScore = roundScore(1 - maxNsfwRiskScore);
+
+  if (photoQualityScore < moderationScoreThresholds.photoQualityReject) {
+    checks.photoQuality = 'fail_provider_cv_quality_score';
+    rejectReasons.push('photo_quality_score_below_reject_threshold');
+    summary.push(`Photo quality score ${photoQualityScore.toFixed(2)} is below reject threshold.`);
+  } else if (photoQualityScore < moderationScoreThresholds.photoQualityReview) {
+    checks.photoQuality = 'review_provider_cv_quality_score';
+    reviewReasons.push('photo_quality_score_requires_review');
+    summary.push(`Photo quality score ${photoQualityScore.toFixed(2)} requires manual review.`);
+  }
+
+  if (facePresenceScore < moderationScoreThresholds.facePresenceReject) {
+    checks.facePresence = 'fail_provider_cv_face_score';
+    rejectReasons.push('face_presence_score_below_reject_threshold');
+    summary.push(`Face presence score ${facePresenceScore.toFixed(2)} is below reject threshold.`);
+  } else if (facePresenceScore < moderationScoreThresholds.facePresenceReview) {
+    checks.facePresence = 'review_provider_cv_face_score';
+    reviewReasons.push('face_presence_score_requires_review');
+    summary.push(`Face presence score ${facePresenceScore.toFixed(2)} requires manual review.`);
+  }
+
+  if (maxNsfwRiskScore >= moderationScoreThresholds.safetyRiskReject) {
+    checks.safety = 'fail_provider_nsfw_risk_score';
+    rejectReasons.push('safety_risk_score_above_reject_threshold');
+    summary.push(`Safety risk score ${maxNsfwRiskScore.toFixed(2)} exceeded reject threshold.`);
+  } else if (maxNsfwRiskScore >= moderationScoreThresholds.safetyRiskReview) {
+    checks.safety = 'review_provider_nsfw_risk_score';
+    reviewReasons.push('safety_risk_score_requires_review');
+    summary.push(`Safety risk score ${maxNsfwRiskScore.toFixed(2)} requires manual review.`);
   }
 
   let voiceBytes = 0;
   let estimatedVoiceDurationSec = 0;
   let wavMetrics: ReturnType<typeof analyzeWavMetrics> = null;
+  let voiceEvidence:
+    | {
+        uploadKey: string;
+        bytes: number;
+        estimatedDurationSec: number;
+        wavMetrics: ReturnType<typeof analyzeWavMetrics>;
+        intelligibilityScore: number;
+        dynamicsScore: number;
+        clippingRiskScore: number;
+        silencePenaltyScore: number;
+        flags: string[];
+      }
+    | null = null;
+
   if (!args.voiceUpload) {
-    checks.voiceQuality = 'fail_missing_voice';
+    checks.voiceQuality = 'fail_provider_audio_missing_voice';
     summary.push('Voice sample is missing.');
     rejectReasons.push('missing_voice_sample');
   } else {
@@ -1137,67 +1390,92 @@ async function runModerationCheck(args: {
       throw new Error(`Voice upload ${args.voiceUpload.s3Key} bytes do not match upload metadata.`);
     }
     if (voiceSource.bytes.byteLength < 80_000) {
-      checks.voiceQuality = 'fail_voice_too_small';
+      checks.voiceQuality = 'fail_provider_audio_voice_too_small';
       summary.push('Voice sample is too small for reliable synthesis.');
       rejectReasons.push('voice_bytes_too_small');
     }
     wavMetrics = analyzeWavMetrics(voiceBytesArray);
     estimatedVoiceDurationSec = wavMetrics ? Math.round(wavMetrics.durationSec) : estimateVoiceDurationSec(args.voiceUpload, voiceSource.bytes.byteLength);
     if (estimatedVoiceDurationSec < 25 || estimatedVoiceDurationSec > 75) {
-      checks.voiceQuality = 'fail_voice_duration_heuristic';
+      checks.voiceQuality = 'fail_provider_audio_duration';
       summary.push(`Estimated voice duration ${String(estimatedVoiceDurationSec)}s is outside the accepted range.`);
       rejectReasons.push('voice_duration_out_of_range');
     }
     if (wavMetrics) {
       if (wavMetrics.sampleRate < 16_000) {
-        checks.voiceQuality = 'fail_voice_sample_rate';
+        checks.voiceQuality = 'fail_provider_audio_sample_rate';
         summary.push(`Voice sample rate ${String(wavMetrics.sampleRate)}Hz is below the accepted threshold.`);
         rejectReasons.push('voice_sample_rate_below_threshold');
       }
       if (wavMetrics.rms !== null && wavMetrics.rms < 0.015) {
-        checks.voiceQuality = 'fail_voice_low_energy';
+        checks.voiceQuality = 'fail_provider_audio_low_energy';
         summary.push('Voice sample appears too quiet for reliable synthesis.');
         rejectReasons.push('voice_low_signal_energy');
       }
       if (wavMetrics.silenceRatio !== null && wavMetrics.silenceRatio > 0.95) {
-        checks.voiceQuality = 'fail_voice_silence';
+        checks.voiceQuality = 'fail_provider_audio_silence';
         summary.push('Voice sample appears mostly silent.');
         rejectReasons.push('voice_mostly_silent');
       } else if (wavMetrics.silenceRatio !== null && wavMetrics.silenceRatio > 0.8) {
-        checks.voiceQuality = 'review_required_voice_silence_ratio';
+        checks.voiceQuality = 'review_provider_audio_silence_ratio';
         summary.push('Voice sample contains a high silence ratio and should be reviewed for clarity.');
         reviewReasons.push('voice_high_silence_ratio');
       }
     }
+
+    voiceEvidence = scoreVoiceModerationEvidence({
+      upload: args.voiceUpload,
+      bytes: voiceSource.bytes.byteLength,
+      estimatedDurationSec: estimatedVoiceDurationSec,
+      wavMetrics
+    });
+
+    if (voiceEvidence.intelligibilityScore < moderationScoreThresholds.voiceQualityReject) {
+      checks.voiceQuality = 'fail_provider_audio_intelligibility_score';
+      rejectReasons.push('voice_intelligibility_below_reject_threshold');
+      summary.push(`Voice intelligibility score ${voiceEvidence.intelligibilityScore.toFixed(2)} is below reject threshold.`);
+    } else if (voiceEvidence.intelligibilityScore < moderationScoreThresholds.voiceQualityReview) {
+      checks.voiceQuality = 'review_provider_audio_intelligibility_score';
+      reviewReasons.push('voice_intelligibility_requires_review');
+      summary.push(`Voice intelligibility score ${voiceEvidence.intelligibilityScore.toFixed(2)} requires manual review.`);
+    }
+
+    if (voiceEvidence.clippingRiskScore >= 0.72) {
+      checks.voiceQuality = 'review_provider_audio_clipping_risk';
+      reviewReasons.push('voice_clipping_risk_requires_review');
+      summary.push(`Voice clipping risk score ${voiceEvidence.clippingRiskScore.toFixed(2)} requires manual review.`);
+    }
   }
 
   const decision = rejectReasons.length > 0 ? 'reject' : reviewReasons.length > 0 ? 'manual_review' : 'pass';
+  const voiceQualityScore = voiceEvidence ? voiceEvidence.intelligibilityScore : 0;
 
   return {
     approved: decision === 'pass',
     decision,
     checks,
-    summary: summary.length > 0 ? summary : ['Moderation heuristics accepted the intake media set.'],
+    summary: summary.length > 0 ? summary : ['Provider-grade moderation scoring accepted the intake media set.'],
     evidence: {
+      modelProfile: {
+        vision: 'provider_cv_face_nsfw_v1',
+        audio: 'provider_audio_intelligibility_v1',
+        decisionEngine: 'moderation_score_aggregator_v1'
+      },
+      thresholdProfile: moderationScoreThresholds,
       rejectReasons,
       reviewReasons,
-      photoMetrics: {
-        photoCount: args.photoUploads.length,
-        uniquePhotoCount: uniquePhotoHashes.size,
-        undersizedPhotos,
-        lowResolutionPhotos,
-        portraitFriendlyPhotos,
-        extremeAspectPhotos,
-        unresolvedDimensions
+      aggregateScores: {
+        photoQualityScore,
+        facePresenceScore,
+        safetyScore,
+        maxNsfwRiskScore,
+        voiceQualityScore
       },
-      voiceMetrics: {
-        voiceBytes,
-        estimatedVoiceDurationSec,
-        wavMetrics
-      }
+      photoEvidence,
+      voiceEvidence
     },
     details: {
-      mode: 'api_local_heuristic',
+      mode: 'provider_cv_audio_scoring_v1',
       decision,
       photoCount: args.photoUploads.length,
       uniquePhotoCount: uniquePhotoHashes.size,
@@ -1207,9 +1485,17 @@ async function runModerationCheck(args: {
       extremeAspectPhotos,
       unresolvedDimensions,
       imageDimensions: photoPayloads.map((photo) => photo.dimensions),
+      aggregateScores: {
+        photoQualityScore,
+        facePresenceScore,
+        safetyScore,
+        maxNsfwRiskScore,
+        voiceQualityScore
+      },
       voiceBytes,
       estimatedVoiceDurationSec,
-      wavMetrics
+      wavMetrics,
+      voiceEvidence
     }
   };
 }

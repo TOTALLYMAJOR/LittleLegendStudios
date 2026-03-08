@@ -188,6 +188,8 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
 - [x] Moderation provider contract exists
   - worker can call dedicated moderation provider through `stub` or `http` mode
   - API exposes `/moderation/check` with structured category-level outcomes
+  - moderation now computes scored photo quality, face confidence, NSFW risk, and voice intelligibility bands
+  - moderation evidence now includes threshold profile + per-asset score breakdowns for triage/support
   - local heuristics remain the hard baseline in the worker
 
 - [x] Character identity lifecycle exists, but product surface is still thin
@@ -217,9 +219,9 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
 ## Next Up
 
 - [ ] Replace heuristic moderation with stronger media-quality and safety checks
-  - add provider-grade CV/NSFW checks instead of heuristic-only approval
-  - add stronger voice intelligibility and quality scoring
-  - persist even richer moderation evidence for review and support
+  - connect score-based moderation to real external CV/NSFW models instead of proxy scoring only
+  - calibrate voice intelligibility thresholds against labeled production samples
+  - surface richer moderation evidence directly in parent/admin review workflows
 - [ ] Add richer branded subtitle system and more final compose polish
   - keep pushing subtitle styling and final brand treatment beyond the current richer layout set
   - keep polishing music, audio mix, and finishing details

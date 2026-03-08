@@ -1,7 +1,7 @@
 import Link from 'next/link';
-import type { Route } from 'next';
 import { cookies } from 'next/headers';
 
+import { AuthRecoveryCard } from './AuthRecoveryCard';
 import { OrderActions } from './OrderActions';
 
 const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000';
@@ -44,6 +44,10 @@ interface JobRow {
   id: string;
   type: string;
   status: 'queued' | 'running' | 'succeeded' | 'failed';
+  provider?: string;
+  attempt?: number;
+  error_text?: string | null;
+  output_json?: Record<string, unknown>;
 }
 
 interface ArtifactRow {
@@ -72,6 +76,26 @@ interface OrderStatusResponse {
   };
   latestScript: LatestScript | null;
   jobs: JobRow[];
+  latestModeration: {
+    jobId: string;
+    provider: string;
+    status: 'queued' | 'running' | 'succeeded' | 'failed';
+    attempt: number;
+    startedAt: string | null;
+    finishedAt: string | null;
+    decision: 'pass' | 'manual_review' | 'reject' | 'unknown';
+    checks: Record<string, string>;
+    summary: string[];
+    rejectReasons: string[];
+    reviewReasons: string[];
+    aggregateScores: Record<string, unknown>;
+    modelProfile: Record<string, unknown>;
+    thresholdProfile: Record<string, unknown>;
+    evidence: Record<string, unknown>;
+    details: Record<string, unknown>;
+    localChecks: Record<string, unknown>;
+    errorText: string | null;
+  } | null;
   artifacts: ArtifactRow[];
   providerTasks: ProviderTaskRow[];
   parentRetryPolicy: {
@@ -201,6 +225,16 @@ function getStatusChipClass(status: OrderStatus): string {
   return 'status-chip';
 }
 
+function getModerationChipClass(decision: 'pass' | 'manual_review' | 'reject' | 'unknown'): string {
+  if (decision === 'pass') {
+    return 'status-chip success';
+  }
+  if (decision === 'manual_review' || decision === 'reject') {
+    return 'status-chip warning';
+  }
+  return 'status-chip';
+}
+
 async function loadOrder(args: {
   orderId: string;
   parentAccessToken: string | null;
@@ -241,19 +275,7 @@ export default async function OrderStatusPage({ params }: StatusPageProps): Prom
       <main>
         <section className="card">
           <h1>{unauthorized ? 'Parent auth required' : 'Order not found'}</h1>
-          <p>
-            {unauthorized
-              ? 'Your parent session is missing or expired. Restore it with the original parent email, then return to this order.'
-              : 'The order id may be invalid or not yet created.'}
-          </p>
-          {unauthorized ? (
-            <>
-              <Link href={recoveryHref as Route}>Restore parent session</Link>
-              <p>If this order came from a gift email, reopening that redemption link will also restore access.</p>
-            </>
-          ) : (
-            <Link href="/create">Back to create flow</Link>
-          )}
+          {unauthorized ? <AuthRecoveryCard orderId={params.id} recoveryHref={recoveryHref} /> : <Link href="/create">Back to create flow</Link>}
         </section>
       </main>
     );
@@ -266,6 +288,8 @@ export default async function OrderStatusPage({ params }: StatusPageProps): Prom
   const failedJobs = data.jobs.filter((job) => job.status === 'failed').length;
   const runningJobs = data.jobs.filter((job) => job.status === 'running').length;
   const succeededJobs = data.jobs.filter((job) => job.status === 'succeeded').length;
+  const moderationScoreEntries = Object.entries(data.latestModeration?.aggregateScores ?? {});
+  const moderationCheckEntries = Object.entries(data.latestModeration?.checks ?? {});
 
   return (
     <main>
@@ -342,6 +366,92 @@ export default async function OrderStatusPage({ params }: StatusPageProps): Prom
         parentAccessToken={parentAccessToken}
         recoveryHref={recoveryHref}
       />
+
+      <section className="card">
+        <h2>Moderation Report</h2>
+        {!data.latestModeration ? (
+          <p>No moderation step recorded yet.</p>
+        ) : (
+          <>
+            <p className={getModerationChipClass(data.latestModeration.decision)}>
+              Decision: {data.latestModeration.decision} ({data.latestModeration.status})
+            </p>
+            <p>
+              Provider: <strong>{data.latestModeration.provider}</strong> | Attempt:{' '}
+              <strong>{data.latestModeration.attempt}</strong>
+            </p>
+            {data.latestModeration.summary.length > 0 ? (
+              <ul>
+                {data.latestModeration.summary.map((line) => (
+                  <li key={line}>{line}</li>
+                ))}
+              </ul>
+            ) : (
+              <p>No moderation summary text recorded.</p>
+            )}
+            {moderationCheckEntries.length > 0 ? (
+              <>
+                <h3>Checks</h3>
+                <ul>
+                  {moderationCheckEntries.map(([key, value]) => (
+                    <li key={key}>
+                      {key}: {value}
+                    </li>
+                  ))}
+                </ul>
+              </>
+            ) : null}
+            {moderationScoreEntries.length > 0 ? (
+              <>
+                <h3>Aggregate Scores</h3>
+                <ul>
+                  {moderationScoreEntries.map(([key, value]) => (
+                    <li key={key}>
+                      {key}: {typeof value === 'number' ? value.toFixed(3) : JSON.stringify(value)}
+                    </li>
+                  ))}
+                </ul>
+              </>
+            ) : null}
+            {data.latestModeration.rejectReasons.length > 0 ? (
+              <>
+                <h3>Reject Reasons</h3>
+                <ul>
+                  {data.latestModeration.rejectReasons.map((reason) => (
+                    <li key={reason}>{reason}</li>
+                  ))}
+                </ul>
+              </>
+            ) : null}
+            {data.latestModeration.reviewReasons.length > 0 ? (
+              <>
+                <h3>Review Reasons</h3>
+                <ul>
+                  {data.latestModeration.reviewReasons.map((reason) => (
+                    <li key={reason}>{reason}</li>
+                  ))}
+                </ul>
+              </>
+            ) : null}
+            <details>
+              <summary>Moderation Evidence JSON</summary>
+              <pre className="mono">
+                {JSON.stringify(
+                  {
+                    modelProfile: data.latestModeration.modelProfile,
+                    thresholdProfile: data.latestModeration.thresholdProfile,
+                    localChecks: data.latestModeration.localChecks,
+                    evidence: data.latestModeration.evidence,
+                    details: data.latestModeration.details
+                  },
+                  null,
+                  2
+                )}
+              </pre>
+            </details>
+          </>
+        )}
+      </section>
 
       <section className="card">
         <h2>Job Summary</h2>

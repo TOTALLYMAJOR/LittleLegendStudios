@@ -4,6 +4,8 @@ import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useEffect, useState } from 'react';
 
+import { persistParentSessionToken } from '../../../lib/parent-session';
+
 const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000';
 
 interface GiftPreviewResponse {
@@ -24,6 +26,13 @@ interface GiftPreviewResponse {
     status: string;
     themeName: string;
   };
+}
+
+interface GiftRedeemResponse {
+  redeemed: boolean;
+  orderId: string;
+  parentEmail: string;
+  parentAccessToken?: string;
 }
 
 async function parseResponse(response: Response): Promise<any> {
@@ -120,12 +129,16 @@ export default function GiftRedeemPage(): JSX.Element {
           parentEmail: parentEmail.trim()
         })
       });
-      const data = await parseResponse(response);
+      const payload = (await parseResponse(response)) as GiftRedeemResponse | { message?: string };
       if (!response.ok) {
-        throw new Error(data.message || `Gift redemption failed (${response.status}).`);
+        throw new Error(('message' in payload ? payload.message : undefined) || `Gift redemption failed (${response.status}).`);
       }
 
+      const data = payload as GiftRedeemResponse;
       const orderId = String(data.orderId ?? '');
+      if (typeof data.parentAccessToken === 'string' && data.parentAccessToken.trim().length > 0) {
+        persistParentSessionToken(data.parentAccessToken);
+      }
       setRedeemedOrderId(orderId);
       setStatusMessage('Gift redeemed successfully.');
     } catch (error) {

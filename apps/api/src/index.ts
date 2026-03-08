@@ -241,6 +241,35 @@ interface RetryHistoryRow {
   created_at: string;
 }
 
+interface OrderJobStatusRow {
+  id: string;
+  type: string;
+  status: 'queued' | 'running' | 'succeeded' | 'failed';
+  provider: string;
+  attempt: number;
+  input_json: Record<string, unknown> | null;
+  output_json: Record<string, unknown> | null;
+  error_text: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  created_at: string;
+}
+
+interface ModerationReviewRow {
+  id: string;
+  order_id: string;
+  order_status: OrderStatus;
+  parent_email: string;
+  status: 'queued' | 'running' | 'succeeded' | 'failed';
+  provider: string;
+  attempt: number;
+  output_json: Record<string, unknown> | null;
+  error_text: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  created_at: string;
+}
+
 interface ProviderTaskCleanupRow {
   provider_task_id: string;
   provider: string;
@@ -351,6 +380,13 @@ const adminRetryHistoryQuerySchema = z.object({
   orderId: z.string().uuid().optional(),
   actor: z.enum(['parent', 'admin']).optional(),
   accepted: z.coerce.boolean().optional()
+});
+
+const adminModerationReviewsQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(25),
+  orderId: z.string().uuid().optional(),
+  stepStatus: z.enum(['queued', 'running', 'succeeded', 'failed']).optional(),
+  decision: z.enum(['pass', 'manual_review', 'reject', 'unknown']).optional()
 });
 
 const adminOrderDataPurgeHistoryQuerySchema = z.object({
@@ -1789,6 +1825,87 @@ function buildScenePlan(args: { script: ScriptPayload; manifest: ThemeManifest }
   });
 }
 
+type ModerationDecision = 'pass' | 'manual_review' | 'reject' | 'unknown';
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+
+  return value as Record<string, unknown>;
+}
+
+function asStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.map((entry) => (typeof entry === 'string' ? entry : String(entry))).filter((entry) => entry.length > 0);
+}
+
+function asStringRecord(value: unknown): Record<string, string> {
+  const record = asRecord(value);
+  if (!record) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(record).map(([key, entry]) => [key, typeof entry === 'string' ? entry : JSON.stringify(entry)])
+  );
+}
+
+function toModerationDecision(value: unknown): ModerationDecision {
+  if (value === 'pass' || value === 'manual_review' || value === 'reject') {
+    return value;
+  }
+
+  return 'unknown';
+}
+
+function buildModerationSnapshot(source: {
+  output: Record<string, unknown> | null;
+  errorText: string | null;
+  provider: string;
+}): {
+  provider: string;
+  decision: ModerationDecision;
+  checks: Record<string, string>;
+  summary: string[];
+  rejectReasons: string[];
+  reviewReasons: string[];
+  aggregateScores: Record<string, unknown>;
+  modelProfile: Record<string, unknown>;
+  thresholdProfile: Record<string, unknown>;
+  evidence: Record<string, unknown>;
+  details: Record<string, unknown>;
+  localChecks: Record<string, unknown>;
+  errorText: string | null;
+} {
+  const output = source.output ?? {};
+  const providerChecks = asRecord(output.providerChecks) ?? output;
+  const localChecks = asRecord(output.localChecks) ?? {};
+  const evidence = asRecord(providerChecks.evidence) ?? {};
+  const details = asRecord(providerChecks.details) ?? {};
+  const decision = toModerationDecision(providerChecks.decision ?? output.decision);
+  const aggregateScores = asRecord(evidence.aggregateScores) ?? asRecord(details.aggregateScores) ?? {};
+
+  return {
+    provider: source.provider,
+    decision,
+    checks: asStringRecord(providerChecks.checks),
+    summary: asStringArray(providerChecks.summary),
+    rejectReasons: asStringArray(evidence.rejectReasons),
+    reviewReasons: asStringArray(evidence.reviewReasons),
+    aggregateScores,
+    modelProfile: asRecord(evidence.modelProfile) ?? {},
+    thresholdProfile: asRecord(evidence.thresholdProfile) ?? {},
+    evidence,
+    details,
+    localChecks,
+    errorText: source.errorText
+  };
+}
+
 async function buildParentRetryPolicy(order: OrderRow): Promise<{
   limit: number;
   used: number;
@@ -2760,6 +2877,102 @@ async function buildServer(): Promise<FastifyInstance> {
     });
   });
 
+  app.get('/admin/moderation-reviews', async (request, reply) => {
+    if (!hasAdminAccess(request)) {
+      return reply.status(401).send({ message: 'Unauthorized admin request.' });
+    }
+
+    const queryParams = adminModerationReviewsQuerySchema.parse(request.query ?? {});
+    const orderIdFilter = queryParams.orderId ?? null;
+    const stepStatusFilter = queryParams.stepStatus ?? null;
+    const decisionFilter = queryParams.decision ?? null;
+    const fetchLimit = decisionFilter ? Math.min(queryParams.limit * 4, 400) : queryParams.limit;
+
+    const rows = await query<ModerationReviewRow>(
+      `
+      SELECT
+        j.id,
+        j.order_id,
+        o.status AS order_status,
+        u.email AS parent_email,
+        j.status,
+        j.provider,
+        j.attempt,
+        j.output_json,
+        j.error_text,
+        j.started_at,
+        j.finished_at,
+        j.created_at
+      FROM jobs j
+      INNER JOIN orders o ON o.id = j.order_id
+      INNER JOIN users u ON u.id = o.user_id
+      WHERE j.type = 'moderation'
+        AND ($1::uuid IS NULL OR j.order_id = $1)
+        AND ($2::text IS NULL OR j.status = $2)
+      ORDER BY j.started_at DESC NULLS LAST, j.finished_at DESC NULLS LAST, j.created_at DESC
+      LIMIT $3
+      `,
+      [orderIdFilter, stepStatusFilter, fetchLimit]
+    );
+
+    const mappedReviews = rows.map((row) => {
+      const moderation = buildModerationSnapshot({
+        output: row.output_json,
+        errorText: row.error_text,
+        provider: row.provider
+      });
+
+      return {
+        id: row.id,
+        orderId: row.order_id,
+        orderStatus: row.order_status,
+        parentEmail: row.parent_email,
+        stepStatus: row.status,
+        attempt: row.attempt,
+        startedAt: row.started_at,
+        finishedAt: row.finished_at,
+        createdAt: row.created_at,
+        ...moderation
+      };
+    });
+
+    const filteredReviews =
+      decisionFilter && decisionFilter !== 'unknown'
+        ? mappedReviews.filter((review) => review.decision === decisionFilter)
+        : decisionFilter === 'unknown'
+          ? mappedReviews.filter((review) => review.decision === 'unknown')
+          : mappedReviews;
+    const reviews = filteredReviews.slice(0, queryParams.limit);
+
+    const decisionBreakdownMap = new Map<ModerationDecision, number>();
+    const stepStatusBreakdownMap = new Map<'queued' | 'running' | 'succeeded' | 'failed', number>();
+    for (const review of reviews) {
+      decisionBreakdownMap.set(review.decision, (decisionBreakdownMap.get(review.decision) ?? 0) + 1);
+      stepStatusBreakdownMap.set(review.stepStatus, (stepStatusBreakdownMap.get(review.stepStatus) ?? 0) + 1);
+    }
+
+    return reply.send({
+      filters: {
+        orderId: orderIdFilter,
+        stepStatus: stepStatusFilter,
+        decision: decisionFilter,
+        limit: queryParams.limit
+      },
+      summary: {
+        totalReviews: reviews.length,
+        decisionBreakdown: Array.from(decisionBreakdownMap.entries()).map(([decision, count]) => ({
+          decision,
+          count
+        })),
+        stepStatusBreakdown: Array.from(stepStatusBreakdownMap.entries()).map(([stepStatus, count]) => ({
+          stepStatus,
+          count
+        }))
+      },
+      reviews
+    });
+  });
+
   app.get('/admin/order-data-purges', async (request, reply) => {
     if (!hasAdminAccess(request)) {
       return reply.status(401).send({ message: 'Unauthorized admin request.' });
@@ -3410,15 +3623,42 @@ async function buildServer(): Promise<FastifyInstance> {
       }
     }
 
-    const jobRows = await query(
+    const jobRows = await query<OrderJobStatusRow>(
       `
-      SELECT *
+      SELECT
+        id,
+        type,
+        status,
+        provider,
+        attempt,
+        input_json,
+        output_json,
+        error_text,
+        started_at,
+        finished_at,
+        created_at
       FROM jobs
       WHERE order_id = $1
-      ORDER BY started_at DESC NULLS LAST, finished_at DESC NULLS LAST
+      ORDER BY started_at DESC NULLS LAST, finished_at DESC NULLS LAST, created_at DESC
       `,
       [params.orderId]
     );
+
+    const latestModerationJob = jobRows.find((job) => job.type === 'moderation') ?? null;
+    const latestModeration = latestModerationJob
+      ? {
+          jobId: latestModerationJob.id,
+          status: latestModerationJob.status,
+          attempt: latestModerationJob.attempt,
+          startedAt: latestModerationJob.started_at,
+          finishedAt: latestModerationJob.finished_at,
+          ...buildModerationSnapshot({
+            output: latestModerationJob.output_json,
+            errorText: latestModerationJob.error_text,
+            provider: latestModerationJob.provider
+          })
+        }
+      : null;
 
     const artifactsRows = await query(
       `
@@ -3458,6 +3698,7 @@ async function buildServer(): Promise<FastifyInstance> {
       order,
       latestScript,
       jobs: jobRows,
+      latestModeration,
       artifacts: artifactsRows,
       providerTasks: providerTaskRows,
       parentRetryPolicy,

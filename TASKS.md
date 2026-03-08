@@ -79,6 +79,7 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
   - signed parent access token issuance
   - order status, retry, and gift-link actions gated by ownership
   - unauthorized/session-expired recovery path in the web flow
+  - browser-session token bridge: create/gift flows persist token to both localStorage + cookie, and order status performs one-time browser-token auto-restore when cookie is missing
 
 - [x] Payment + checkout path
   - Stripe stub and optional real checkout mode
@@ -137,6 +138,7 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
   - order status page
   - preview visibility
   - render lifecycle visibility
+  - structured moderation report visibility (decision, checks, score bands, reasons)
   - parent-facing retry endpoint with limits
   - gift link create, inspect, redeem, resend, revoke, regenerate
 
@@ -144,6 +146,7 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
   - dead-letter render queue visibility and retry
   - email notification failure dashboard
   - retry request history dashboard
+  - moderation review dashboard with decision/status filters and evidence drilldown
   - provider task failure triage dashboard
   - retention and purge history dashboard
 
@@ -221,7 +224,7 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
 - [ ] Replace heuristic moderation with stronger media-quality and safety checks
   - connect score-based moderation to real external CV/NSFW models instead of proxy scoring only
   - calibrate voice intelligibility thresholds against labeled production samples
-  - surface richer moderation evidence directly in parent/admin review workflows
+  - add moderation case actions (approve/reject override with audit notes) for support operations
 - [ ] Add richer branded subtitle system and more final compose polish
   - keep pushing subtitle styling and final brand treatment beyond the current richer layout set
   - keep polishing music, audio mix, and finishing details

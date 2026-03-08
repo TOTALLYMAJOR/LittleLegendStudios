@@ -71,6 +71,7 @@ const trustPoints = [
 const adminLinks = [
   { href: '/admin/email-notifications' as Route, label: 'Email failures' },
   { href: '/admin/retry-history' as Route, label: 'Retry history' },
+  { href: '/admin/moderation-reviews' as Route, label: 'Moderation reviews' },
   { href: '/admin/provider-task-triage' as Route, label: 'Provider triage' },
   { href: '/admin/retention-history' as Route, label: 'Retention history' }
 ];

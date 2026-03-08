@@ -56,6 +56,8 @@ This file is the canonical build ledger for the repo.
 
 - [x] Character + voice scaffolding
   - deterministic character profile scaffold from uploaded photos
+  - reusable character identity persistence keyed by parent + photo-set fingerprint
+  - character identity reuse across later orders with fresh order-local refs artifacts
   - voice clone metadata persistence
   - aggregate narration/dialogue track generation
   - per-shot audio artifact generation and persistence
@@ -139,9 +141,9 @@ This file is the canonical build ledger for the repo.
   - API exposes `/moderation/check` with structured category-level outcomes
   - local heuristics remain the hard baseline in the worker
 
-- [x] Character system is functional scaffold, not reusable identity product
-  - deterministic profile generation exists
-  - no long-lived reusable character identity lifecycle yet
+- [x] Character identity lifecycle exists, but product surface is still thin
+  - reusable identity persistence and reuse now exist behind the worker pipeline
+  - no parent-facing identity management or curation flow yet
 
 - [x] Provider cleanup is best-effort
   - local deletion always completes
@@ -165,8 +167,19 @@ This file is the canonical build ledger for the repo.
 ## Next Up
 
 - [ ] Replace heuristic moderation with stronger media-quality and safety checks
-- [ ] Add reusable character identity lifecycle instead of per-order scaffolded DNA only
+  - add provider-grade CV/NSFW checks instead of heuristic-only approval
+  - add stronger voice intelligibility and quality scoring
+  - persist richer moderation evidence for review and support
 - [ ] Add richer branded subtitle system and more final compose polish
+  - move beyond the current preset title overlays
+  - improve subtitle timing/styling depth and final brand treatment
+  - keep polishing music, audio mix, and finishing details
+
+## Remaining Work Summary
+
+- Moderation still needs a real production-grade safety and quality backend
+- Character identity still needs a parent-facing management and curation surface
+- Final compose still needs deeper polish around subtitle branding, audio finishing, and presentation quality
 
 ## Notes
 

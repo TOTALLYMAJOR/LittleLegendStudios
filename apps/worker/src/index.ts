@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import { type JobType, type SceneRenderSpec, type ScriptPayload, type ThemeManifest, assertOrderTransition, type OrderStatus } from '@little/shared';
 import { QueueEvents, Worker } from 'bullmq';
 
@@ -14,7 +16,7 @@ import {
 import { query } from './db.js';
 import { sendTransactionalEmail } from './email.js';
 import { env } from './env.js';
-import type { WorkerUpload } from './providers.js';
+import type { CharacterProfile, WorkerUpload } from './providers.js';
 import { buildProviderRegistry } from './providers.js';
 import { createRefund, isStripeRefundEnabled } from './stripe.js';
 
@@ -62,6 +64,15 @@ interface OrderThemeRow {
 interface OrderRenderContext {
   themeName: string;
   manifest: ThemeManifest;
+}
+
+interface CharacterIdentityRow {
+  id: string;
+  version: number;
+  source_photo_fingerprint: string;
+  source_photo_count: number;
+  character_profile_json: CharacterProfile;
+  refs_meta_json: Record<string, unknown>;
 }
 
 type ArtifactKind =
@@ -430,6 +441,148 @@ function toWorkerUpload(upload: UploadRow): WorkerUpload {
     bytes: upload.bytes,
     sha256: upload.sha256
   };
+}
+
+function computePhotoSetFingerprint(photoUploads: UploadRow[]): string {
+  const sourceMaterial = photoUploads
+    .map((upload) => upload.sha256 ?? `${upload.s3_key}:${upload.bytes}:${upload.content_type}`)
+    .sort()
+    .join('|');
+
+  return createHash('sha256').update(sourceMaterial).digest('hex');
+}
+
+async function loadReusableCharacterIdentity(args: {
+  userId: string;
+  photoUploads: UploadRow[];
+  voiceCloneId: string;
+}): Promise<{
+  identityId: string;
+  version: number;
+  sourcePhotoFingerprint: string;
+  sourcePhotoCount: number;
+  characterProfile: CharacterProfile;
+  refsMeta: Record<string, unknown>;
+} | null> {
+  const sourcePhotoFingerprint = computePhotoSetFingerprint(args.photoUploads);
+  const rows = await query<CharacterIdentityRow>(
+    `
+    SELECT
+      id,
+      version,
+      source_photo_fingerprint,
+      source_photo_count,
+      character_profile_json,
+      refs_meta_json
+    FROM character_identities
+    WHERE user_id = $1
+      AND source_photo_fingerprint = $2
+    LIMIT 1
+    `,
+    [args.userId, sourcePhotoFingerprint]
+  );
+
+  const row = rows[0];
+  if (!row) {
+    return null;
+  }
+
+  const characterProfile: CharacterProfile = {
+    ...row.character_profile_json,
+    voiceCloneId: args.voiceCloneId
+  };
+  const refsMeta = {
+    ...row.refs_meta_json,
+    voiceCloneId: args.voiceCloneId,
+    characterIdentityId: row.id,
+    characterIdentityVersion: row.version,
+    reusedIdentity: true,
+    lastReusedAt: new Date().toISOString()
+  };
+
+  return {
+    identityId: row.id,
+    version: row.version,
+    sourcePhotoFingerprint,
+    sourcePhotoCount: row.source_photo_count,
+    characterProfile,
+    refsMeta
+  };
+}
+
+async function persistReusableCharacterIdentity(args: {
+  userId: string;
+  orderId: string;
+  photoUploads: UploadRow[];
+  characterProfile: CharacterProfile;
+  refsMeta: Record<string, unknown>;
+}): Promise<{
+  identityId: string;
+  version: number;
+  sourcePhotoFingerprint: string;
+  sourcePhotoCount: number;
+}> {
+  const sourcePhotoFingerprint = computePhotoSetFingerprint(args.photoUploads);
+  const sourcePhotoCount = args.photoUploads.length;
+  const rows = await query<{ id: string; version: number }>(
+    `
+    INSERT INTO character_identities (
+      user_id,
+      source_photo_fingerprint,
+      source_photo_count,
+      latest_order_id,
+      version,
+      character_profile_json,
+      refs_meta_json,
+      last_used_at,
+      updated_at
+    )
+    VALUES ($1, $2, $3, $4, 1, $5::jsonb, $6::jsonb, now(), now())
+    ON CONFLICT (user_id, source_photo_fingerprint)
+    DO UPDATE SET
+      source_photo_count = EXCLUDED.source_photo_count,
+      latest_order_id = EXCLUDED.latest_order_id,
+      version = character_identities.version + 1,
+      character_profile_json = EXCLUDED.character_profile_json,
+      refs_meta_json = EXCLUDED.refs_meta_json,
+      last_used_at = now(),
+      updated_at = now()
+    RETURNING id, version
+    `,
+    [
+      args.userId,
+      sourcePhotoFingerprint,
+      sourcePhotoCount,
+      args.orderId,
+      JSON.stringify(args.characterProfile),
+      JSON.stringify(args.refsMeta)
+    ]
+  );
+
+  const row = rows[0];
+  if (!row) {
+    throw new Error('Failed to persist reusable character identity.');
+  }
+
+  return {
+    identityId: row.id,
+    version: row.version,
+    sourcePhotoFingerprint,
+    sourcePhotoCount
+  };
+}
+
+async function markCharacterIdentityUsed(identityId: string, orderId: string): Promise<void> {
+  await query(
+    `
+    UPDATE character_identities
+    SET latest_order_id = $2,
+        last_used_at = now(),
+        updated_at = now()
+    WHERE id = $1
+    `,
+    [identityId, orderId]
+  );
 }
 
 function hasPrefix(bytes: Uint8Array, prefix: number[]): boolean {
@@ -1223,14 +1376,71 @@ async function runPipeline(orderId: string, attempt: number): Promise<void> {
     });
   }
 
-  const characterPack = await providers.scene.createCharacterPack({
-    orderId,
+  const reusedIdentity = await loadReusableCharacterIdentity({
     userId: order.user_id,
-    photoUploads: photoUploads.map(toWorkerUpload),
+    photoUploads,
     voiceCloneId: voiceClone.voiceCloneId
   });
 
-  const characterProfile = characterPack.characterProfile;
+  let characterProfile: CharacterProfile;
+  let characterRefsArtifactKey: string;
+  let characterRefsMeta: Record<string, unknown>;
+  let characterPackProvider: string;
+  let characterIdentityId: string | null = null;
+  let characterIdentityVersion: number | null = null;
+  let characterIdentityReuse = false;
+  let characterSourcePhotoFingerprint = reusedIdentity?.sourcePhotoFingerprint ?? computePhotoSetFingerprint(photoUploads);
+
+  if (reusedIdentity) {
+    characterProfile = reusedIdentity.characterProfile;
+    characterRefsArtifactKey = `${order.user_id}/${orderId}/character/refs-${characterProfile.characterId}.json`;
+    characterRefsMeta = {
+      ...reusedIdentity.refsMeta,
+      characterId: characterProfile.characterId,
+      faceEmbeddingRef: characterProfile.faceEmbeddingRef,
+      sourcePhotoCount: photoUploads.length,
+      sourcePhotoFingerprint: reusedIdentity.sourcePhotoFingerprint
+    };
+    characterPackProvider = 'character_identity_cache';
+    characterIdentityId = reusedIdentity.identityId;
+    characterIdentityVersion = reusedIdentity.version;
+    characterIdentityReuse = true;
+    await markCharacterIdentityUsed(reusedIdentity.identityId, orderId);
+  } else {
+    const characterPack = await providers.scene.createCharacterPack({
+      orderId,
+      userId: order.user_id,
+      photoUploads: photoUploads.map(toWorkerUpload),
+      voiceCloneId: voiceClone.voiceCloneId
+    });
+
+    characterProfile = characterPack.characterProfile;
+    characterRefsArtifactKey = characterPack.refsArtifactKey;
+    characterRefsMeta = {
+      ...characterPack.refsMeta,
+      sourcePhotoFingerprint: characterSourcePhotoFingerprint
+    };
+    characterPackProvider = characterPack.provider;
+
+    const persistedIdentity = await persistReusableCharacterIdentity({
+      userId: order.user_id,
+      orderId,
+      photoUploads,
+      characterProfile,
+      refsMeta: characterRefsMeta
+    });
+
+    characterIdentityId = persistedIdentity.identityId;
+    characterIdentityVersion = persistedIdentity.version;
+    characterSourcePhotoFingerprint = persistedIdentity.sourcePhotoFingerprint;
+    characterRefsMeta = {
+      ...characterRefsMeta,
+      characterIdentityId,
+      characterIdentityVersion,
+      reusedIdentity: false
+    };
+  }
+
   await runStepWithInput(
     orderId,
     'character_pack',
@@ -1238,31 +1448,42 @@ async function runPipeline(orderId: string, attempt: number): Promise<void> {
     {
       orderId,
       sourcePhotos: photoUploads.length,
-      style: characterProfile.modelStyle
+      style: characterProfile.modelStyle,
+      reusedIdentity: characterIdentityReuse
     },
     {
       ok: true,
-      provider: characterPack.provider,
+      provider: characterPackProvider,
       characterId: characterProfile.characterId,
-      faceEmbeddingRef: characterProfile.faceEmbeddingRef
+      faceEmbeddingRef: characterProfile.faceEmbeddingRef,
+      characterIdentityId,
+      characterIdentityVersion,
+      sourcePhotoFingerprint: characterSourcePhotoFingerprint,
+      reusedIdentity: characterIdentityReuse
     },
-    characterPack.provider
+    characterPackProvider
   );
 
   const characterMaterialization = await materializeArtifactFile({
     kind: 'character_refs',
-    assetKey: characterPack.refsArtifactKey,
+    assetKey: characterRefsArtifactKey,
     payload: {
-      ...characterPack.refsMeta,
-      provider: characterPack.provider,
-      characterId: characterProfile.characterId
+      ...characterRefsMeta,
+      provider: characterPackProvider,
+      characterId: characterProfile.characterId,
+      characterIdentityId,
+      characterIdentityVersion,
+      reusedIdentity: characterIdentityReuse
     }
   });
 
-  await createArtifact(orderId, 'character_refs', characterPack.refsArtifactKey, {
-    ...characterPack.refsMeta,
+  await createArtifact(orderId, 'character_refs', characterRefsArtifactKey, {
+    ...characterRefsMeta,
     ...characterMaterialization,
-    signedDownloadUrl: createSignedDownloadUrl(characterPack.refsArtifactKey)
+    characterIdentityId,
+    characterIdentityVersion,
+    reusedIdentity: characterIdentityReuse,
+    signedDownloadUrl: createSignedDownloadUrl(characterRefsArtifactKey)
   });
 
   const shotArtifactKeys: string[] = [];

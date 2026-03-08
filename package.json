@@ -14,7 +14,7 @@
     "dev:shared": "npm --workspace @little/shared run dev",
     "dev:api": "npm --workspace @little/api run dev",
     "dev:worker": "npm --workspace @little/worker run dev",
-    "dev:web": "npm --workspace @little/web run dev",
+    "dev:web": "PORT=${WEB_PORT:-3000} npm --workspace @little/web run dev",
     "build": "npm --workspace @little/shared run build && npm --workspace @little/api run build && npm --workspace @little/worker run build && npm --workspace @little/web run build",
     "typecheck": "npm --workspace @little/shared run build && npm --workspace @little/shared run typecheck && npm --workspace @little/api run typecheck && npm --workspace @little/worker run typecheck && npm --workspace @little/web run typecheck"
   },

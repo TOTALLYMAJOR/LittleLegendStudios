@@ -30,6 +30,9 @@ Optional flags:
 - `SKIP_INSTALL=1 npm run dev:boot`
 - `SKIP_MIGRATE=1 npm run dev:boot`
 
+If port `3000` is already in use, run the web app on another port:
+- `WEB_PORT=3001 WEB_APP_BASE_URL=http://localhost:3001 npm run dev:boot`
+
 If you already run local Postgres/Redis and Docker reports `port is already allocated`, use:
 - `SKIP_INFRA=1 npm run dev:boot`
 
@@ -63,6 +66,12 @@ npm --workspace @little/api run migrate
 
 ```bash
 npm run dev
+```
+
+If the web app needs a different port:
+
+```bash
+WEB_PORT=3001 WEB_APP_BASE_URL=http://localhost:3001 npm run dev
 ```
 
 ## Smoke Test
@@ -108,7 +117,7 @@ This repo is no longer just a thin scaffold. The current build includes:
   - moderation provider contract via `/moderation/check`
   - voice clone + voice render
   - aggregate narration/dialogue tracks plus per-shot audio artifacts
-  - character profile scaffold generation
+  - character profile generation plus reusable identity persistence/reuse across matching later orders
   - shot render orchestration with per-shot `sceneRenderSpec`
   - real Shotstack final timeline assembly from persisted shot assets
   - per-shot voice tracks preferred with aggregate fallback
@@ -153,10 +162,29 @@ This repo is no longer just a thin scaffold. The current build includes:
 
 For the full build ledger, use [TASKS.md](/home/totallymajor/projects/LittleLegendStudios/TASKS.md).
 
+## Remaining Work
+
+The main unfinished areas in the repo are:
+
+- Moderation hardening
+  - current moderation is meaningful, but still heuristic-first
+  - next step is provider-grade photo safety, face/quality validation, and stronger voice quality checks
+
+- Reusable character identity
+  - the worker now persists and reuses character identities across matching photo sets
+  - it still does not expose parent-facing identity management or curation controls
+
+- Final video polish
+  - the real compose pipeline exists
+  - subtitle branding, finishing quality, and deeper mix polish still need another pass
+
 ## Notes
 
 - Stripe is integrated with optional real mode (`STRIPE_SECRET_KEY` + `STRIPE_WEBHOOK_SECRET`).
 - Asset URLs are HMAC-signed (`ASSET_SIGNING_SECRET`) with TTL controls and stored under `ASSET_LOCAL_ROOT` for local dev.
+- Web port controls:
+  - `WEB_PORT` controls the local Next.js port for `npm run dev` / `npm run dev:boot`
+  - `WEB_APP_BASE_URL` should match that port for checkout/status redirects
 - Email provider modes:
   - `EMAIL_PROVIDER_MODE=stub` (default, logs to stdout)
   - `EMAIL_PROVIDER_MODE=resend` + `RESEND_API_KEY` (real delivery)

@@ -26,6 +26,21 @@ CREATE TABLE IF NOT EXISTS themes (
   is_active BOOLEAN NOT NULL DEFAULT true
 );
 
+CREATE TABLE IF NOT EXISTS character_identities (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id),
+  source_photo_fingerprint TEXT NOT NULL,
+  source_photo_count INT NOT NULL,
+  latest_order_id UUID REFERENCES orders(id),
+  version INT NOT NULL DEFAULT 1,
+  character_profile_json JSONB NOT NULL,
+  refs_meta_json JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_used_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (user_id, source_photo_fingerprint)
+);
+
 CREATE TABLE IF NOT EXISTS orders (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES users(id),
@@ -279,6 +294,8 @@ ADD CONSTRAINT artifacts_kind_check CHECK (
 
 CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders(user_id);
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
+CREATE INDEX IF NOT EXISTS idx_character_identities_user_id ON character_identities(user_id);
+CREATE INDEX IF NOT EXISTS idx_character_identities_last_used_at ON character_identities(last_used_at DESC);
 CREATE INDEX IF NOT EXISTS idx_uploads_order_id ON uploads(order_id);
 CREATE INDEX IF NOT EXISTS idx_scripts_order_id ON scripts(order_id);
 CREATE INDEX IF NOT EXISTS idx_jobs_order_id ON jobs(order_id);

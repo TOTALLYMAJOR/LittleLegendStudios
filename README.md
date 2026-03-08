@@ -119,6 +119,39 @@ Local-to-preview parity:
 - deployed preview:
   - use the same `NEXT_PUBLIC_API_BASE_URL` shape you expect in production/staging
 
+## Railway API Deploy
+
+For the API, use Railway rather than trying to force the Fastify + Postgres + Redis service onto Vercel.
+
+Recommended Railway service setup:
+- repo root: `/`
+- build command: `npm run build:api`
+- start command: `npm run start:api`
+- pre-deploy command: `npm run migrate:api`
+
+Why this shape:
+- the repo is a shared npm monorepo
+- the API depends on the local `@little/shared` package
+- building from the repo root keeps shared package compilation explicit instead of relying on stale checked-in artifacts
+
+Required Railway envs:
+- `DATABASE_URL`
+- `REDIS_URL`
+- `WEB_APP_BASE_URL`
+- `NEXT_PUBLIC_API_BASE_URL`
+- `PUBLIC_ASSET_BASE_URL`
+- `ASSET_SIGNING_SECRET`
+- `PARENT_AUTH_SECRET`
+
+Port behavior:
+- local dev still uses `API_PORT`
+- Railway injects `PORT`, and the API now binds to that automatically in production
+
+Operational notes:
+- `GET /health` is available for health checks
+- Railway pre-deploy commands run in a separate container, so use them for migrations only
+- keep `PROVIDER_INTEGRATION_MODE=stub` for an initial UI/staging deploy unless you are also wiring real provider secrets
+
 ## Built Features
 
 This repo is no longer just a thin scaffold. The current build includes:

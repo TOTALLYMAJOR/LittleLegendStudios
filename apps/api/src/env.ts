@@ -13,6 +13,7 @@ dotenv.config({
 const schema = z.object({
   DATABASE_URL: z.string().url(),
   REDIS_URL: z.string().url(),
+  PORT: z.coerce.number().int().positive().optional(),
   API_PORT: z.coerce.number().int().positive().default(4000),
   NEXT_PUBLIC_API_BASE_URL: z.string().url().default('http://localhost:4000'),
   WEB_APP_BASE_URL: z.string().url().default('http://localhost:3000'),
@@ -104,4 +105,9 @@ const schema = z.object({
     .transform((value) => value === undefined || value.toLowerCase() === 'true')
 });
 
-export const env = schema.parse(process.env);
+const parsedEnv = schema.parse(process.env);
+
+export const env = {
+  ...parsedEnv,
+  API_PORT: parsedEnv.PORT ?? parsedEnv.API_PORT
+};

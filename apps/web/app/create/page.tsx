@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import type { Route } from 'next';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { useMemo, useState } from 'react';
+import { Suspense, useMemo, useState } from 'react';
 
 type Theme = {
   id: string;
@@ -108,7 +108,7 @@ async function uploadFileToSignedUrl(args: {
   }
 }
 
-export default function CreateOrderPage(): JSX.Element {
+function CreateOrderPageContent(): JSX.Element {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [themes, setThemes] = useState<Theme[]>([]);
@@ -487,5 +487,22 @@ export default function CreateOrderPage(): JSX.Element {
         <p>{statusMessage || 'No actions yet.'}</p>
       </section>
     </main>
+  );
+}
+
+export default function CreateOrderPage(): JSX.Element {
+  return (
+    <Suspense
+      fallback={
+        <main>
+          <section className="card">
+            <h1>Create Keepsake Order</h1>
+            <p>Loading order flow...</p>
+          </section>
+        </main>
+      }
+    >
+      <CreateOrderPageContent />
+    </Suspense>
   );
 }

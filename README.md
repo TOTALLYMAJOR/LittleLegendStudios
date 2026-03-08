@@ -2,6 +2,10 @@
 
 Template-first MVP scaffold for personalized cinematic child story videos.
 
+## New Session Context
+
+If you are opening this repo in a new Codex 5.3 session, start with [TASKS.md](/home/totallymajor/projects/LittleLegendStudios/TASKS.md). Its `New Session Handoff` section is the explicit repo-state summary, key entrypoints list, and next-work ledger.
+
 ## Stack
 
 - Web: Next.js (`apps/web`)

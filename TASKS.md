@@ -5,6 +5,53 @@ This file is the canonical build ledger for the repo.
 - `README.md` is the high-level product + setup summary.
 - `TASKS.md` is the detailed source of truth for what is built, what is partially hardened, and what is next.
 
+## New Session Handoff
+
+This section is the fastest way for a new Codex 5.3 session to get oriented without rereading the whole repo.
+
+- Product shape
+  - monorepo for personalized cinematic child story videos
+  - `apps/web` is the parent/admin Next.js surface
+  - `apps/api` is the Fastify API, DB migration owner, and most business logic entrypoint
+  - `apps/worker` runs the async render pipeline
+  - `packages/shared` holds shared TypeScript domain types/utilities
+
+- Start here
+  - read `README.md` for boot/deploy commands
+  - use `npm run dev:boot` for a normal local start
+  - use `npm run smoke` after API + worker are running to verify the main happy path
+
+- Local defaults expected by the repo
+  - web: `http://localhost:3000`
+  - api: `http://localhost:4000`
+  - Postgres: local `DATABASE_URL`
+  - Redis: local `REDIS_URL`
+  - assets: API-served local signed upload/download flow under `/assets/*`
+
+- Files that matter most for a fresh session
+  - `apps/api/src/index.ts`: main API routes, payment flow, order lifecycle, retention hooks
+  - `apps/api/src/provider-routes.ts`: provider-facing routes/contracts for moderation, voice, scene render, and compose
+  - `apps/worker/src/index.ts`: orchestration for moderation, voice, render, compose, retry, and delivery
+  - `apps/web/app/create/page.tsx`: main parent intake and session recovery entrypoint
+  - `scripts/smoke.mjs`: end-to-end automation for the intended happy path
+  - `packages/shared/src/*`: shared domain model used across app boundaries
+
+- What is already true
+  - the repo is beyond scaffold stage; parent flow, async render pipeline, provider contracts, gift flows, retry/admin tooling, and retention/delete flows all exist
+  - smoke coverage exists for the core create -> upload -> approve -> pay -> render -> deliver -> gift flow
+  - provider integrations support stub/hybrid/strict-style operation, but production quality still depends on real external providers and polish work
+
+- What is still not done
+  - moderation is explicit and structured, but still heuristic-first rather than production-grade model-backed review
+  - character identity reuse exists in the pipeline, but there is no parent-facing management surface
+  - final compose works, but subtitle branding, mix polish, and finishing quality still need more work
+
+- Working assumptions for the next session
+  - prefer updating this file when meaningful build state changes land
+  - keep `README.md` high-level and keep detailed implementation status here
+  - check `git status` before editing because generated artifacts can appear modified
+  - do not treat the project as a blank MVP scaffold; most core flows already exist and usually need extension/hardening rather than first-pass implementation
+
 ## Built End To End
 
 - [x] Core platform foundation

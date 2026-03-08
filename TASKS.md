@@ -69,6 +69,7 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
 
 - [x] Script generation + review
   - template-based script generation
+  - studio-grade beat-writing prompt engine with theme-aware narration/dialogue language
   - manifest-driven shot templates and target durations
   - max 3 script versions per order
   - script approval before payment

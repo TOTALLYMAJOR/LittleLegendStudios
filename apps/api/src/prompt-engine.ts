@@ -11,6 +11,86 @@ const defaultTemplateDurations = [7, 6, 9, 8] as const;
 const defaultTemplateTypes: Array<'narration' | 'dialogue'> = ['narration', 'dialogue', 'narration', 'dialogue'];
 const cameraByShot = ['wide_establishing_pan', 'hero_low_angle_push', 'tracking_action_orbit', 'emotional_pullback'];
 const lightingByShot = ['golden_hour_volumetric', 'hero_key_fill', 'cinematic_contrast', 'warm_emotional_glow'];
+const fallbackEnvironmentMotion = ['volumetric fog', 'ambient particles'] as const;
+
+type BeatStage =
+  | 'opening'
+  | 'inciting'
+  | 'discovery'
+  | 'promise'
+  | 'rising'
+  | 'midpoint'
+  | 'climax'
+  | 'ending';
+
+interface ThemeVoiceProfile {
+  atmospheres: string[];
+  movement: string[];
+  challenges: string[];
+  resolveImage: string;
+  celebrationLine: string;
+}
+
+const defaultThemeVoice: ThemeVoiceProfile = {
+  atmospheres: ['luminous skies', 'cinematic light', 'storybook depth'],
+  movement: ['glided', 'surged', 'pressed forward'],
+  challenges: ['a sudden obstacle', 'a daring turn', 'an impossible moment'],
+  resolveImage: 'a warm horizon opening wide',
+  celebrationLine: 'We did it together.'
+};
+
+const themeVoiceProfiles: Array<{ matcher: RegExp; profile: ThemeVoiceProfile }> = [
+  {
+    matcher: /space|galactic|cosmic/i,
+    profile: {
+      atmospheres: ['nebula glow', 'starlit launch towers', 'zero-gravity trails'],
+      movement: ['orbited', 'launched', 'cut through the stars'],
+      challenges: ['a meteor surge', 'a gravity twist', 'a turbulent star corridor'],
+      resolveImage: 'a bright homeward sky above the launch bay',
+      celebrationLine: 'Mission complete. Stars and smiles everywhere.'
+    }
+  },
+  {
+    matcher: /fantasy|kingdom|castle|enchant/i,
+    profile: {
+      atmospheres: ['moonlit courtyards', 'lantern-lit forests', 'spellbound halls'],
+      movement: ['swept', 'stepped boldly', 'crossed the realm'],
+      challenges: ['a shifting spell gate', 'a shadowed passage', 'a royal trial'],
+      resolveImage: 'a golden hall filled with lantern light',
+      celebrationLine: 'The kingdom is safe, and our story shines.'
+    }
+  },
+  {
+    matcher: /underwater|ocean|reef|sea/i,
+    profile: {
+      atmospheres: ['bioluminescent reefs', 'pearl-lit arches', 'shimmering tides'],
+      movement: ['drifted', 'sliced through the current', 'rode the tide'],
+      challenges: ['a rushing current wall', 'a deepwater turn', 'a hidden trench route'],
+      resolveImage: 'sunbeams breaking across calm water',
+      celebrationLine: 'The tide carried us home in triumph.'
+    }
+  },
+  {
+    matcher: /superhero|hero|city|comic/i,
+    profile: {
+      atmospheres: ['neon skylines', 'high-rise wind tunnels', 'comic-scale glow'],
+      movement: ['vaulted', 'accelerated', 'charged ahead'],
+      challenges: ['a skyline crisis', 'a high-speed detour', 'a citywide surge'],
+      resolveImage: 'a victory skyline at golden dusk',
+      celebrationLine: 'City saved. Cape high and heart full.'
+    }
+  },
+  {
+    matcher: /dinosaur|prehistoric|jungle/i,
+    profile: {
+      atmospheres: ['fern-canopy light', 'volcanic horizons', 'amber jungle mist'],
+      movement: ['tracked', 'rushed', 'navigated the wild'],
+      challenges: ['a thunderous ground shake', 'a narrow cliff pass', 'a roaring showdown'],
+      resolveImage: 'a sunset ridge above the jungle',
+      celebrationLine: 'Adventure complete, with dino-sized courage.'
+    }
+  }
+];
 
 function pickScene(manifest: ThemeManifest, shotIndex: number): ThemeScene {
   if (manifest.scenes.length === 0) {
@@ -112,106 +192,345 @@ function normalizeLabel(label: string | undefined, fallback: string): string {
   return (label ?? fallback).trim().toLowerCase();
 }
 
-function narrationLineForIndex(args: {
-  narrationIndex: number;
-  totalNarrationShots: number;
-  childName: string;
-  themeName: string;
-  keywords: string[];
-  label?: string;
-}): string {
-  const label = normalizeLabel(args.label, `narration_${args.narrationIndex + 1}`);
+function resolveThemeVoice(themeName: string): ThemeVoiceProfile {
+  const matched = themeVoiceProfiles.find((entry) => entry.matcher.test(themeName));
+  return matched?.profile ?? defaultThemeVoice;
+}
 
-  if (label.includes('opening') || args.narrationIndex === 0) {
-    const keywordTail = args.keywords.length > 0 ? ` with ${args.keywords.slice(0, 2).join(' and ')}` : '';
-    return `I stepped into ${args.themeName}${keywordTail}, and everything around me felt bigger than life.`;
+function sanitizeKeywords(keywords: string[] | undefined): string[] {
+  if (!keywords || keywords.length === 0) {
+    return [];
+  }
+
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const keyword of keywords) {
+    const normalized = keyword.trim().replaceAll(/\s+/g, ' ');
+    if (!normalized) {
+      continue;
+    }
+
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    result.push(normalized.slice(0, 32));
+    if (result.length >= 3) {
+      break;
+    }
+  }
+
+  return result;
+}
+
+function joinWithConjunction(parts: string[]): string {
+  if (parts.length === 0) {
+    return '';
+  }
+
+  if (parts.length === 1) {
+    return parts[0];
+  }
+
+  if (parts.length === 2) {
+    return `${parts[0]} and ${parts[1]}`;
+  }
+
+  return `${parts.slice(0, -1).join(', ')}, and ${parts[parts.length - 1]}`;
+}
+
+function pickForIndex(values: string[], index: number): string {
+  return values[index % values.length] ?? values[values.length - 1] ?? '';
+}
+
+function inferBeatStage(args: {
+  label?: string;
+  id: string;
+  shotType: 'narration' | 'dialogue';
+  index: number;
+  totalShots: number;
+}): BeatStage {
+  const label = normalizeLabel(args.label, args.id);
+  if (label.includes('opening') || label.includes('overture') || label.includes('intro')) {
+    return 'opening';
+  }
+
+  if (label.includes('call') || label.includes('inciting')) {
+    return 'inciting';
   }
 
   if (label.includes('discovery')) {
-    return `Every corner of ${args.themeName} revealed another impossible surprise, and ${args.childName} leaned into the wonder.`;
-  }
-
-  if (label.includes('rising')) {
-    return `${args.childName} kept moving deeper into the adventure, braver with every new challenge along the way.`;
-  }
-
-  if (label.includes('climax') || args.narrationIndex === args.totalNarrationShots - 1) {
-    return `When the biggest moment arrived, ${args.childName} met it with a full heart and the courage to keep going.`;
-  }
-
-  if (label.includes('ending')) {
-    return `When the adventure ended, ${args.childName} came home smiling with a story worth telling again.`;
-  }
-
-  return `Each new turn brought another surprise, and ${args.childName} kept moving forward with courage.`;
-}
-
-function dialogueLineForIndex(args: {
-  dialogueIndex: number;
-  totalDialogueShots: number;
-  label?: string;
-}): string {
-  const label = normalizeLabel(args.label, `dialogue_${args.dialogueIndex + 1}`);
-
-  if (label.includes('call') || args.dialogueIndex === 0) {
-    return `I've got this. Let's go!`;
+    return 'discovery';
   }
 
   if (label.includes('promise')) {
-    return `I'm ready for this. I'll keep going no matter what.`;
+    return 'promise';
   }
 
-  if (label.includes('midpoint')) {
-    return `Whoa. That changed everything, but I'm still in this.`;
+  if (label.includes('rising')) {
+    return 'rising';
   }
 
-  if (label.includes('ending') || label.includes('storybook') || args.dialogueIndex === args.totalDialogueShots - 1) {
-    return `That was amazing. I can't wait for my next adventure!`;
-  }
-
-  return `We're getting closer. I know we can do this!`;
-}
-
-function soundDesignForTemplate(template: ThemeShotTemplate, shotType: 'narration' | 'dialogue'): string[] {
-  const label = normalizeLabel(template.label, template.id);
-
-  if (shotType === 'dialogue') {
-    if (label.includes('call')) {
-      return ['hero_sting', 'dialogue_focus'];
-    }
-
-    if (label.includes('midpoint')) {
-      return ['surprise_hit', 'dialogue_focus'];
-    }
-
-    if (label.includes('ending') || label.includes('storybook')) {
-      return ['victory_swell', 'dialogue_focus'];
-    }
-
-    return ['dialogue_focus', 'subtle_riser'];
-  }
-
-  if (label.includes('opening')) {
-    return ['orchestral_swell', 'whoosh_transition'];
+  if (label.includes('midpoint') || label.includes('turn')) {
+    return 'midpoint';
   }
 
   if (label.includes('climax')) {
-    return ['cinematic_boom', 'triumph_rise'];
+    return 'climax';
   }
 
-  return ['ambient_swell', 'whoosh_transition'];
+  if (label.includes('ending') || label.includes('storybook') || label.includes('finale') || label.includes('resolve')) {
+    return 'ending';
+  }
+
+  if (args.index === 0) {
+    return args.shotType === 'dialogue' ? 'inciting' : 'opening';
+  }
+
+  if (args.index === args.totalShots - 1) {
+    return 'ending';
+  }
+
+  const progress = args.index / Math.max(1, args.totalShots - 1);
+  if (progress < 0.2) {
+    return args.shotType === 'dialogue' ? 'inciting' : 'discovery';
+  }
+  if (progress < 0.45) {
+    return args.shotType === 'dialogue' ? 'promise' : 'rising';
+  }
+  if (progress < 0.75) {
+    return 'midpoint';
+  }
+  return 'climax';
+}
+
+function keywordClause(keywords: string[]): string {
+  if (keywords.length === 0) {
+    return '';
+  }
+
+  return ` with touches of ${joinWithConjunction(keywords)}`;
+}
+
+function narrationLineForBeat(args: {
+  beat: BeatStage;
+  childName: string;
+  themeName: string;
+  keywords: string[];
+  sceneName: string;
+  shotIndex: number;
+  themeVoice: ThemeVoiceProfile;
+}): string {
+  const atmosphere = pickForIndex(args.themeVoice.atmospheres, args.shotIndex);
+  const movementVerb = pickForIndex(args.themeVoice.movement, args.shotIndex);
+  const challenge = pickForIndex(args.themeVoice.challenges, args.shotIndex);
+  const keywordFlavor = keywordClause(args.keywords);
+
+  switch (args.beat) {
+    case 'opening':
+      return `${args.childName} entered ${args.themeName}${keywordFlavor}, where ${atmosphere} made the first moment feel cinematic and brave.`;
+    case 'inciting':
+      return `A clear invitation to move forward echoed through ${args.sceneName}, and ${args.childName} answered without hesitation.`;
+    case 'discovery':
+      return `Inside ${args.sceneName}, ${args.childName} found a new wonder as the world ${movementVerb} around them.`;
+    case 'promise':
+      return `${args.childName} made a quiet promise to keep going, even as the path through ${args.themeName} grew bigger and brighter.`;
+    case 'rising':
+      return `Momentum built with every step; ${args.childName} ${movementVerb} through ${challenge} and stayed focused on the goal.`;
+    case 'midpoint':
+      return `A sudden turn changed the stakes, and ${args.childName} reset with courage, timing, and heart.`;
+    case 'climax':
+      return `At the peak of the adventure, ${args.childName} faced ${challenge} and transformed pressure into a heroic breakthrough.`;
+    case 'ending':
+      return `With the journey complete, ${args.childName} looked out at ${args.themeVoice.resolveImage}, carrying home a story worth replaying.`;
+    default:
+      return `${args.childName} kept moving with courage as the adventure unfolded beat by beat.`;
+  }
+}
+
+function dialogueLineForBeat(args: {
+  beat: BeatStage;
+  themeVoice: ThemeVoiceProfile;
+}): string {
+  switch (args.beat) {
+    case 'opening':
+    case 'inciting':
+      return `I'm ready. Let's go make this legendary.`;
+    case 'discovery':
+      return `Did you see that? This world is incredible.`;
+    case 'promise':
+      return `I promise I'll stay brave and keep moving forward.`;
+    case 'rising':
+      return `Stay with me. We're getting stronger every step.`;
+    case 'midpoint':
+      return `That twist was huge, but I'm still in this.`;
+    case 'climax':
+      return `This is our moment. We finish strong together.`;
+    case 'ending':
+      return `${args.themeVoice.celebrationLine} I can't wait for the next adventure.`;
+    default:
+      return `We can do this. Keep going with me.`;
+  }
+}
+
+function soundDesignForBeat(beat: BeatStage, shotType: 'narration' | 'dialogue'): string[] {
+  if (shotType === 'dialogue') {
+    switch (beat) {
+      case 'inciting':
+      case 'opening':
+        return ['hero_sting', 'dialogue_focus'];
+      case 'promise':
+        return ['resolve_pulse', 'dialogue_focus'];
+      case 'midpoint':
+        return ['surprise_hit', 'dialogue_focus'];
+      case 'climax':
+        return ['victory_swell', 'dialogue_focus'];
+      case 'ending':
+        return ['warm_resolve', 'dialogue_focus'];
+      default:
+        return ['dialogue_focus', 'subtle_riser'];
+    }
+  }
+
+  switch (beat) {
+    case 'opening':
+      return ['orchestral_swell', 'whoosh_transition'];
+    case 'discovery':
+      return ['ambient_swell', 'sparkle_rise'];
+    case 'rising':
+      return ['momentum_pulse', 'whoosh_transition'];
+    case 'midpoint':
+      return ['dramatic_riser', 'transition_whoosh'];
+    case 'climax':
+      return ['cinematic_boom', 'triumph_rise'];
+    case 'ending':
+      return ['soft_resolve', 'gentle_chime'];
+    default:
+      return ['ambient_swell', 'whoosh_transition'];
+  }
+}
+
+function actionLineForBeat(args: {
+  beat: BeatStage;
+  shotType: 'narration' | 'dialogue';
+  label?: string;
+  sceneName: string;
+  camera: string;
+  lighting: string;
+  environmentMotion: string[];
+  childName: string;
+  characterEmotion?: string;
+  gesture?: string;
+}): string {
+  const beatLabel = normalizeLabel(args.label, args.beat).replaceAll('_', ' ');
+  const motionText = args.environmentMotion.join(', ') || 'ambient particles';
+
+  if (args.shotType === 'dialogue') {
+    const gestureText = args.gesture ? ` with a ${args.gesture} gesture` : '';
+    const emotionText = args.characterEmotion ? `, emotion ${args.characterEmotion}` : '';
+    return `Studio direction: ${args.childName} performs the ${beatLabel} beat on-screen in "${args.sceneName}" using ${args.camera} framing and ${args.lighting} lighting; environment motion ${motionText}${emotionText}${gestureText}.`;
+  }
+
+  const emotionText = args.characterEmotion ? ` and emotional tone ${args.characterEmotion}` : '';
+  return `Studio direction: narrated ${beatLabel} beat in "${args.sceneName}" with ${args.camera} framing, ${args.lighting} lighting, and environment motion ${motionText}${emotionText}.`;
+}
+
+function defaultEmotionForBeat(beat: BeatStage, shotType: 'narration' | 'dialogue'): string {
+  if (shotType === 'dialogue') {
+    switch (beat) {
+      case 'inciting':
+      case 'opening':
+        return 'curious';
+      case 'promise':
+      case 'rising':
+        return 'confident';
+      case 'midpoint':
+        return 'determined';
+      case 'climax':
+        return 'heroic';
+      case 'ending':
+        return 'joyful';
+      default:
+        return 'confident';
+    }
+  }
+
+  switch (beat) {
+    case 'opening':
+    case 'discovery':
+      return 'wonder';
+    case 'rising':
+    case 'midpoint':
+      return 'focus';
+    case 'climax':
+      return 'triumph';
+    case 'ending':
+      return 'relief';
+    default:
+      return 'warmth';
+  }
+}
+
+function defaultExpressionForBeat(beat: BeatStage, shotType: 'narration' | 'dialogue'): string {
+  if (shotType === 'dialogue') {
+    switch (beat) {
+      case 'inciting':
+      case 'opening':
+        return 'bright-eyed';
+      case 'promise':
+      case 'rising':
+        return 'focused smile';
+      case 'midpoint':
+        return 'alert resolve';
+      case 'climax':
+        return 'full intensity';
+      case 'ending':
+        return 'proud joy';
+      default:
+        return 'focused';
+    }
+  }
+
+  switch (beat) {
+    case 'opening':
+    case 'discovery':
+      return 'wonder-struck';
+    case 'midpoint':
+      return 'steady resolve';
+    case 'climax':
+      return 'exultant';
+    case 'ending':
+      return 'gentle relief';
+    default:
+      return 'cinematic calm';
+  }
+}
+
+function defaultGestureForBeat(beat: BeatStage): string {
+  switch (beat) {
+    case 'inciting':
+      return 'look_up';
+    case 'promise':
+      return 'hand_to_heart';
+    case 'midpoint':
+      return 'reach_out';
+    case 'climax':
+      return 'point_forward';
+    case 'ending':
+      return 'celebrate';
+    default:
+      return 'open_arm';
+  }
 }
 
 export function compileCinematicShotPlan(input: CinematicPromptInput): ScriptPayload {
-  const keywords = (input.keywords ?? []).map((keyword) => keyword.trim()).filter((keyword) => keyword.length > 0);
+  const keywords = sanitizeKeywords(input.keywords);
   const templates = resolveShotTemplates(input.manifest);
   const targetDurationSec = resolveTargetDurationSec(input.manifest, templates);
   const shotDurations = distributeDurations(templates, targetDurationSec);
-  const narrationTemplates = templates.filter((template) => template.shotType === 'narration');
-  const dialogueTemplates = templates.filter((template) => template.shotType === 'dialogue');
-
-  let narrationCursor = 0;
-  let dialogueCursor = 0;
+  const themeVoice = resolveThemeVoice(input.themeName);
 
   const shots = templates.map((template, index) => {
     const durationSec = shotDurations[index];
@@ -222,47 +541,60 @@ export function compileCinematicShotPlan(input: CinematicPromptInput): ScriptPay
     const shotType = template.shotType;
     const camera = template.camera || scene.cameraPreset || cameraByShot[index] || cameraByShot[cameraByShot.length - 1];
     const lighting = template.lighting || scene.lightingPreset || lightingByShot[index] || lightingByShot[lightingByShot.length - 1];
-    const environmentMotion = scene.environmentMotionDefaults.length
-      ? scene.environmentMotionDefaults
-      : ['volumetric fog', 'ambient particles'];
+    const environmentMotion = scene.environmentMotionDefaults.length ? scene.environmentMotionDefaults : [...fallbackEnvironmentMotion];
+    const beat = inferBeatStage({
+      label: template.label,
+      id: template.id,
+      shotType,
+      index,
+      totalShots: templates.length
+    });
 
     const narration =
       shotType === 'narration'
-        ? narrationLineForIndex({
-            narrationIndex: narrationCursor++,
-            totalNarrationShots: narrationTemplates.length,
+        ? narrationLineForBeat({
+            beat,
             childName: input.childName,
             themeName: input.themeName,
             keywords,
-            label: template.label
+            sceneName: scene.name,
+            shotIndex: index,
+            themeVoice
           })
         : '';
     const dialogue =
       shotType === 'dialogue'
-        ? dialogueLineForIndex({
-            dialogueIndex: dialogueCursor++,
-            totalDialogueShots: dialogueTemplates.length,
-            label: template.label
-          })
+        ? dialogueLineForBeat({ beat, themeVoice })
         : 'Narration only.';
-
-    const action =
-      shotType === 'narration'
-        ? `Narrated ${template.label?.toLowerCase() ?? 'cinematic'} beat in scene "${scene.name}" with ${camera} camera and ${lighting} lighting.`
-        : `${input.childName} delivers the ${template.label?.toLowerCase() ?? 'hero'} beat on-screen in scene "${scene.name}" with ${camera} camera and ${lighting} lighting.`;
-
-    const soundDesignCues = soundDesignForTemplate(template, shotType);
+    const emotion = template.emotion ?? defaultEmotionForBeat(beat, shotType);
+    const gesture = template.gesture ?? (shotType === 'dialogue' ? defaultGestureForBeat(beat) : undefined);
+    const expression = defaultExpressionForBeat(beat, shotType);
+    const action = actionLineForBeat({
+      beat,
+      shotType,
+      label: template.label,
+      sceneName: scene.name,
+      camera,
+      lighting,
+      environmentMotion,
+      childName: input.childName,
+      characterEmotion: emotion,
+      gesture
+    });
+    const soundDesignCues = soundDesignForBeat(beat, shotType);
 
     const characterDirection: ScriptPayload['shots'][number]['characterDirection'] =
       shotType === 'dialogue'
         ? {
             presence: template.characterPresence ?? 'hero',
-            emotion: template.emotion ?? (dialogueCursor === 1 ? 'confident' : 'joyful'),
-            gesture: template.gesture ?? (dialogueCursor === 1 ? 'point_forward' : 'celebrate')
+            emotion,
+            expression,
+            gesture
           }
         : {
             presence: template.characterPresence ?? 'offscreen',
-            emotion: template.emotion ?? (narrationCursor === 1 ? 'wonder' : 'relief')
+            emotion,
+            expression
           };
 
     return {
@@ -294,7 +626,7 @@ export function compileCinematicShotPlan(input: CinematicPromptInput): ScriptPay
     title: `${input.childName}'s ${input.themeName} Adventure`,
     narration: narrationLines,
     totalDurationSec: shots.reduce((sum, shot) => sum + shot.durationSec, 0),
-    version: 'v2-premium-pack',
+    version: 'v3-studio-grade',
     themeId: input.manifest.scenes[0]?.id?.split('_').slice(0, -1).join('_') || undefined,
     speakingBudgetSec: shots.reduce((sum, shot) => sum + (shot.speakingDurationSec ?? 0), 0),
     finalMix: {

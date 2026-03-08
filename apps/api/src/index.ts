@@ -477,15 +477,16 @@ function hashToken(value: string): string {
 }
 
 function buildParentAccessTokenSetCookie(token: string): string {
+  const isSecureWebOrigin = env.WEB_APP_BASE_URL.startsWith('https://');
   const parts = [
     `parent_access_token=${encodeURIComponent(token)}`,
     'Path=/',
     `Max-Age=${env.PARENT_AUTH_TTL_SEC}`,
     'HttpOnly',
-    'SameSite=Lax'
+    isSecureWebOrigin ? 'SameSite=None' : 'SameSite=Lax'
   ];
 
-  if (env.WEB_APP_BASE_URL.startsWith('https://')) {
+  if (isSecureWebOrigin) {
     parts.push('Secure');
   }
 

@@ -50,6 +50,7 @@ type UploadSignResponse = {
 
 const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000';
 const launchPriceLabel = '$39';
+const parentAccessTokenStorageKey = 'little.parentAccessToken';
 
 function sanitizeReturnTo(value: string | null): string | null {
   if (!value || !value.startsWith('/') || value.startsWith('//')) {
@@ -64,11 +65,15 @@ function createIdempotencyKey(prefix: string): string {
 }
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  const parentAccessToken =
+    typeof window === 'undefined' ? null : window.localStorage.getItem(parentAccessTokenStorageKey);
+
   const response = await fetch(`${apiBase}${path}`, {
     ...init,
     credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
+      ...(parentAccessToken ? { 'x-parent-access-token': parentAccessToken } : {}),
       ...(init?.headers ?? {})
     }
   });
@@ -160,6 +165,7 @@ function CreateOrderPageContent(): JSX.Element {
       });
 
       setUserId(user.id);
+      window.localStorage.setItem(parentAccessTokenStorageKey, user.parentAccessToken);
       if (returnTo) {
         setStatusMessage(`Parent session restored. Returning to ${recoveringOrderId ?? 'your order'}...`);
         router.push(returnTo as Route);

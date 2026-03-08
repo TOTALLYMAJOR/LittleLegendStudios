@@ -147,6 +147,7 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
   - email notification failure dashboard
   - retry request history dashboard
   - moderation review dashboard with decision/status filters and evidence drilldown
+  - moderation case actions with admin approve/reject override, required audit notes, and persisted action history
   - provider task failure triage dashboard
   - retention and purge history dashboard
 
@@ -224,7 +225,6 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
 - [ ] Replace heuristic moderation with stronger media-quality and safety checks
   - connect score-based moderation to real external CV/NSFW models instead of proxy scoring only
   - calibrate voice intelligibility thresholds against labeled production samples
-  - add moderation case actions (approve/reject override with audit notes) for support operations
 - [ ] Add richer branded subtitle system and more final compose polish
   - keep pushing subtitle styling and final brand treatment beyond the current richer layout set
   - keep polishing music, audio mix, and finishing details

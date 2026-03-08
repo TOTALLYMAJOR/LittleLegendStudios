@@ -270,6 +270,37 @@ interface ModerationReviewRow {
   created_at: string;
 }
 
+interface ModerationJobRow {
+  id: string;
+  order_id: string;
+  status: 'queued' | 'running' | 'succeeded' | 'failed';
+  provider: string;
+  attempt: number;
+  output_json: Record<string, unknown> | null;
+  error_text: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  created_at: string;
+}
+
+type ModerationCaseActionType = 'approve_override' | 'reject_override';
+
+interface ModerationCaseActionRow {
+  id: string;
+  moderation_job_id: string;
+  order_id: string;
+  action: ModerationCaseActionType;
+  note: string;
+  actor: string;
+  previous_order_status: OrderStatus;
+  resulting_order_status: OrderStatus;
+  previous_decision: ModerationDecision;
+  resulting_decision: ModerationDecision;
+  retry_request_id: string | null;
+  retry_job_id: string | null;
+  created_at: string;
+}
+
 interface ProviderTaskCleanupRow {
   provider_task_id: string;
   provider: string;
@@ -303,7 +334,12 @@ interface ScenePlanEntry {
   sceneRenderSpec: SceneRenderSpec;
 }
 
-type RenderEnqueueSource = 'payment_stub' | 'payment_webhook' | 'parent_retry' | 'admin_retry';
+type RenderEnqueueSource =
+  | 'payment_stub'
+  | 'payment_webhook'
+  | 'parent_retry'
+  | 'admin_retry'
+  | 'admin_moderation_override';
 
 interface QueueRenderResult {
   queued: boolean;
@@ -389,6 +425,12 @@ const adminModerationReviewsQuerySchema = z.object({
   decision: z.enum(['pass', 'manual_review', 'reject', 'unknown']).optional()
 });
 
+const adminModerationCaseActionSchema = z.object({
+  action: z.enum(['approve', 'reject']),
+  note: z.string().trim().min(5).max(2000),
+  queueRetry: z.boolean().optional().default(true)
+});
+
 const adminOrderDataPurgeHistoryQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(25),
   orderId: z.string().uuid().optional(),
@@ -441,6 +483,20 @@ function hasAdminAccess(request: FastifyRequest): boolean {
 
   const headerToken = request.headers['x-admin-api-token'];
   return typeof headerToken === 'string' && headerToken === env.ADMIN_API_TOKEN;
+}
+
+function resolveAdminActor(request: FastifyRequest): string {
+  const fromHeader =
+    readHeaderToken(request.headers['x-admin-actor']) ??
+    readHeaderToken(request.headers['x-admin-email']) ??
+    readHeaderToken(request.headers['x-admin-user']) ??
+    null;
+
+  if (!fromHeader) {
+    return 'admin';
+  }
+
+  return fromHeader.slice(0, 120);
 }
 
 function readHeaderToken(value: string | string[] | undefined): string | null {
@@ -711,6 +767,68 @@ async function recordRetryRequest(args: {
   );
 
   return rows[0].id;
+}
+
+async function recordModerationCaseAction(args: {
+  moderationJobId: string;
+  orderId: string;
+  action: ModerationCaseActionType;
+  note: string;
+  actor: string;
+  previousOrderStatus: OrderStatus;
+  resultingOrderStatus: OrderStatus;
+  previousDecision: ModerationDecision;
+  resultingDecision: ModerationDecision;
+  retryRequestId?: string | null;
+  retryJobId?: string | null;
+}): Promise<ModerationCaseActionRow> {
+  const rows = await query<ModerationCaseActionRow>(
+    `
+    INSERT INTO moderation_case_actions (
+      moderation_job_id,
+      order_id,
+      action,
+      note,
+      actor,
+      previous_order_status,
+      resulting_order_status,
+      previous_decision,
+      resulting_decision,
+      retry_request_id,
+      retry_job_id
+    )
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+    RETURNING
+      id,
+      moderation_job_id,
+      order_id,
+      action,
+      note,
+      actor,
+      previous_order_status,
+      resulting_order_status,
+      previous_decision,
+      resulting_decision,
+      retry_request_id,
+      retry_job_id,
+      created_at
+    `,
+    [
+      args.moderationJobId,
+      args.orderId,
+      args.action,
+      args.note,
+      args.actor,
+      args.previousOrderStatus,
+      args.resultingOrderStatus,
+      args.previousDecision,
+      args.resultingDecision,
+      args.retryRequestId ?? null,
+      args.retryJobId ?? null
+    ]
+  );
+
+  return rows[0];
 }
 
 async function recordEmailNotification(args: {
@@ -2942,13 +3060,67 @@ async function buildServer(): Promise<FastifyInstance> {
         : decisionFilter === 'unknown'
           ? mappedReviews.filter((review) => review.decision === 'unknown')
           : mappedReviews;
-    const reviews = filteredReviews.slice(0, queryParams.limit);
+    const reviewsWithoutActions = filteredReviews.slice(0, queryParams.limit);
+    const reviewIds = reviewsWithoutActions.map((review) => review.id);
+    const caseActionRows =
+      reviewIds.length > 0
+        ? await query<ModerationCaseActionRow>(
+            `
+            SELECT
+              id,
+              moderation_job_id,
+              order_id,
+              action,
+              note,
+              actor,
+              previous_order_status,
+              resulting_order_status,
+              previous_decision,
+              resulting_decision,
+              retry_request_id,
+              retry_job_id,
+              created_at
+            FROM moderation_case_actions
+            WHERE moderation_job_id = ANY($1::uuid[])
+            ORDER BY created_at DESC
+            `,
+            [reviewIds]
+          )
+        : [];
+
+    const actionsByReview = new Map<string, ModerationCaseActionRow[]>();
+    for (const actionRow of caseActionRows) {
+      const existing = actionsByReview.get(actionRow.moderation_job_id) ?? [];
+      existing.push(actionRow);
+      actionsByReview.set(actionRow.moderation_job_id, existing);
+    }
+
+    const reviews = reviewsWithoutActions.map((review) => ({
+      ...review,
+      caseActions: (actionsByReview.get(review.id) ?? []).map((actionRow) => ({
+        id: actionRow.id,
+        action: actionRow.action,
+        note: actionRow.note,
+        actor: actionRow.actor,
+        previousOrderStatus: actionRow.previous_order_status,
+        resultingOrderStatus: actionRow.resulting_order_status,
+        previousDecision: actionRow.previous_decision,
+        resultingDecision: actionRow.resulting_decision,
+        retryRequestId: actionRow.retry_request_id,
+        retryJobId: actionRow.retry_job_id,
+        createdAt: actionRow.created_at
+      }))
+    }));
 
     const decisionBreakdownMap = new Map<ModerationDecision, number>();
     const stepStatusBreakdownMap = new Map<'queued' | 'running' | 'succeeded' | 'failed', number>();
+    const caseActionBreakdownMap = new Map<ModerationCaseActionType, number>();
     for (const review of reviews) {
       decisionBreakdownMap.set(review.decision, (decisionBreakdownMap.get(review.decision) ?? 0) + 1);
       stepStatusBreakdownMap.set(review.stepStatus, (stepStatusBreakdownMap.get(review.stepStatus) ?? 0) + 1);
+      for (const caseAction of review.caseActions) {
+        caseActionBreakdownMap.set(caseAction.action, (caseActionBreakdownMap.get(caseAction.action) ?? 0) + 1);
+      }
     }
 
     return reply.send({
@@ -2967,9 +3139,159 @@ async function buildServer(): Promise<FastifyInstance> {
         stepStatusBreakdown: Array.from(stepStatusBreakdownMap.entries()).map(([stepStatus, count]) => ({
           stepStatus,
           count
+        })),
+        caseActionBreakdown: Array.from(caseActionBreakdownMap.entries()).map(([action, count]) => ({
+          action,
+          count
         }))
       },
       reviews
+    });
+  });
+
+  app.post('/admin/moderation-reviews/:reviewId/actions', async (request, reply) => {
+    if (!hasAdminAccess(request)) {
+      return reply.status(401).send({ message: 'Unauthorized admin request.' });
+    }
+
+    const params = z.object({ reviewId: z.string().uuid() }).parse(request.params);
+    const payload = adminModerationCaseActionSchema.parse(request.body ?? {});
+    const actor = resolveAdminActor(request);
+
+    const moderationRows = await query<ModerationJobRow>(
+      `
+      SELECT
+        id,
+        order_id,
+        status,
+        provider,
+        attempt,
+        output_json,
+        error_text,
+        started_at,
+        finished_at,
+        created_at
+      FROM jobs
+      WHERE id = $1
+        AND type = 'moderation'
+      LIMIT 1
+      `,
+      [params.reviewId]
+    );
+    const moderationJob = moderationRows[0] ?? null;
+    if (!moderationJob) {
+      return reply.status(404).send({ message: 'Moderation review record not found.' });
+    }
+
+    const order = await getOrder(moderationJob.order_id);
+    if (!order) {
+      return reply.status(404).send({ message: 'Order not found for moderation review.' });
+    }
+
+    const moderationSnapshot = buildModerationSnapshot({
+      output: moderationJob.output_json,
+      errorText: moderationJob.error_text,
+      provider: moderationJob.provider
+    });
+
+    const previousOrderStatus = order.status;
+    const previousDecision = moderationSnapshot.decision;
+    let resultingOrderStatus = order.status;
+    let resultingDecision: ModerationDecision = payload.action === 'approve' ? 'pass' : 'reject';
+    let retryRequestId: string | null = null;
+    let retryJobId: string | null = null;
+    let queueResult: QueueRenderResult | null = null;
+
+    if (payload.action === 'approve') {
+      if (!['manual_review', 'failed_hard', 'failed_soft'].includes(order.status)) {
+        return reply.status(409).send({
+          message:
+            `Cannot approve override for order in status ${order.status}. ` +
+            'Allowed statuses: manual_review, failed_hard, failed_soft.'
+        });
+      }
+
+      if (order.status === 'manual_review' || order.status === 'failed_hard') {
+        const updatedOrder = await setOrderStatus(order.id, 'failed_soft');
+        resultingOrderStatus = updatedOrder.status;
+      }
+
+      if (payload.queueRetry) {
+        if (!order.stripe_payment_intent_id) {
+          return reply.status(409).send({ message: 'Cannot queue retry because payment intent is missing.' });
+        }
+
+        retryRequestId = await recordRetryRequest({
+          orderId: order.id,
+          actor: 'admin',
+          requestedStatus: previousOrderStatus,
+          accepted: true,
+          reason: `Moderation approve override: ${payload.note}`
+        });
+
+        retryJobId = `render-${order.id}-moderation-approve-${retryRequestId}`;
+        queueResult = await queueRenderOrder({
+          orderId: order.id,
+          paymentIntentId: order.stripe_payment_intent_id,
+          jobId: retryJobId,
+          dedupeKey: `moderation-approve:${retryRequestId}`,
+          source: 'admin_moderation_override'
+        });
+      }
+    } else {
+      if (!['manual_review', 'failed_hard', 'failed_soft'].includes(order.status)) {
+        return reply.status(409).send({
+          message:
+            `Cannot reject override for order in status ${order.status}. ` +
+            'Allowed statuses: manual_review, failed_hard, failed_soft.'
+        });
+      }
+
+      if (order.status === 'failed_soft') {
+        const updatedOrder = await setOrderStatus(order.id, 'failed_hard');
+        resultingOrderStatus = updatedOrder.status;
+      }
+    }
+
+    const actionType: ModerationCaseActionType =
+      payload.action === 'approve' ? 'approve_override' : 'reject_override';
+    const caseAction = await recordModerationCaseAction({
+      moderationJobId: moderationJob.id,
+      orderId: order.id,
+      action: actionType,
+      note: payload.note,
+      actor,
+      previousOrderStatus,
+      resultingOrderStatus,
+      previousDecision,
+      resultingDecision,
+      retryRequestId,
+      retryJobId
+    });
+
+    return reply.send({
+      action: {
+        id: caseAction.id,
+        moderationJobId: caseAction.moderation_job_id,
+        orderId: caseAction.order_id,
+        action: caseAction.action,
+        note: caseAction.note,
+        actor: caseAction.actor,
+        previousOrderStatus: caseAction.previous_order_status,
+        resultingOrderStatus: caseAction.resulting_order_status,
+        previousDecision: caseAction.previous_decision,
+        resultingDecision: caseAction.resulting_decision,
+        retryRequestId: caseAction.retry_request_id,
+        retryJobId: caseAction.retry_job_id,
+        createdAt: caseAction.created_at
+      },
+      queue: queueResult
+        ? {
+            queued: queueResult.queued,
+            deduped: queueResult.deduped,
+            jobId: queueResult.jobId
+          }
+        : null
     });
   });
 

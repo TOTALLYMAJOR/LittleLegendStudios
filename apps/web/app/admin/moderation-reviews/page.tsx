@@ -6,6 +6,21 @@ const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000';
 
 type ModerationDecision = 'pass' | 'manual_review' | 'reject' | 'unknown';
 type ModerationStepStatus = 'queued' | 'running' | 'succeeded' | 'failed';
+type ModerationCaseActionType = 'approve_override' | 'reject_override';
+
+interface ModerationCaseAction {
+  id: string;
+  action: ModerationCaseActionType;
+  note: string;
+  actor: string;
+  previousOrderStatus: string;
+  resultingOrderStatus: string;
+  previousDecision: ModerationDecision;
+  resultingDecision: ModerationDecision;
+  retryRequestId: string | null;
+  retryJobId: string | null;
+  createdAt: string;
+}
 
 interface ModerationReview {
   id: string;
@@ -30,6 +45,7 @@ interface ModerationReview {
   startedAt: string | null;
   finishedAt: string | null;
   createdAt: string;
+  caseActions: ModerationCaseAction[];
 }
 
 interface ModerationReviewsResponse {
@@ -49,8 +65,21 @@ interface ModerationReviewsResponse {
       stepStatus: ModerationStepStatus;
       count: number;
     }>;
+    caseActionBreakdown: Array<{
+      action: ModerationCaseActionType;
+      count: number;
+    }>;
   };
   reviews: ModerationReview[];
+}
+
+interface ModerationCaseActionResponse {
+  action: ModerationCaseAction;
+  queue: {
+    queued: boolean;
+    deduped: boolean;
+    jobId: string;
+  } | null;
 }
 
 async function parseResponse(response: Response): Promise<any> {
@@ -76,6 +105,10 @@ function getDecisionChipClass(decision: ModerationDecision): string {
   return 'status-chip';
 }
 
+function formatCaseActionLabel(action: ModerationCaseActionType): string {
+  return action === 'approve_override' ? 'Approve Override' : 'Reject Override';
+}
+
 export default function AdminModerationReviewsPage(): JSX.Element {
   const [adminToken, setAdminToken] = useState('');
   const [orderId, setOrderId] = useState('');
@@ -85,6 +118,9 @@ export default function AdminModerationReviewsPage(): JSX.Element {
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('Load moderation review records with scored evidence and reasons.');
   const [data, setData] = useState<ModerationReviewsResponse | null>(null);
+  const [queueRetryOnApprove, setQueueRetryOnApprove] = useState(true);
+  const [actionNotes, setActionNotes] = useState<Record<string, string>>({});
+  const [activeActionReviewId, setActiveActionReviewId] = useState<string | null>(null);
 
   const scoreAverages = useMemo(() => {
     if (!data || data.reviews.length === 0) {
@@ -158,6 +194,58 @@ export default function AdminModerationReviewsPage(): JSX.Element {
     }
   }
 
+  async function submitCaseAction(args: { review: ModerationReview; action: 'approve' | 'reject' }): Promise<void> {
+    if (!adminToken.trim()) {
+      setMessage('Admin token is required.');
+      return;
+    }
+
+    const note = (actionNotes[args.review.id] ?? '').trim();
+    if (note.length < 5) {
+      setMessage('Audit note must be at least 5 characters before submitting an override.');
+      return;
+    }
+
+    setActiveActionReviewId(args.review.id);
+    setMessage('');
+    try {
+      const response = await fetch(`${apiBase}/admin/moderation-reviews/${args.review.id}/actions`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${adminToken.trim()}`,
+          'Content-Type': 'application/json',
+          'x-admin-actor': 'admin-ui'
+        },
+        body: JSON.stringify({
+          action: args.action,
+          note,
+          queueRetry: args.action === 'approve' ? queueRetryOnApprove : false
+        })
+      });
+      const payload = (await parseResponse(response)) as ModerationCaseActionResponse | { message?: string };
+      if (!response.ok) {
+        const errorMessage = 'message' in payload ? payload.message : undefined;
+        throw new Error(errorMessage || `Case action failed (${response.status}).`);
+      }
+
+      const typedPayload = payload as ModerationCaseActionResponse;
+      const queueSummary = typedPayload.queue
+        ? ` Queue ${typedPayload.queue.queued ? 'accepted' : 'deduped'} (job ${typedPayload.queue.jobId}).`
+        : '';
+      const successMessage = `Saved ${formatCaseActionLabel(typedPayload.action.action)} for ${args.review.orderId}.${queueSummary}`;
+      setActionNotes((current) => ({
+        ...current,
+        [args.review.id]: ''
+      }));
+      await loadReviews();
+      setMessage(successMessage);
+    } catch (error) {
+      setMessage((error as Error).message);
+    } finally {
+      setActiveActionReviewId(null);
+    }
+  }
+
   return (
     <main>
       <section className="card">
@@ -212,6 +300,16 @@ export default function AdminModerationReviewsPage(): JSX.Element {
             <option value="25">25</option>
             <option value="50">50</option>
             <option value="100">100</option>
+          </select>
+
+          <label htmlFor="queueRetryOnApprove">Approve Override Behavior</label>
+          <select
+            id="queueRetryOnApprove"
+            value={queueRetryOnApprove ? 'retry' : 'no_retry'}
+            onChange={(event) => setQueueRetryOnApprove(event.target.value === 'retry')}
+          >
+            <option value="retry">Queue render retry after approve</option>
+            <option value="no_retry">Record approve only (no retry)</option>
           </select>
 
           <button disabled={loading} onClick={loadReviews}>
@@ -271,6 +369,20 @@ export default function AdminModerationReviewsPage(): JSX.Element {
                     <p>No score metrics found.</p>
                   )}
                 </div>
+                <div className="summary-block">
+                  <h3>Case Actions</h3>
+                  {data.summary.caseActionBreakdown.length > 0 ? (
+                    <ul>
+                      {data.summary.caseActionBreakdown.map((entry) => (
+                        <li key={entry.action}>
+                          {formatCaseActionLabel(entry.action)}: {entry.count}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p>No overrides recorded in this result set.</p>
+                  )}
+                </div>
               </div>
             </>
           )}
@@ -296,6 +408,7 @@ export default function AdminModerationReviewsPage(): JSX.Element {
                   <th>Decision</th>
                   <th>Checks + Scores</th>
                   <th>Reasons</th>
+                  <th>Case Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -386,6 +499,53 @@ export default function AdminModerationReviewsPage(): JSX.Element {
                           )}
                         </pre>
                       </details>
+                    </td>
+                    <td>
+                      <label htmlFor={`note-${review.id}`}>Audit Note</label>
+                      <textarea
+                        id={`note-${review.id}`}
+                        rows={4}
+                        placeholder="Explain why this override is being made."
+                        value={actionNotes[review.id] ?? ''}
+                        onChange={(event) =>
+                          setActionNotes((current) => ({
+                            ...current,
+                            [review.id]: event.target.value
+                          }))
+                        }
+                      />
+                      <div className="grid two">
+                        <button
+                          type="button"
+                          disabled={Boolean(activeActionReviewId)}
+                          onClick={() => submitCaseAction({ review, action: 'approve' })}
+                        >
+                          {activeActionReviewId === review.id ? 'Submitting...' : 'Approve Override'}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={Boolean(activeActionReviewId)}
+                          onClick={() => submitCaseAction({ review, action: 'reject' })}
+                        >
+                          {activeActionReviewId === review.id ? 'Submitting...' : 'Reject Override'}
+                        </button>
+                      </div>
+
+                      {review.caseActions.length > 0 ? (
+                        <>
+                          <p>Audit Trail:</p>
+                          <ul>
+                            {review.caseActions.map((action) => (
+                              <li key={action.id}>
+                                {new Date(action.createdAt).toLocaleString()} | {formatCaseActionLabel(action.action)} by {action.actor} |{' '}
+                                {action.previousOrderStatus} -&gt; {action.resultingOrderStatus}
+                              </li>
+                            ))}
+                          </ul>
+                        </>
+                      ) : (
+                        <p>No actions yet.</p>
+                      )}
                     </td>
                   </tr>
                 ))}

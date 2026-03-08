@@ -155,6 +155,22 @@ CREATE TABLE IF NOT EXISTS order_retry_requests (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS moderation_case_actions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  moderation_job_id UUID NOT NULL REFERENCES jobs(id),
+  order_id UUID NOT NULL REFERENCES orders(id),
+  action TEXT NOT NULL CHECK (action IN ('approve_override', 'reject_override')),
+  note TEXT NOT NULL,
+  actor TEXT NOT NULL,
+  previous_order_status TEXT NOT NULL,
+  resulting_order_status TEXT NOT NULL,
+  previous_decision TEXT NOT NULL CHECK (previous_decision IN ('pass', 'manual_review', 'reject', 'unknown')),
+  resulting_decision TEXT NOT NULL CHECK (resulting_decision IN ('pass', 'manual_review', 'reject', 'unknown')),
+  retry_request_id UUID REFERENCES order_retry_requests(id),
+  retry_job_id TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS gift_redemption_links (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   order_id UUID NOT NULL REFERENCES orders(id),
@@ -303,6 +319,9 @@ CREATE INDEX IF NOT EXISTS idx_artifacts_order_id ON artifacts(order_id);
 CREATE INDEX IF NOT EXISTS idx_provider_tasks_order_id ON provider_tasks(order_id);
 CREATE INDEX IF NOT EXISTS idx_provider_tasks_status ON provider_tasks(status);
 CREATE INDEX IF NOT EXISTS idx_order_retry_requests_order_id ON order_retry_requests(order_id);
+CREATE INDEX IF NOT EXISTS idx_moderation_case_actions_order_id ON moderation_case_actions(order_id);
+CREATE INDEX IF NOT EXISTS idx_moderation_case_actions_job_id ON moderation_case_actions(moderation_job_id);
+CREATE INDEX IF NOT EXISTS idx_moderation_case_actions_created_at ON moderation_case_actions(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_gift_redemption_links_order_id ON gift_redemption_links(order_id);
 CREATE INDEX IF NOT EXISTS idx_gift_redemption_links_status ON gift_redemption_links(status);
 CREATE INDEX IF NOT EXISTS idx_email_notifications_order_id ON email_notifications(order_id);

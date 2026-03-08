@@ -1009,6 +1009,7 @@ async function runModerationCheck(args: {
   voiceUpload: ProviderUpload | null;
 }): Promise<{
   approved: boolean;
+  decision: 'pass' | 'manual_review' | 'reject';
   checks: {
     photoQuality: string;
     facePresence: string;
@@ -1016,9 +1017,12 @@ async function runModerationCheck(args: {
     voiceQuality: string;
   };
   summary: string[];
+  evidence: Record<string, unknown>;
   details: Record<string, unknown>;
 }> {
   const summary: string[] = [];
+  const rejectReasons: string[] = [];
+  const reviewReasons: string[] = [];
   const checks = {
     photoQuality: 'pass_local_heuristic',
     facePresence: 'pass_local_heuristic',
@@ -1049,18 +1053,21 @@ async function runModerationCheck(args: {
     checks.photoQuality = 'fail_photo_count';
     checks.facePresence = 'fail_photo_count';
     summary.push(`Expected 5-15 photos, received ${String(args.photoUploads.length)}.`);
+    rejectReasons.push('photo_count_out_of_range');
   }
 
   const undersizedPhotos = photoPayloads.filter((photo) => photo.bytes < 15_000).length;
   if (undersizedPhotos > 0) {
     checks.photoQuality = 'fail_photo_resolution_heuristic';
     summary.push(`${String(undersizedPhotos)} photo uploads are too small for reliable likeness generation.`);
+    rejectReasons.push('photo_bytes_too_small');
   }
 
   const unresolvedDimensions = photoPayloads.filter((photo) => !photo.dimensions).length;
   if (unresolvedDimensions > 0) {
     checks.photoQuality = 'fail_photo_dimension_parse';
     summary.push(`${String(unresolvedDimensions)} photo uploads could not be dimension-validated.`);
+    rejectReasons.push('photo_dimension_parse_failed');
   }
 
   const lowResolutionPhotos = photoPayloads.filter((photo) => {
@@ -1073,6 +1080,7 @@ async function runModerationCheck(args: {
   if (lowResolutionPhotos > 0) {
     checks.photoQuality = 'fail_photo_resolution_heuristic';
     summary.push(`${String(lowResolutionPhotos)} photo uploads are below the minimum effective resolution threshold.`);
+    rejectReasons.push('photo_resolution_below_threshold');
   }
 
   const portraitFriendlyPhotos = photoPayloads.filter((photo) => {
@@ -1087,12 +1095,14 @@ async function runModerationCheck(args: {
   if (portraitFriendlyPhotos < Math.min(3, args.photoUploads.length)) {
     checks.facePresence = 'fail_face_framing_heuristic';
     summary.push('Too few photos meet portrait-framing heuristics for reliable face extraction.');
+    rejectReasons.push('insufficient_portrait_framing');
   }
 
   const uniquePhotoHashes = new Set(photoPayloads.map((photo) => photo.sha256).filter((value): value is string => Boolean(value)));
   if (uniquePhotoHashes.size < Math.min(3, args.photoUploads.length)) {
     checks.facePresence = 'fail_photo_uniqueness_heuristic';
     summary.push('Photo set does not contain enough unique source images.');
+    rejectReasons.push('insufficient_unique_photo_sources');
   }
 
   const extremeAspectPhotos = photoPayloads.filter((photo) => {
@@ -1106,6 +1116,7 @@ async function runModerationCheck(args: {
   if (extremeAspectPhotos > Math.floor(args.photoUploads.length / 2)) {
     checks.safety = 'review_required_extreme_crop_heuristic';
     summary.push('Most photos have extreme aspect ratios and should be reviewed for safe/usable framing.');
+    reviewReasons.push('extreme_photo_cropping');
   }
 
   let voiceBytes = 0;
@@ -1114,6 +1125,7 @@ async function runModerationCheck(args: {
   if (!args.voiceUpload) {
     checks.voiceQuality = 'fail_missing_voice';
     summary.push('Voice sample is missing.');
+    rejectReasons.push('missing_voice_sample');
   } else {
     const voiceSource = await fetchSourceAssetBytes(args.voiceUpload);
     voiceBytes = voiceSource.bytes.byteLength;
@@ -1127,35 +1139,66 @@ async function runModerationCheck(args: {
     if (voiceSource.bytes.byteLength < 80_000) {
       checks.voiceQuality = 'fail_voice_too_small';
       summary.push('Voice sample is too small for reliable synthesis.');
+      rejectReasons.push('voice_bytes_too_small');
     }
     wavMetrics = analyzeWavMetrics(voiceBytesArray);
     estimatedVoiceDurationSec = wavMetrics ? Math.round(wavMetrics.durationSec) : estimateVoiceDurationSec(args.voiceUpload, voiceSource.bytes.byteLength);
     if (estimatedVoiceDurationSec < 25 || estimatedVoiceDurationSec > 75) {
       checks.voiceQuality = 'fail_voice_duration_heuristic';
       summary.push(`Estimated voice duration ${String(estimatedVoiceDurationSec)}s is outside the accepted range.`);
+      rejectReasons.push('voice_duration_out_of_range');
     }
     if (wavMetrics) {
       if (wavMetrics.sampleRate < 16_000) {
         checks.voiceQuality = 'fail_voice_sample_rate';
         summary.push(`Voice sample rate ${String(wavMetrics.sampleRate)}Hz is below the accepted threshold.`);
+        rejectReasons.push('voice_sample_rate_below_threshold');
       }
       if (wavMetrics.rms !== null && wavMetrics.rms < 0.015) {
         checks.voiceQuality = 'fail_voice_low_energy';
         summary.push('Voice sample appears too quiet for reliable synthesis.');
+        rejectReasons.push('voice_low_signal_energy');
       }
       if (wavMetrics.silenceRatio !== null && wavMetrics.silenceRatio > 0.95) {
         checks.voiceQuality = 'fail_voice_silence';
         summary.push('Voice sample appears mostly silent.');
+        rejectReasons.push('voice_mostly_silent');
+      } else if (wavMetrics.silenceRatio !== null && wavMetrics.silenceRatio > 0.8) {
+        checks.voiceQuality = 'review_required_voice_silence_ratio';
+        summary.push('Voice sample contains a high silence ratio and should be reviewed for clarity.');
+        reviewReasons.push('voice_high_silence_ratio');
       }
     }
   }
 
+  const decision = rejectReasons.length > 0 ? 'reject' : reviewReasons.length > 0 ? 'manual_review' : 'pass';
+
   return {
-    approved: summary.length === 0,
+    approved: decision === 'pass',
+    decision,
     checks,
     summary: summary.length > 0 ? summary : ['Moderation heuristics accepted the intake media set.'],
+    evidence: {
+      rejectReasons,
+      reviewReasons,
+      photoMetrics: {
+        photoCount: args.photoUploads.length,
+        uniquePhotoCount: uniquePhotoHashes.size,
+        undersizedPhotos,
+        lowResolutionPhotos,
+        portraitFriendlyPhotos,
+        extremeAspectPhotos,
+        unresolvedDimensions
+      },
+      voiceMetrics: {
+        voiceBytes,
+        estimatedVoiceDurationSec,
+        wavMetrics
+      }
+    },
     details: {
       mode: 'api_local_heuristic',
+      decision,
       photoCount: args.photoUploads.length,
       uniquePhotoCount: uniquePhotoHashes.size,
       undersizedPhotos,
@@ -1484,55 +1527,168 @@ function subtitleStart(baseStartSec: number, durationSec: number): number {
   return baseStartSec + Math.max(0, durationSec - subtitleDuration(durationSec));
 }
 
-function buildSubtitleAsset(text: string, subtitleStyle: string | undefined): Record<string, unknown> {
+function estimateSubtitleCharacterCount(text: string): number {
+  return text.trim().replaceAll(/\s+/g, ' ').length;
+}
+
+function subtitleLineLength(size: 'small' | 'medium' | 'large'): number {
+  switch (size) {
+    case 'large':
+      return 18;
+    case 'medium':
+      return 26;
+    case 'small':
+    default:
+      return 34;
+  }
+}
+
+function wrapSubtitleText(text: string, maxCharsPerLine: number): string {
+  const words = text.trim().replaceAll(/\s+/g, ' ').split(' ');
+  if (words.length <= 1) {
+    return text.trim();
+  }
+
+  const lines: string[] = [];
+  let currentLine = '';
+
+  for (const word of words) {
+    const candidate = currentLine.length === 0 ? word : `${currentLine} ${word}`;
+    if (candidate.length <= maxCharsPerLine || currentLine.length === 0) {
+      currentLine = candidate;
+    } else {
+      lines.push(currentLine);
+      currentLine = word;
+    }
+  }
+
+  if (currentLine.length > 0) {
+    lines.push(currentLine);
+  }
+
+  return lines.join('\n');
+}
+
+function subtitleVisualProfile(subtitleStyle: string | undefined): {
+  styleKey: string;
+  size: 'small' | 'medium' | 'large';
+  position: 'bottom' | 'center';
+  offsetY: number;
+  padding: number;
+  opacity: number;
+  titleAsset: Record<string, unknown>;
+  maxDurationSec: number;
+  minDurationSec: number;
+  lineClamp: number;
+} {
   switch (subtitleStyle) {
     case 'storybook_banner':
       return {
-        type: 'title',
-        text,
-        style: 'minimal',
+        styleKey: 'storybook_banner',
+        size: 'medium',
         position: 'bottom',
-        size: 'small',
-        color: '#1F140A',
-        background: '#F7D88A',
-        offset: {
-          y: -0.08
-        },
-        padding: 0.04
+        offsetY: -0.085,
+        padding: 0.05,
+        opacity: 0.96,
+        maxDurationSec: 3.8,
+        minDurationSec: 2.4,
+        lineClamp: 2,
+        titleAsset: {
+          style: 'minimal',
+          color: '#23150A',
+          background: '#F4C97B',
+          fontWeight: 'bold',
+          stroke: '#FFF4D6',
+          strokeWidth: 1
+        }
       };
     case 'hero_caption':
       return {
-        type: 'title',
-        text,
-        style: 'minimal',
+        styleKey: 'hero_caption',
+        size: 'large',
         position: 'bottom',
+        offsetY: -0.07,
+        padding: 0.032,
+        opacity: 0.94,
+        maxDurationSec: 3.3,
+        minDurationSec: 2.2,
+        lineClamp: 2,
+        titleAsset: {
+          style: 'minimal',
+          color: '#F8F7F2',
+          background: '#103630',
+          stroke: '#061113',
+          strokeWidth: 2,
+          fontWeight: 'bold'
+        }
+      };
+    case 'luminous_story':
+      return {
+        styleKey: 'luminous_story',
         size: 'medium',
-        color: '#F8F7F2',
-        stroke: '#091412',
-        strokeWidth: 2,
-        background: '#0F2F2A',
-        offset: {
-          y: -0.06
-        },
-        padding: 0.03
+        position: 'center',
+        offsetY: 0.24,
+        padding: 0.02,
+        opacity: 0.88,
+        maxDurationSec: 3.2,
+        minDurationSec: 2.1,
+        lineClamp: 2,
+        titleAsset: {
+          style: 'minimal',
+          color: '#FFF8EF',
+          background: '#214D61',
+          stroke: '#081518',
+          strokeWidth: 2,
+          fontWeight: 'bold'
+        }
       };
     case 'cinematic_minimal':
     default:
       return {
-        type: 'title',
-        text,
-        style: 'minimal',
-        position: 'bottom',
+        styleKey: 'cinematic_minimal',
         size: 'small',
-        color: '#F6F1E8',
-        background: '#102723',
-        opacity: 0.82,
-        offset: {
-          y: -0.05
-        },
-        padding: 0.025
+        position: 'bottom',
+        offsetY: -0.055,
+        padding: 0.026,
+        opacity: 0.84,
+        maxDurationSec: 3,
+        minDurationSec: 2,
+        lineClamp: 2,
+        titleAsset: {
+          style: 'minimal',
+          color: '#F6F1E8',
+          background: '#102723'
+        }
       };
   }
+}
+
+function subtitleClipLength(durationSec: number, subtitleStyle: string | undefined, text: string): number {
+  const profile = subtitleVisualProfile(subtitleStyle);
+  const textBoost = estimateSubtitleCharacterCount(text) > 42 ? 0.4 : estimateSubtitleCharacterCount(text) > 28 ? 0.2 : 0;
+  return Math.max(profile.minDurationSec, Math.min(durationSec, profile.maxDurationSec + textBoost));
+}
+
+function subtitleClipStart(baseStartSec: number, durationSec: number, subtitleStyle: string | undefined, text: string): number {
+  return baseStartSec + Math.max(0, durationSec - subtitleClipLength(durationSec, subtitleStyle, text));
+}
+
+function buildSubtitleAsset(text: string, subtitleStyle: string | undefined): Record<string, unknown> {
+  const profile = subtitleVisualProfile(subtitleStyle);
+  const wrapped = wrapSubtitleText(text, subtitleLineLength(profile.size));
+
+  return {
+    type: 'title',
+    text: wrapped,
+    position: profile.position,
+    size: profile.size,
+    opacity: profile.opacity,
+    offset: {
+      y: profile.offsetY
+    },
+    padding: profile.padding,
+    ...profile.titleAsset
+  };
 }
 
 function shotAudioDurationSec(shot: ScriptPayload['shots'][number] | null | undefined): number {
@@ -1757,8 +1913,8 @@ async function queueShotstackRender(args: {
     if (args.finalMix?.subtitleStyle !== 'none' && shot.subtitleText.trim().length > 0) {
       subtitleClips.push({
         asset: buildSubtitleAsset(shot.subtitleText, args.finalMix?.subtitleStyle),
-        start: subtitleStart(timelineCursor, shot.durationSec),
-        length: subtitleDuration(shot.durationSec)
+        start: subtitleClipStart(timelineCursor, shot.durationSec, args.finalMix?.subtitleStyle, shot.subtitleText),
+        length: subtitleClipLength(shot.durationSec, args.finalMix?.subtitleStyle, shot.subtitleText)
       });
     }
 

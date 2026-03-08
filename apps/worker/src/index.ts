@@ -33,6 +33,16 @@ class ModerationFailure extends Error {
   }
 }
 
+class ModerationManualReview extends Error {
+  constructor(
+    message: string,
+    readonly output: Record<string, unknown>,
+    readonly provider: string
+  ) {
+    super(message);
+  }
+}
+
 interface OrderRow {
   id: string;
   status: OrderStatus;
@@ -1167,6 +1177,25 @@ async function markFailedHard(orderId: string, errorMessage: string, attempt: nu
   }
 }
 
+async function moveOrderToManualReview(orderId: string, reason: string, attempt: number): Promise<void> {
+  const moved = await transitionIfCurrent(orderId, ['running'], 'manual_review');
+  if (!moved) {
+    return;
+  }
+
+  await writeJobEvent({
+    orderId,
+    type: 'moderation',
+    status: 'succeeded',
+    attempt,
+    provider: 'moderation_manual_review',
+    output: {
+      decision: 'manual_review',
+      reason
+    }
+  });
+}
+
 async function runPipeline(orderId: string, attempt: number): Promise<void> {
   const order = await getOrder(orderId);
   if (!order) {
@@ -1217,12 +1246,27 @@ async function runPipeline(orderId: string, attempt: number): Promise<void> {
       voiceUpload: voiceUpload ? toWorkerUpload(voiceUpload) : null
     });
 
-    if (!providerModerationResult.approved) {
+    if (providerModerationResult.decision === 'reject') {
       const message = providerModerationResult.summary.join(' ') || 'Provider moderation rejected intake.';
       throw new ModerationFailure(
         message,
         {
           ok: false,
+          decision: providerModerationResult.decision,
+          localChecks: localModerationResult,
+          providerChecks: providerModerationResult
+        },
+        providerModerationResult.provider
+      );
+    }
+
+    if (providerModerationResult.decision === 'manual_review') {
+      const message = providerModerationResult.summary.join(' ') || 'Provider moderation requires manual review.';
+      throw new ModerationManualReview(
+        message,
+        {
+          ok: true,
+          decision: providerModerationResult.decision,
           localChecks: localModerationResult,
           providerChecks: providerModerationResult
         },
@@ -1237,18 +1281,33 @@ async function runPipeline(orderId: string, attempt: number): Promise<void> {
       moderationInput,
       {
         ok: true,
+        decision: providerModerationResult.decision,
         localChecks: localModerationResult,
         providerChecks: providerModerationResult
       },
       providerModerationResult.provider
     );
   } catch (error) {
+    if (error instanceof ModerationManualReview) {
+      await runStepWithInput(
+        orderId,
+        'moderation',
+        attempt,
+        moderationInput,
+        error.output,
+        error.provider
+      );
+      await moveOrderToManualReview(orderId, error.message, attempt);
+      return;
+    }
+
     const message = (error as Error).message;
     const failedOutput =
       error instanceof ModerationFailure
         ? error.output
         : {
             ok: false,
+            decision: 'reject',
             checks: {
               faceDetect: 'failed',
               nsfw: 'failed',

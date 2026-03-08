@@ -27,6 +27,7 @@ export interface CharacterProfile {
 export interface ModerationResult {
   provider: string;
   approved: boolean;
+  decision: 'pass' | 'manual_review' | 'reject';
   checks: {
     photoQuality: string;
     facePresence: string;
@@ -34,6 +35,7 @@ export interface ModerationResult {
     voiceQuality: string;
   };
   summary: string[];
+  evidence: Record<string, unknown>;
   details: Record<string, unknown>;
 }
 
@@ -300,6 +302,7 @@ class StubModerationProvider implements ModerationProvider {
     return {
       provider: 'stub_moderation',
       approved,
+      decision: approved ? 'pass' : 'reject',
       checks: {
         photoQuality: approved ? 'pass_stub_metadata' : 'fail_stub_metadata',
         facePresence: approved ? 'pass_stub_metadata' : 'fail_stub_metadata',
@@ -309,6 +312,10 @@ class StubModerationProvider implements ModerationProvider {
       summary: approved
         ? ['Stub moderation accepted intake based on metadata shape.']
         : ['Stub moderation rejected intake due to missing required upload counts.'],
+      evidence: {
+        rejectReasons: approved ? [] : ['missing_required_upload_counts'],
+        reviewReasons: []
+      },
       details: {
         orderId: args.orderId,
         photoCount,
@@ -430,6 +437,7 @@ const voiceCloneResponseSchema = z.object({
 
 const moderationResponseSchema = z.object({
   approved: z.boolean(),
+  decision: z.enum(['pass', 'manual_review', 'reject']),
   checks: z.object({
     photoQuality: z.string().min(1),
     facePresence: z.string().min(1),
@@ -437,6 +445,7 @@ const moderationResponseSchema = z.object({
     voiceQuality: z.string().min(1)
   }),
   summary: z.array(z.string()),
+  evidence: z.record(z.unknown()).optional(),
   details: z.record(z.unknown()).optional()
 });
 
@@ -644,8 +653,10 @@ class HttpModerationProvider implements ModerationProvider {
     return {
       provider: 'http_moderation',
       approved: response.approved,
+      decision: response.decision,
       checks: response.checks,
       summary: response.summary,
+      evidence: response.evidence ?? {},
       details: response.details ?? {}
     };
   }

@@ -26,7 +26,7 @@ const allowedTransitions: Record<OrderStatus, OrderStatus[]> = {
   script_regenerate: ['awaiting_script_approval'],
   payment_pending: ['paid', 'awaiting_script_approval'],
   paid: ['running'],
-  running: ['delivered', 'failed_soft', 'failed_hard'],
+  running: ['delivered', 'failed_soft', 'failed_hard', 'manual_review'],
   failed_soft: ['running', 'failed_hard'],
   failed_hard: ['refund_queued', 'failed_soft'],
   refund_queued: ['refunded', 'manual_review'],

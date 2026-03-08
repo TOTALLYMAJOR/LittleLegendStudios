@@ -96,6 +96,29 @@ Notes:
 - Start API + worker first (`npm run dev:boot` in a separate terminal).
 - If `STRIPE_SECRET_KEY` is set, `/pay` uses live checkout and smoke exits by design. Use stub mode for automation.
 
+## Vercel UI Preview
+
+If the immediate goal is to let people see the UI while the full backend keeps evolving, deploy only the web app to Vercel first.
+
+Recommended setup:
+- import the GitHub repo into Vercel
+- create a project for the Next.js app in `apps/web`
+- set the Vercel project Root Directory to `apps/web`
+- leave the monorepo root as-is in GitHub; Vercel will build the web app project from that subdirectory
+
+Preview envs:
+- `NEXT_PUBLIC_API_BASE_URL`
+  - set this to a real public API URL if you want interactive flows to work
+  - if you only want a UI preview, the landing page will still render without it, but create/admin actions that need the API will not work
+- `WEB_APP_BASE_URL`
+  - set this to the deployed site URL for any redirects or generated links that depend on the web origin
+
+Local-to-preview parity:
+- local alternate web port:
+  - `WEB_PORT=3001 WEB_APP_BASE_URL=http://localhost:3001 npm run dev:boot`
+- deployed preview:
+  - use the same `NEXT_PUBLIC_API_BASE_URL` shape you expect in production/staging
+
 ## Built Features
 
 This repo is no longer just a thin scaffold. The current build includes:
@@ -113,7 +136,7 @@ This repo is no longer just a thin scaffold. The current build includes:
   - signed watermarked preview artifact (`preview_video`)
 
 - Render pipeline
-  - moderation step with structured media checks (file signature, image dimensions, framing heuristics, and WAV voice analysis)
+  - moderation step with structured media checks, explicit pass/manual-review/reject decisions, and evidence summaries
   - moderation provider contract via `/moderation/check`
   - voice clone + voice render
   - aggregate narration/dialogue tracks plus per-shot audio artifacts
@@ -122,7 +145,7 @@ This repo is no longer just a thin scaffold. The current build includes:
   - real Shotstack final timeline assembly from persisted shot assets
   - per-shot voice tracks preferred with aggregate fallback
   - seeded theme music bed layering + music ducking
-  - branded subtitle presets in final compose
+  - richer branded subtitle layouts with style-aware timing and wrapping in final compose
 
 - Theme system
   - seeded launch themes with 10-scene manifests each
@@ -167,7 +190,7 @@ For the full build ledger, use [TASKS.md](/home/totallymajor/projects/LittleLege
 The main unfinished areas in the repo are:
 
 - Moderation hardening
-  - current moderation is meaningful, but still heuristic-first
+  - current moderation now returns explicit decisions and evidence, but is still heuristic-first
   - next step is provider-grade photo safety, face/quality validation, and stronger voice quality checks
 
 - Reusable character identity

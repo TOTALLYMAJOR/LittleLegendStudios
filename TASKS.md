@@ -73,7 +73,7 @@ This file is the canonical build ledger for the repo.
   - exact per-shot audio preferred, aggregate-track fallback
   - seeded theme music bed layering
   - music ducking support
-  - branded subtitle presets
+  - branded subtitle layouts with style-aware timing and wrapping
   - thumbnail artifact generation path
 
 - [x] Provider integrations + orchestration
@@ -134,6 +134,7 @@ This file is the canonical build ledger for the repo.
   - photo-set uniqueness heuristics
   - image dimension and framing heuristics
   - WAV voice-duration, silence, level, and sample-rate heuristics
+  - explicit moderation decisions for pass, manual review, and reject
   - still not provider-grade CV/audio moderation
 
 - [x] Moderation provider contract exists
@@ -169,15 +170,15 @@ This file is the canonical build ledger for the repo.
 - [ ] Replace heuristic moderation with stronger media-quality and safety checks
   - add provider-grade CV/NSFW checks instead of heuristic-only approval
   - add stronger voice intelligibility and quality scoring
-  - persist richer moderation evidence for review and support
+  - persist even richer moderation evidence for review and support
 - [ ] Add richer branded subtitle system and more final compose polish
-  - move beyond the current preset title overlays
-  - improve subtitle timing/styling depth and final brand treatment
+  - keep pushing subtitle styling and final brand treatment beyond the current richer layout set
   - keep polishing music, audio mix, and finishing details
 
 ## Remaining Work Summary
 
 - Moderation still needs a real production-grade safety and quality backend
+- Moderation decisions are explicit now, but the evidence is still heuristic and not model-backed
 - Character identity still needs a parent-facing management and curation surface
 - Final compose still needs deeper polish around subtitle branding, audio finishing, and presentation quality
 

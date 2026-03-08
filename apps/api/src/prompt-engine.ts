@@ -299,7 +299,7 @@ export function compileCinematicShotPlan(input: CinematicPromptInput): ScriptPay
     speakingBudgetSec: shots.reduce((sum, shot) => sum + (shot.speakingDurationSec ?? 0), 0),
     finalMix: {
       musicDucking: true,
-      subtitleStyle: 'cinematic_minimal',
+      subtitleStyle: 'luminous_story',
       deliverables: ['1080p_mp4', 'thumbnail_jpg']
     },
     shots

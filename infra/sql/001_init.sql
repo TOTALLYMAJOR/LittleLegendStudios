@@ -26,21 +26,6 @@ CREATE TABLE IF NOT EXISTS themes (
   is_active BOOLEAN NOT NULL DEFAULT true
 );
 
-CREATE TABLE IF NOT EXISTS character_identities (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID NOT NULL REFERENCES users(id),
-  source_photo_fingerprint TEXT NOT NULL,
-  source_photo_count INT NOT NULL,
-  latest_order_id UUID REFERENCES orders(id),
-  version INT NOT NULL DEFAULT 1,
-  character_profile_json JSONB NOT NULL,
-  refs_meta_json JSONB NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  last_used_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE (user_id, source_photo_fingerprint)
-);
-
 CREATE TABLE IF NOT EXISTS orders (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES users(id),
@@ -69,6 +54,21 @@ CREATE TABLE IF NOT EXISTS orders (
   stripe_payment_intent_id TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS character_identities (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id),
+  source_photo_fingerprint TEXT NOT NULL,
+  source_photo_count INT NOT NULL,
+  latest_order_id UUID REFERENCES orders(id),
+  version INT NOT NULL DEFAULT 1,
+  character_profile_json JSONB NOT NULL,
+  refs_meta_json JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_used_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (user_id, source_photo_fingerprint)
 );
 
 CREATE TABLE IF NOT EXISTS uploads (

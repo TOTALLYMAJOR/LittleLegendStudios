@@ -1,31 +1,47 @@
 import Link from 'next/link';
 import type { Route } from 'next';
+import { StoryWorldsSection, type StoryWorld } from './StoryWorldsSection';
 
-const featuredWorld = {
-  name: 'Space Adventure',
-  tone: 'Galactic keepsake film',
-  description:
-    'Rocket launchpads, luminous nebula skies, and a brave little hero moving through a full cinematic arc built from family photos and voice.',
-  accent: 'Starlit epic'
-};
-
-const supportingWorlds = [
+const storyWorlds: StoryWorld[] = [
+  {
+    name: 'Space Adventure',
+    tone: 'Galactic keepsake film',
+    description:
+      'Rocket launchpads, luminous nebula skies, and a brave little hero moving through a full cinematic arc built from family photos and voice.',
+    accent: 'Starlit epic',
+    ambience: 'Wide-angle cosmos, launch-swell crescendos',
+    sceneArc: ['Countdown runway', 'Nebula glide sequence', 'Triumphant return home'],
+    palette: ['rgba(136, 193, 255, 0.48)', 'rgba(119, 255, 240, 0.34)']
+  },
   {
     name: 'Fantasy Kingdom',
     tone: 'Enchanted fairytale',
-    description: 'Castle courtyards, moonlit forests, and a storybook ending framed like a premium animated short.'
+    description: 'Castle courtyards, moonlit forests, and a storybook ending framed like a premium animated short.',
+    accent: 'Storybook wonder',
+    ambience: 'Luminous lantern paths and orchestral strings',
+    sceneArc: ['Castle gate reveal', 'Whispering forest passage', 'Crown-room finale'],
+    palette: ['rgba(185, 141, 255, 0.4)', 'rgba(248, 219, 162, 0.35)']
   },
   {
     name: 'Underwater Kingdom',
     tone: 'Dreamy underwater odyssey',
-    description: 'Glowing reefs, pearl-lit halls, and a magical journey with soft light, motion, and wonder.'
+    description: 'Glowing reefs, pearl-lit halls, and a magical journey with soft light, motion, and wonder.',
+    accent: 'Bioluminescent dream',
+    ambience: 'Ocean hush, drifting choir textures',
+    sceneArc: ['Coral gate descent', 'Pearl hall procession', 'Glow-tide celebration'],
+    palette: ['rgba(117, 222, 245, 0.44)', 'rgba(130, 150, 255, 0.34)']
   },
   {
     name: 'Superhero City',
     tone: 'Comic-scale hero film',
-    description: 'Skyline flyovers, rooftop momentum, and a child-centered origin story with cinematic energy.'
+    description: 'Skyline flyovers, rooftop momentum, and a child-centered origin story with cinematic energy.',
+    accent: 'High-energy origin',
+    ambience: 'Pulse-driven percussion and skyline momentum',
+    sceneArc: ['Signal flare ignition', 'Rooftop sprint run', 'City-square hero moment'],
+    palette: ['rgba(255, 141, 126, 0.44)', 'rgba(255, 215, 125, 0.34)']
   }
 ];
+const featuredWorld = storyWorlds[0];
 
 const processSteps = [
   {
@@ -142,35 +158,7 @@ export default function HomePage(): JSX.Element {
         </div>
       </section>
 
-      <section className="worlds-section" id="worlds">
-        <div className="section-heading">
-          <span className="section-kicker">Story Worlds</span>
-          <h2>Designed like miniature films, not template cards.</h2>
-          <p>
-            Each world is structured as a premium narrative arc with distinct scene beats, tone, and atmosphere. The page
-            should feel like browsing a studio slate, not sorting a marketplace grid.
-          </p>
-        </div>
-
-        <div className="worlds-grid">
-          <article className="world-card world-card-featured">
-            <span className="world-card-chip">Central Focus</span>
-            <h3>{featuredWorld.name}</h3>
-            <p className="world-card-tone">{featuredWorld.tone}</p>
-            <p>{featuredWorld.description}</p>
-          </article>
-
-          <div className="world-card-rail">
-            {supportingWorlds.map((world) => (
-              <article key={world.name} className="world-card world-card-mini">
-                <span className="world-card-chip world-card-chip-soft">{world.tone}</span>
-                <h3>{world.name}</h3>
-                <p>{world.description}</p>
-              </article>
-            ))}
-          </div>
-        </div>
-      </section>
+      <StoryWorldsSection worlds={storyWorlds} />
 
       <section className="process-section">
         <div className="section-heading">

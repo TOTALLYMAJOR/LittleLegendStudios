@@ -193,6 +193,7 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
   - worker can call dedicated moderation provider through `stub` or `http` mode
   - API exposes `/moderation/check` with structured category-level outcomes
   - moderation now computes scored photo quality, face confidence, NSFW risk, and voice intelligibility bands
+  - moderation now supports optional external CV/NSFW score bridge (`off` / `hybrid` / `strict`) with per-photo fallback handling
   - moderation evidence now includes threshold profile + per-asset score breakdowns for triage/support
   - local heuristics remain the hard baseline in the worker
 
@@ -223,8 +224,8 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
 ## Next Up
 
 - [ ] Replace heuristic moderation with stronger media-quality and safety checks
-  - connect score-based moderation to real external CV/NSFW models instead of proxy scoring only
   - calibrate voice intelligibility thresholds against labeled production samples
+  - tune and validate external CV/NSFW model calibration + fallback policy using production-like labeled sets
 - [ ] Add richer branded subtitle system and more final compose polish
   - keep pushing subtitle styling and final brand treatment beyond the current richer layout set
   - keep polishing music, audio mix, and finishing details

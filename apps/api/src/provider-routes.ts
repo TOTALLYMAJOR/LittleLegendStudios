@@ -238,6 +238,21 @@ const moderationCheckRequestSchema = z.object({
   voiceUpload: providerUploadSchema.nullable()
 });
 
+const externalModerationPhotoScoreSchema = z.object({
+  s3Key: z.string().min(1),
+  qualityScore: z.number(),
+  faceConfidenceScore: z.number(),
+  nsfwRiskScore: z.number(),
+  labels: z.array(z.string()).optional(),
+  model: z.string().optional()
+});
+
+const externalModerationResponseSchema = z.object({
+  provider: z.string().min(1).optional(),
+  modelProfile: z.record(z.unknown()).optional(),
+  photoScores: z.array(externalModerationPhotoScoreSchema).default([])
+});
+
 const voiceRenderRequestSchema = z.object({
   orderId: z.string().uuid(),
   userId: z.string().uuid(),
@@ -1037,11 +1052,96 @@ function hashUnitInterval(seed: string): number {
   return integer / 0xffffffff;
 }
 
+interface ExternalPhotoScoreOverride {
+  qualityScore: number;
+  faceConfidenceScore: number;
+  nsfwRiskScore: number;
+  labels: string[];
+  model: string | null;
+}
+
+interface ExternalModerationBridgeResult {
+  provider: string;
+  modelProfile: Record<string, unknown>;
+  scoreByUploadKey: Map<string, ExternalPhotoScoreOverride>;
+  usedPhotoScores: number;
+  missingPhotoKeys: string[];
+}
+
+function isExternalModerationBridgeEnabled(): boolean {
+  return env.MODERATION_EXTERNAL_MODEL_MODE !== 'off';
+}
+
+function isExternalModerationBridgeStrict(): boolean {
+  return env.MODERATION_EXTERNAL_MODEL_MODE === 'strict';
+}
+
+async function fetchExternalModerationBridgeScores(args: {
+  orderId: string;
+  photos: Array<{
+    upload: ProviderUpload;
+    sourceUrl: string;
+    sha256: string;
+    bytes: number;
+    dimensions: { width: number; height: number } | null;
+  }>;
+}): Promise<ExternalModerationBridgeResult> {
+  if (!env.MODERATION_EXTERNAL_MODEL_BASE_URL) {
+    throw new Error(
+      'MODERATION_EXTERNAL_MODEL_BASE_URL is required when MODERATION_EXTERNAL_MODEL_MODE is enabled.'
+    );
+  }
+
+  const url = `${normalizeBaseUrl(env.MODERATION_EXTERNAL_MODEL_BASE_URL)}${normalizePath(env.MODERATION_EXTERNAL_MODEL_PATH)}`;
+  const rawResponse = await postJson({
+    url,
+    headers: env.MODERATION_EXTERNAL_MODEL_API_KEY
+      ? {
+          Authorization: `Bearer ${env.MODERATION_EXTERNAL_MODEL_API_KEY}`
+        }
+      : {},
+    body: {
+      orderId: args.orderId,
+      photos: args.photos.map((photo) => ({
+        s3Key: photo.upload.s3Key,
+        contentType: photo.upload.contentType,
+        bytes: photo.bytes,
+        sha256: photo.sha256,
+        width: photo.dimensions?.width ?? null,
+        height: photo.dimensions?.height ?? null,
+        sourceUrl: photo.sourceUrl
+      }))
+    }
+  });
+  const parsed = externalModerationResponseSchema.parse(rawResponse);
+
+  const scoreByUploadKey = new Map<string, ExternalPhotoScoreOverride>();
+  for (const photoScore of parsed.photoScores) {
+    scoreByUploadKey.set(photoScore.s3Key, {
+      qualityScore: roundScore(clamp01(photoScore.qualityScore)),
+      faceConfidenceScore: roundScore(clamp01(photoScore.faceConfidenceScore)),
+      nsfwRiskScore: roundScore(clamp01(photoScore.nsfwRiskScore)),
+      labels: photoScore.labels ?? [],
+      model: typeof photoScore.model === 'string' && photoScore.model.trim().length > 0 ? photoScore.model.trim() : null
+    });
+  }
+
+  const requestedKeys = args.photos.map((photo) => photo.upload.s3Key);
+  return {
+    provider: parsed.provider ?? 'external_cv_nsfw_bridge',
+    modelProfile: parsed.modelProfile ?? {},
+    scoreByUploadKey,
+    usedPhotoScores: scoreByUploadKey.size,
+    missingPhotoKeys: requestedKeys.filter((key) => !scoreByUploadKey.has(key))
+  };
+}
+
 function scorePhotoModerationEvidence(args: {
   upload: ProviderUpload;
   bytes: number;
   dimensions: { width: number; height: number } | null;
   contentHash: string;
+  scoreOverride?: ExternalPhotoScoreOverride;
 }): {
   uploadKey: string;
   bytes: number;
@@ -1053,6 +1153,9 @@ function scorePhotoModerationEvidence(args: {
   framingScore: number;
   faceConfidenceScore: number;
   nsfwRiskScore: number;
+  scoreSource: 'heuristic_proxy' | 'external_model';
+  externalModel: string | null;
+  externalLabels: string[];
   flags: string[];
 } {
   const width = args.dimensions?.width ?? 0;
@@ -1070,17 +1173,17 @@ function scorePhotoModerationEvidence(args: {
     bytesPerMegapixel && Number.isFinite(bytesPerMegapixel)
       ? clamp01((Math.min(450_000, bytesPerMegapixel) - 70_000) / 220_000)
       : clamp01((args.bytes - 25_000) / 120_000);
-  const qualityScore = roundScore(clamp01(resolutionScore * 0.65 + detailScore * 0.35));
+  const baselineQualityScore = roundScore(clamp01(resolutionScore * 0.65 + detailScore * 0.35));
 
   const framingScore =
     aspectRatio !== null
       ? roundScore(clamp01(1 - Math.abs(aspectRatio - 1) / 0.9))
-      : roundScore(clamp01(0.3 + qualityScore * 0.4));
+      : roundScore(clamp01(0.3 + baselineQualityScore * 0.4));
 
-  const faceConfidenceScore = roundScore(
+  const baselineFaceConfidenceScore = roundScore(
     clamp01(
       0.18 +
-        qualityScore * 0.5 +
+        baselineQualityScore * 0.5 +
         framingScore * 0.25 +
         (minSide >= 720 ? 0.12 : 0) +
         seededVariation * 0.08 -
@@ -1088,15 +1191,22 @@ function scorePhotoModerationEvidence(args: {
     )
   );
 
-  const nsfwRiskScore = roundScore(
+  const baselineNsfwRiskScore = roundScore(
     clamp01(
       0.02 +
         hashUnitInterval(`${args.contentHash}:${args.upload.s3Key}:nsfw`) * 0.2 +
-        (qualityScore < 0.45 ? 0.16 : 0) +
+        (baselineQualityScore < 0.45 ? 0.16 : 0) +
         (aspectRatio !== null && (aspectRatio < 0.4 || aspectRatio > 2.4) ? 0.16 : 0) +
         (minSide > 0 && minSide < 500 ? 0.1 : 0)
     )
   );
+
+  const qualityScore = args.scoreOverride?.qualityScore ?? baselineQualityScore;
+  const faceConfidenceScore = args.scoreOverride?.faceConfidenceScore ?? baselineFaceConfidenceScore;
+  const nsfwRiskScore = args.scoreOverride?.nsfwRiskScore ?? baselineNsfwRiskScore;
+  const scoreSource = args.scoreOverride ? 'external_model' : 'heuristic_proxy';
+  const externalModel = args.scoreOverride?.model ?? null;
+  const externalLabels = args.scoreOverride?.labels ?? [];
 
   const flags: string[] = [];
   if (qualityScore < moderationScoreThresholds.photoQualityReject) {
@@ -1125,6 +1235,9 @@ function scorePhotoModerationEvidence(args: {
     framingScore,
     faceConfidenceScore,
     nsfwRiskScore,
+    scoreSource,
+    externalModel,
+    externalLabels,
     flags
   };
 }
@@ -1193,6 +1306,7 @@ function scoreVoiceModerationEvidence(args: {
 }
 
 async function runModerationCheck(args: {
+  orderId: string;
   photoUploads: ProviderUpload[];
   voiceUpload: ProviderUpload | null;
 }): Promise<{
@@ -1211,6 +1325,8 @@ async function runModerationCheck(args: {
   const summary: string[] = [];
   const rejectReasons: string[] = [];
   const reviewReasons: string[] = [];
+  let externalVisionBridge: ExternalModerationBridgeResult | null = null;
+  let externalVisionFallbackReason: string | null = null;
   const checks = {
     photoQuality: 'pass_provider_cv_quality_v1',
     facePresence: 'pass_provider_cv_face_v1',
@@ -1232,16 +1348,50 @@ async function runModerationCheck(args: {
       const contentHash = upload.sha256 ?? createHash('sha256').update(bytes).digest('hex');
       return {
         upload,
+        sourceUrl: source.sourceUrl,
         bytes: source.bytes.byteLength,
         sha256: contentHash,
-        dimensions,
-        moderationEvidence: scorePhotoModerationEvidence({
-          upload,
-          bytes: source.bytes.byteLength,
-          dimensions,
-          contentHash
-        })
+        dimensions
       };
+    })
+  );
+
+  if (isExternalModerationBridgeEnabled()) {
+    try {
+      externalVisionBridge = await fetchExternalModerationBridgeScores({
+        orderId: args.orderId,
+        photos: photoPayloads
+      });
+
+      if (externalVisionBridge.usedPhotoScores > 0) {
+        summary.push(
+          `External moderation bridge ${externalVisionBridge.provider} scored ` +
+            `${String(externalVisionBridge.usedPhotoScores)}/${String(photoPayloads.length)} photos.`
+        );
+      }
+      if (externalVisionBridge.missingPhotoKeys.length > 0) {
+        summary.push(
+          `${String(externalVisionBridge.missingPhotoKeys.length)} photos were not scored by external models and used fallback heuristics.`
+        );
+      }
+    } catch (error) {
+      if (isExternalModerationBridgeStrict()) {
+        throw error;
+      }
+
+      externalVisionBridge = null;
+      externalVisionFallbackReason = (error as Error).message;
+      summary.push('External moderation bridge unavailable; using local scoring fallback.');
+    }
+  }
+
+  const photoEvidence = photoPayloads.map((payload) =>
+    scorePhotoModerationEvidence({
+      upload: payload.upload,
+      bytes: payload.bytes,
+      dimensions: payload.dimensions,
+      contentHash: payload.sha256,
+      scoreOverride: externalVisionBridge?.scoreByUploadKey.get(payload.upload.s3Key)
     })
   );
 
@@ -1315,7 +1465,6 @@ async function runModerationCheck(args: {
     reviewReasons.push('extreme_photo_cropping');
   }
 
-  const photoEvidence = photoPayloads.map((payload) => payload.moderationEvidence);
   const photoQualityScore = roundScore(average(photoEvidence.map((photo) => photo.qualityScore)));
   const facePresenceScore = roundScore(
     average(
@@ -1457,9 +1606,11 @@ async function runModerationCheck(args: {
     summary: summary.length > 0 ? summary : ['Provider-grade moderation scoring accepted the intake media set.'],
     evidence: {
       modelProfile: {
-        vision: 'provider_cv_face_nsfw_v1',
+        vision: externalVisionBridge ? 'external_cv_nsfw_bridge_v1' : 'provider_cv_face_nsfw_v1',
         audio: 'provider_audio_intelligibility_v1',
-        decisionEngine: 'moderation_score_aggregator_v1'
+        decisionEngine: 'moderation_score_aggregator_v1',
+        externalVisionProvider: externalVisionBridge?.provider ?? null,
+        externalVisionProfile: externalVisionBridge?.modelProfile ?? null
       },
       thresholdProfile: moderationScoreThresholds,
       rejectReasons,
@@ -1475,7 +1626,7 @@ async function runModerationCheck(args: {
       voiceEvidence
     },
     details: {
-      mode: 'provider_cv_audio_scoring_v1',
+      mode: externalVisionBridge ? 'provider_cv_audio_scoring_v1_external_vision' : 'provider_cv_audio_scoring_v1',
       decision,
       photoCount: args.photoUploads.length,
       uniquePhotoCount: uniquePhotoHashes.size,
@@ -1491,6 +1642,13 @@ async function runModerationCheck(args: {
         safetyScore,
         maxNsfwRiskScore,
         voiceQualityScore
+      },
+      externalVision: {
+        mode: env.MODERATION_EXTERNAL_MODEL_MODE,
+        provider: externalVisionBridge?.provider ?? null,
+        usedPhotoScores: externalVisionBridge?.usedPhotoScores ?? 0,
+        missingPhotoKeys: externalVisionBridge?.missingPhotoKeys ?? [],
+        fallbackReason: externalVisionFallbackReason
       },
       voiceBytes,
       estimatedVoiceDurationSec,
@@ -2944,6 +3102,7 @@ export function registerProviderRoutes(app: FastifyInstance): void {
       await loadOrderContext(payload.orderId, payload.userId);
 
       const result = await runModerationCheck({
+        orderId: payload.orderId,
         photoUploads: payload.photoUploads,
         voiceUpload: payload.voiceUpload
       });

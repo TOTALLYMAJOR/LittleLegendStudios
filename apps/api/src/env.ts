@@ -34,6 +34,17 @@ const schema = z.object({
     .string()
     .optional()
     .transform((value) => (value && value.trim().length > 0 ? value : undefined)),
+  MODERATION_EXTERNAL_MODEL_MODE: z.enum(['off', 'hybrid', 'strict']).default('off'),
+  MODERATION_EXTERNAL_MODEL_BASE_URL: z
+    .string()
+    .url()
+    .optional()
+    .transform((value) => (value && value.trim().length > 0 ? value : undefined)),
+  MODERATION_EXTERNAL_MODEL_PATH: z.string().min(1).default('/v1/moderation/photo-scores'),
+  MODERATION_EXTERNAL_MODEL_API_KEY: z
+    .string()
+    .optional()
+    .transform((value) => (value && value.trim().length > 0 ? value : undefined)),
   PROVIDER_AUTH_TOKEN: z
     .string()
     .optional()

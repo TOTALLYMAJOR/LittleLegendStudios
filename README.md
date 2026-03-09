@@ -263,6 +263,11 @@ The main unfinished areas in the repo are:
   - `PROVIDER_INTEGRATION_MODE=stub` (always deterministic stub behavior)
   - `PROVIDER_INTEGRATION_MODE=hybrid` (try real provider calls when keys are set, fallback on failure)
   - `PROVIDER_INTEGRATION_MODE=strict` (fail request if provider config/calls fail)
+- Moderation external vision model bridge (optional):
+  - `MODERATION_EXTERNAL_MODEL_MODE=off|hybrid|strict`
+  - `MODERATION_EXTERNAL_MODEL_BASE_URL` (external CV/NSFW scoring service)
+  - `MODERATION_EXTERNAL_MODEL_PATH` (default `/v1/moderation/photo-scores`)
+  - `MODERATION_EXTERNAL_MODEL_API_KEY` (optional bearer token)
 - Provider task controls:
   - `PROVIDER_TASK_POLL_MIN_INTERVAL_MS` (API-side refresh throttling)
   - `PROVIDER_TASK_ASSUME_SUCCESS_AFTER_SEC` (hybrid-mode fallback when provider polling is unavailable)

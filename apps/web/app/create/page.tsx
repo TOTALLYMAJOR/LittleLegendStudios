@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import type { Route } from 'next';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 
 import { persistParentSessionToken, readParentSessionTokenFromBrowser } from '../lib/parent-session';
 
@@ -54,6 +54,7 @@ const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000';
 const launchPriceLabel = '$39';
 const allowedPhotoTypes = new Set(['image/jpeg', 'image/png']);
 const allowedVoiceTypes = new Set(['audio/wav', 'audio/m4a', 'audio/x-m4a', 'audio/mp4']);
+const themeCutFrameMs = 420;
 
 type StepKey = 'identity' | 'order' | 'upload' | 'scriptPayment';
 type StepState = 'locked' | 'active' | 'complete';
@@ -96,6 +97,77 @@ interface UploadAttemptResult {
   failed: number;
 }
 
+interface ThemeCutPreset {
+  id: string;
+  kicker: string;
+  vibe: string;
+  palette: [string, string, string];
+  cuts: string[];
+}
+
+const themeCutPresetMap: Record<string, ThemeCutPreset> = {
+  space: {
+    id: 'space',
+    kicker: 'Galactic Launch Cut',
+    vibe: 'Fast cosmic rise and hero return',
+    palette: ['rgba(111, 197, 255, 0.42)', 'rgba(128, 255, 233, 0.34)', 'rgba(255, 245, 210, 0.26)'],
+    cuts: [
+      'Ignition countdown over neon launch glass.',
+      'Rocket corridor blur with starfield streaks.',
+      'Nebula drift around the little hero.',
+      'Comet arc slingshots past moonlight rings.',
+      'Cabin close-up with triumph grin.',
+      'Golden reentry over home skyline.',
+      'Landing flare and cheering finale.'
+    ]
+  },
+  fantasy: {
+    id: 'fantasy',
+    kicker: 'Enchanted Arc Cut',
+    vibe: 'Storybook momentum with luminous reveal beats',
+    palette: ['rgba(186, 155, 255, 0.42)', 'rgba(245, 211, 158, 0.32)', 'rgba(255, 248, 224, 0.24)'],
+    cuts: [
+      'Castle gate bloom through morning mist.',
+      'Lantern path rush into moonlit woods.',
+      'Spellburst ribbons sweep around the hero.',
+      'Dragon-shadow flyover above the battlements.',
+      'Crown room glow with glittering confetti.',
+      'Royal balcony wave in golden light.',
+      'Final storybook page snap shut.'
+    ]
+  },
+  underwater: {
+    id: 'underwater',
+    kicker: 'Bioluminescent Cut',
+    vibe: 'Pulsing reef color, drift, and magical payoff',
+    palette: ['rgba(112, 228, 250, 0.42)', 'rgba(133, 158, 255, 0.34)', 'rgba(208, 255, 244, 0.24)'],
+    cuts: [
+      'Coral gate drop into sapphire haze.',
+      'Jellylight flash across pearl columns.',
+      'Hero glide through ribboning kelp.',
+      'Whale-song pulse shakes glowing water.',
+      'Mermaid court spin under crystal domes.',
+      'Shell-throne reveal in turquoise bloom.',
+      'Tide-surge celebration with sparkle wake.'
+    ]
+  },
+  superhero: {
+    id: 'superhero',
+    kicker: 'Origin Burst Cut',
+    vibe: 'Street-level impact and skyline acceleration',
+    palette: ['rgba(255, 143, 124, 0.44)', 'rgba(255, 214, 123, 0.35)', 'rgba(255, 246, 223, 0.24)'],
+    cuts: [
+      'Signal flare ignites over storm clouds.',
+      'Rooftop sprint with comic speed lines.',
+      'Skyline dive between glass towers.',
+      'Power-charge shockwave in city square.',
+      'Cape snap and crowd cheer close-up.',
+      'Aerial spin with sunset lens streak.',
+      'Hero landing freeze-frame finale.'
+    ]
+  }
+};
+
 function sanitizeReturnTo(value: string | null): string | null {
   if (!value || !value.startsWith('/') || value.startsWith('//')) {
     return null;
@@ -118,6 +190,39 @@ function photoFingerprint(file: File): string {
 
 function revokePreviewUrl(previewUrl: string): void {
   URL.revokeObjectURL(previewUrl);
+}
+
+function resolveThemeCutPreset(themeSlug: string, themeName: string): ThemeCutPreset {
+  const key = `${themeSlug} ${themeName}`.toLowerCase();
+
+  if (key.includes('space')) {
+    return themeCutPresetMap.space;
+  }
+  if (key.includes('fantasy') || key.includes('kingdom')) {
+    return themeCutPresetMap.fantasy;
+  }
+  if (key.includes('underwater') || key.includes('ocean') || key.includes('sea')) {
+    return themeCutPresetMap.underwater;
+  }
+  if (key.includes('superhero') || key.includes('hero')) {
+    return themeCutPresetMap.superhero;
+  }
+
+  return {
+    id: 'generic',
+    kicker: 'Theme Momentum Cut',
+    vibe: 'Fast cinematic snapshots of your selected world',
+    palette: ['rgba(141, 200, 196, 0.36)', 'rgba(228, 180, 110, 0.3)', 'rgba(255, 248, 224, 0.22)'],
+    cuts: [
+      'Opening reveal with dramatic atmosphere.',
+      'Hero movement beat through world landmarks.',
+      'Camera whip into high-energy transition.',
+      'Signature theme detail in close-up.',
+      'Crescendo moment with color burst.',
+      'Emotional reaction beat for the child hero.',
+      'Triumphant final frame and resolve.'
+    ]
+  };
 }
 
 function formatBytes(bytes: number): string {
@@ -205,6 +310,8 @@ function CreateOrderPageContent(): JSX.Element {
   const [voiceUpload, setVoiceUpload] = useState<MediaUploadItem | null>(null);
   const [isPhotoDropActive, setIsPhotoDropActive] = useState(false);
   const [isVoiceDropActive, setIsVoiceDropActive] = useState(false);
+  const [themeCutFrame, setThemeCutFrame] = useState(0);
+  const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
   const [stepMessages, setStepMessages] = useState<StepMessages>({
     identity: 'Enter parent email to load or create account context.',
     order: 'Load themes, select one, and create an order.',
@@ -228,6 +335,21 @@ function CreateOrderPageContent(): JSX.Element {
   });
   const returnTo = sanitizeReturnTo(searchParams.get('returnTo'));
   const recoveringOrderId = returnTo?.match(/^\/orders\/([^/?#]+)/)?.[1] ?? null;
+
+  const selectedTheme = useMemo(
+    () => themes.find((theme) => theme.slug === themeSlug) ?? null,
+    [themes, themeSlug]
+  );
+  const activeThemeCut = useMemo(
+    () => resolveThemeCutPreset(themeSlug, selectedTheme?.name ?? ''),
+    [themeSlug, selectedTheme?.name]
+  );
+  const activeThemeCutLine = activeThemeCut.cuts[themeCutFrame] ?? activeThemeCut.cuts[0] ?? '';
+  const themeCutStyle = {
+    '--theme-cut-primary': activeThemeCut.palette[0],
+    '--theme-cut-secondary': activeThemeCut.palette[1],
+    '--theme-cut-tertiary': activeThemeCut.palette[2]
+  } as CSSProperties;
 
   const photoCount = photoUploads.length;
   const photoBytes = useMemo(() => photoUploads.reduce((sum, item) => sum + item.file.size, 0), [photoUploads]);
@@ -313,6 +435,34 @@ function CreateOrderPageContent(): JSX.Element {
       }
     };
   }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const mediaQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const updatePreference = (): void => setPrefersReducedMotion(mediaQuery.matches);
+    updatePreference();
+    mediaQuery.addEventListener('change', updatePreference);
+    return () => mediaQuery.removeEventListener('change', updatePreference);
+  }, []);
+
+  useEffect(() => {
+    setThemeCutFrame(0);
+  }, [activeThemeCut.id, themeSlug]);
+
+  useEffect(() => {
+    if (!themeSlug || prefersReducedMotion || activeThemeCut.cuts.length < 2) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      setThemeCutFrame((current) => (current + 1) % activeThemeCut.cuts.length);
+    }, themeCutFrameMs);
+
+    return () => window.clearInterval(intervalId);
+  }, [themeSlug, prefersReducedMotion, activeThemeCut.id, activeThemeCut.cuts.length]);
 
   function setActionBusy(action: keyof ActionLoadingState, busy: boolean): void {
     setActionLoading((current) => ({
@@ -992,6 +1142,41 @@ function CreateOrderPageContent(): JSX.Element {
               </option>
             ))}
           </select>
+          {themeSlug ? (
+            <section className="theme-cut-preview" style={themeCutStyle} aria-live="polite">
+              <div className="theme-cut-stage">
+                <span className="theme-cut-kicker">{activeThemeCut.kicker}</span>
+                <h3>{selectedTheme?.name ?? 'Selected Theme'}</h3>
+                <p className="theme-cut-vibe">{activeThemeCut.vibe}</p>
+                <div className="theme-cut-frame">
+                  <span className="theme-cut-counter">
+                    cut {String(themeCutFrame + 1).padStart(2, '0')} / {String(activeThemeCut.cuts.length).padStart(2, '0')}
+                  </span>
+                  <p key={`${activeThemeCut.id}-${themeCutFrame}`} className="theme-cut-line">
+                    {activeThemeCutLine}
+                  </p>
+                </div>
+                <div className="theme-cut-track" aria-hidden="true">
+                  {activeThemeCut.cuts.map((cut, index) => (
+                    <span
+                      key={`${activeThemeCut.id}-${cut}`}
+                      className={
+                        index === themeCutFrame ? 'is-current' : index < themeCutFrame ? 'is-seen' : ''
+                      }
+                    />
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  className="theme-cut-replay"
+                  onClick={() => setThemeCutFrame(0)}
+                  disabled={activeThemeCut.cuts.length < 2}
+                >
+                  Replay 3s Cut
+                </button>
+              </div>
+            </section>
+          ) : null}
 
           <label htmlFor="childName">Child Name</label>
           <input

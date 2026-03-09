@@ -162,6 +162,7 @@ This repo is no longer just a thin scaffold. The current build includes:
 
 - Parent intake + order creation
   - create user + order
+  - selected-theme 3-second fast-cut preview in the create flow
   - signed upload/download URL flow with local binary asset store (`/assets/upload/*`, `/assets/download/*`)
   - parental consent gating
   - 5-15 photo uploads and exactly 1 voice upload

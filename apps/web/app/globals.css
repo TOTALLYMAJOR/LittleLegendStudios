@@ -931,6 +931,309 @@ ul {
   margin-bottom: 1rem;
 }
 
+.flow-stepper-card {
+  display: grid;
+  gap: 1rem;
+}
+
+.flow-stepper {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.6rem;
+}
+
+.flow-stepper-item {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.6rem 0.75rem;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: rgba(255, 248, 235, 0.04);
+}
+
+.flow-stepper-index {
+  width: 1.45rem;
+  height: 1.45rem;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.76rem;
+  font-weight: 700;
+  background: rgba(255, 248, 235, 0.08);
+  color: var(--muted);
+}
+
+.flow-stepper-label {
+  color: var(--muted);
+  font-size: 0.86rem;
+  font-weight: 600;
+}
+
+.flow-stepper-item.is-active {
+  border-color: rgba(228, 180, 110, 0.38);
+  background: rgba(228, 180, 110, 0.1);
+}
+
+.flow-stepper-item.is-active .flow-stepper-index {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.flow-stepper-item.is-active .flow-stepper-label {
+  color: var(--ink);
+}
+
+.flow-stepper-item.is-complete {
+  border-color: rgba(159, 208, 164, 0.38);
+  background: rgba(159, 208, 164, 0.08);
+}
+
+.flow-stepper-item.is-complete .flow-stepper-index {
+  background: rgba(159, 208, 164, 0.2);
+  color: #dff0e3;
+}
+
+.flow-stepper-item.is-complete .flow-stepper-label {
+  color: #dff0e3;
+}
+
+.flow-step-card {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.flow-step-card.is-active {
+  border-color: rgba(228, 180, 110, 0.38);
+}
+
+.flow-step-card.is-complete {
+  border-color: rgba(159, 208, 164, 0.32);
+}
+
+.flow-step-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.flow-step-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 0.25rem 0.6rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  background: rgba(255, 248, 235, 0.06);
+}
+
+.flow-step-chip.is-active {
+  color: var(--accent-strong);
+  border-color: rgba(228, 180, 110, 0.32);
+  background: var(--accent-soft);
+}
+
+.flow-step-chip.is-complete {
+  color: var(--success);
+  border-color: rgba(159, 208, 164, 0.35);
+  background: rgba(159, 208, 164, 0.14);
+}
+
+.flow-step-status {
+  margin: 0;
+  color: var(--muted);
+}
+
+.flow-step-card button {
+  margin-top: 0.1rem;
+}
+
+.upload-summary {
+  display: grid;
+  gap: 0.45rem;
+  margin: -0.15rem 0 0.15rem;
+}
+
+.upload-dropzone {
+  border: 1px dashed var(--line-strong);
+  border-radius: 12px;
+  padding: 0.75rem;
+  background: rgba(255, 248, 235, 0.03);
+  transition: border-color 180ms ease, background 180ms ease;
+}
+
+.upload-dropzone p {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.upload-dropzone p + p {
+  margin-top: 0.3rem;
+}
+
+.upload-dropzone.is-active {
+  border-color: rgba(228, 180, 110, 0.58);
+  background: rgba(228, 180, 110, 0.1);
+}
+
+.upload-file-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.upload-file-row {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 0.5rem;
+  padding: 0.45rem 0.6rem;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: rgba(255, 248, 235, 0.04);
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.upload-file-copy {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.upload-file-identity {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+.upload-photo-thumb {
+  width: 2.4rem;
+  height: 2.4rem;
+  border-radius: 8px;
+  object-fit: cover;
+  border: 1px solid var(--line);
+  background: rgba(255, 248, 235, 0.08);
+  flex-shrink: 0;
+}
+
+.upload-file-identity span {
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.upload-file-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.upload-file-state {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 0.2rem 0.5rem;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  background: rgba(255, 248, 235, 0.05);
+}
+
+.upload-file-state.is-uploaded {
+  color: var(--success);
+  border-color: rgba(159, 208, 164, 0.45);
+  background: rgba(159, 208, 164, 0.12);
+}
+
+.upload-file-state.is-uploading {
+  color: var(--accent-strong);
+  border-color: rgba(228, 180, 110, 0.45);
+  background: rgba(228, 180, 110, 0.12);
+}
+
+.upload-file-state.is-failed {
+  color: var(--warning);
+  border-color: rgba(241, 192, 122, 0.45);
+  background: rgba(241, 192, 122, 0.12);
+}
+
+.upload-inline-button {
+  width: auto;
+  min-width: 6rem;
+  padding: 0.4rem 0.65rem;
+  border-radius: 10px;
+  font-size: 0.78rem;
+  background: rgba(255, 248, 235, 0.08);
+  border: 1px solid var(--line);
+  color: var(--ink);
+}
+
+.upload-inline-button:hover {
+  background: rgba(255, 248, 235, 0.14);
+}
+
+.upload-voice-file {
+  display: grid;
+  gap: 0.35rem;
+  margin: -0.1rem 0 0.2rem;
+  color: var(--muted);
+}
+
+.upload-file-error {
+  margin: 0;
+  color: var(--warning);
+  font-size: 0.8rem;
+}
+
+.upload-progress-block {
+  display: grid;
+  gap: 0.45rem;
+  margin-top: 0.25rem;
+}
+
+.upload-progress-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  font-size: 0.86rem;
+  color: var(--muted);
+}
+
+.upload-progress-track {
+  height: 0.55rem;
+  border-radius: 999px;
+  background: rgba(255, 248, 235, 0.1);
+  border: 1px solid var(--line);
+  overflow: hidden;
+}
+
+.upload-progress-track span {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: linear-gradient(90deg, #8ec8c4, #e4b46e);
+  transition: width 220ms ease;
+}
+
 .grid {
   display: grid;
   gap: 1rem;
@@ -978,6 +1281,15 @@ button {
 button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+button:focus-visible,
+a:focus-visible {
+  outline: 2px solid rgba(244, 202, 137, 0.58);
+  outline-offset: 2px;
 }
 
 .status-chip {
@@ -1272,6 +1584,15 @@ pre {
   .button-primary,
   .button-secondary {
     width: 100%;
+  }
+
+  .flow-stepper {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .flow-step-header {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .poster-frame,

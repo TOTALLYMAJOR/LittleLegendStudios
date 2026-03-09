@@ -165,6 +165,9 @@ This repo is no longer just a thin scaffold. The current build includes:
   - signed upload/download URL flow with local binary asset store (`/assets/upload/*`, `/assets/download/*`)
   - parental consent gating
   - 5-15 photo uploads and exactly 1 voice upload
+  - guided 4-step create-flow UI with per-step status messaging and upload progress feedback
+  - drag/drop upload zones plus per-file remove/retry controls during intake
+  - thumbnail-style previews for selected photos in the intake flow
 
 - Script generation + review
   - manifest-driven script planning
@@ -237,6 +240,10 @@ The main unfinished areas in the repo are:
 - Final video polish
   - the real compose pipeline exists
   - subtitle branding, finishing quality, and deeper mix polish still need another pass
+
+- Parent/admin web UX hardening
+  - the core flows are functional, but key screens still need product-grade UX refinement (guided intake, upload progress clarity, parent-focused status readability)
+  - admin operational pages still need a responsiveness/scannability pass for dense tables and action-heavy workflows
 
 ## Notes
 

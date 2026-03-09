@@ -45,6 +45,7 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
   - moderation is explicit and structured, but still heuristic-first rather than production-grade model-backed review
   - character identity reuse exists in the pipeline, but there is no parent-facing management surface
   - final compose works, but subtitle branding, mix polish, and finishing quality still need more work
+  - parent/admin web UX is functional but still scaffold-level in key areas (guided intake, upload clarity, parent-facing status readability, admin mobile responsiveness, and accessibility polish)
 
 - Working assumptions for the next session
   - prefer updating this file when meaningful build state changes land
@@ -66,6 +67,10 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
   - parental consent capture
   - signed upload flow for 5-15 photos and exactly 1 voice sample
   - upload content-type and size validation
+  - guided 4-step create-flow UI with per-step completion/status messaging
+  - upload selection summaries plus in-flow upload progress feedback
+  - drag/drop upload zones and per-file remove/retry controls for intake media
+  - thumbnail-style photo previews for selected intake files
 
 - [x] Script generation + review
   - template-based script generation
@@ -221,6 +226,34 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
   - provider-assisted render pipeline
   - async delivery with status tracking and retries
 
+## UI/UX Review Backlog (2026-03-09)
+
+- [ ] Parent intake flow hardening (`apps/web/app/create/page.tsx`)
+  - first pass shipped: guided stepper with explicit progression and per-step completion states
+  - first pass shipped: per-step request states and clearer local success/error messaging
+  - add draft persistence for in-progress intake values so accidental refresh/navigation is less destructive
+- [ ] Upload UX and validation polish (`apps/web/app/create/page.tsx`)
+  - first pass shipped: selected-file summaries and upload progress indicators
+  - second pass shipped: drag/drop support for photo + voice inputs
+  - second pass shipped: per-file validation feedback plus retry/remove controls
+  - third pass shipped: thumbnail-style visual previews for selected photos
+  - keep backend constraints visible in UI copy (5-15 photos, one voice sample, accepted formats/duration)
+- [ ] Parent status readability and focus (`apps/web/app/orders/[id]/page.tsx`, `apps/web/app/orders/[id]/OrderActions.tsx`)
+  - split customer-facing journey summary from technical diagnostics to reduce cognitive load for non-technical parents
+  - emphasize next recommended action per status and reduce raw JSON exposure by default
+  - tighten action-state feedback for retry/gift flows (clear disabled reasons, pending states, and completion confirmations)
+- [ ] Accessibility and interaction quality (`apps/web/app/globals.css`, `apps/web/app/StoryWorldsSection.tsx`)
+  - add stronger `:focus-visible` treatments and clear invalid/error input states
+  - refine live-region usage for rotating/animated content and add explicit pause/play affordance for world auto-rotation
+  - keep reduced-motion parity and verify contrast/readability in all key flows
+- [ ] Admin usability pass (`apps/web/app/admin/*`, `apps/web/app/globals.css`)
+  - improve wide-table behavior for smaller screens (mobile card fallback or priority-column collapse)
+  - standardize status/feedback surfaces and spacing for dense operational pages
+  - preserve high-information admin workflows while improving scannability
+- [ ] Landing information architecture cleanup (`apps/web/app/page.tsx`)
+  - keep parent conversion path primary and move admin entry points to lower-prominence placement
+  - preserve current visual direction while reducing CTA competition in hero/support zones
+
 ## Next Up
 
 - [ ] Replace heuristic moderation with stronger media-quality and safety checks
@@ -229,6 +262,9 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
 - [ ] Add richer branded subtitle system and more final compose polish
   - keep pushing subtitle styling and final brand treatment beyond the current richer layout set
   - keep polishing music, audio mix, and finishing details
+- [ ] Ship a product-grade parent/admin UX pass across intake, status, admin, and accessibility surfaces
+  - implement the `UI/UX Review Backlog (2026-03-09)` items in phased slices with smoke-verified behavior parity
+  - prioritize parent conversion/clarity first, then admin responsiveness and deeper design-system consistency
 
 ## Remaining Work Summary
 
@@ -236,6 +272,7 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
 - Moderation decisions are explicit now, but the evidence is still heuristic and not model-backed
 - Character identity still needs a parent-facing management and curation surface
 - Final compose still needs deeper polish around subtitle branding, audio finishing, and presentation quality
+- Parent/admin web UX still needs a product-grade pass for flow clarity, accessibility, and responsive operability
 
 ## Notes
 

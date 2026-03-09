@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import type { Route } from 'next';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Suspense, useMemo, useState } from 'react';
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 
 import { persistParentSessionToken, readParentSessionTokenFromBrowser } from '../lib/parent-session';
 
@@ -52,6 +52,49 @@ type UploadSignResponse = {
 
 const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000';
 const launchPriceLabel = '$39';
+const allowedPhotoTypes = new Set(['image/jpeg', 'image/png']);
+const allowedVoiceTypes = new Set(['audio/wav', 'audio/m4a', 'audio/x-m4a', 'audio/mp4']);
+
+type StepKey = 'identity' | 'order' | 'upload' | 'scriptPayment';
+type StepState = 'locked' | 'active' | 'complete';
+type UploadStatus = 'selected' | 'uploading' | 'uploaded' | 'failed';
+
+interface MediaUploadItem {
+  id: string;
+  file: File;
+  previewUrl?: string;
+  status: UploadStatus;
+  errorMessage: string | null;
+}
+
+interface ActionLoadingState {
+  loadThemes: boolean;
+  upsertUser: boolean;
+  createOrder: boolean;
+  signUploads: boolean;
+  generateScript: boolean;
+  approveScript: boolean;
+  pay: boolean;
+}
+
+interface StepMessages {
+  identity: string;
+  order: string;
+  upload: string;
+  scriptPayment: string;
+}
+
+interface UploadProgressState {
+  totalFiles: number;
+  uploadedFiles: number;
+  activeFileName: string | null;
+  failedFileName: string | null;
+}
+
+interface UploadAttemptResult {
+  uploaded: number;
+  failed: number;
+}
 
 function sanitizeReturnTo(value: string | null): string | null {
   if (!value || !value.startsWith('/') || value.startsWith('//')) {
@@ -63,6 +106,36 @@ function sanitizeReturnTo(value: string | null): string | null {
 
 function createIdempotencyKey(prefix: string): string {
   return `${prefix}:${Date.now()}:${crypto.randomUUID()}`;
+}
+
+function createLocalFileId(): string {
+  return `local:${Date.now()}:${crypto.randomUUID()}`;
+}
+
+function photoFingerprint(file: File): string {
+  return `${file.name}:${file.size}:${file.lastModified}`;
+}
+
+function revokePreviewUrl(previewUrl: string): void {
+  URL.revokeObjectURL(previewUrl);
+}
+
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return '0 B';
+  }
+
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+
+  const kb = bytes / 1024;
+  if (kb < 1024) {
+    return `${kb.toFixed(1)} KB`;
+  }
+
+  const mb = kb / 1024;
+  return `${mb.toFixed(1)} MB`;
 }
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
@@ -116,6 +189,7 @@ async function uploadFileToSignedUrl(args: {
 function CreateOrderPageContent(): JSX.Element {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const latestPhotoUploadsRef = useRef<MediaUploadItem[]>([]);
   const [themes, setThemes] = useState<Theme[]>([]);
   const [email, setEmail] = useState('');
   const [childName, setChildName] = useState('');
@@ -125,39 +199,345 @@ function CreateOrderPageContent(): JSX.Element {
   const [paymentIdempotencyKey, setPaymentIdempotencyKey] = useState('');
   const [script, setScript] = useState<GeneratedScript | null>(null);
   const [isScriptApproved, setIsScriptApproved] = useState(false);
+  const [paymentQueued, setPaymentQueued] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
-  const [photoFiles, setPhotoFiles] = useState<FileList | null>(null);
-  const [voiceFile, setVoiceFile] = useState<File | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [photoUploads, setPhotoUploads] = useState<MediaUploadItem[]>([]);
+  const [voiceUpload, setVoiceUpload] = useState<MediaUploadItem | null>(null);
+  const [isPhotoDropActive, setIsPhotoDropActive] = useState(false);
+  const [isVoiceDropActive, setIsVoiceDropActive] = useState(false);
+  const [stepMessages, setStepMessages] = useState<StepMessages>({
+    identity: 'Enter parent email to load or create account context.',
+    order: 'Load themes, select one, and create an order.',
+    upload: 'Select 5-15 photos and one voice sample.',
+    scriptPayment: 'Generate, approve, then pay to queue rendering.'
+  });
+  const [actionLoading, setActionLoading] = useState<ActionLoadingState>({
+    loadThemes: false,
+    upsertUser: false,
+    createOrder: false,
+    signUploads: false,
+    generateScript: false,
+    approveScript: false,
+    pay: false
+  });
+  const [uploadProgress, setUploadProgress] = useState<UploadProgressState>({
+    totalFiles: 0,
+    uploadedFiles: 0,
+    activeFileName: null,
+    failedFileName: null
+  });
   const returnTo = sanitizeReturnTo(searchParams.get('returnTo'));
   const recoveringOrderId = returnTo?.match(/^\/orders\/([^/?#]+)/)?.[1] ?? null;
 
+  const photoCount = photoUploads.length;
+  const photoBytes = useMemo(() => photoUploads.reduce((sum, item) => sum + item.file.size, 0), [photoUploads]);
+  const uploadedPhotoCount = useMemo(
+    () => photoUploads.filter((item) => item.status === 'uploaded').length,
+    [photoUploads]
+  );
+  const failedPhotoCount = useMemo(
+    () => photoUploads.filter((item) => item.status === 'failed').length,
+    [photoUploads]
+  );
+  const uploadComplete = useMemo(() => {
+    if (photoUploads.length < 5 || photoUploads.length > 15) {
+      return false;
+    }
+    if (!voiceUpload) {
+      return false;
+    }
+    if (voiceUpload.status !== 'uploaded') {
+      return false;
+    }
+    return photoUploads.every((item) => item.status === 'uploaded');
+  }, [photoUploads, voiceUpload]);
+
   const canCreateUser = useMemo(() => email.length > 3, [email]);
   const canCreateOrder = useMemo(() => userId.length > 0 && themeSlug.length > 0, [themeSlug, userId]);
-  const canGenerateScript = useMemo(() => {
-    const photoCount = photoFiles?.length ?? 0;
-    return Boolean(orderId.length > 0 && childName.length > 0 && photoCount >= 5 && photoCount <= 15 && voiceFile);
-  }, [orderId, childName, photoFiles, voiceFile]);
+  const canGenerateScript = useMemo(
+    () => Boolean(orderId.length > 0 && childName.length > 0 && uploadComplete),
+    [orderId, childName, uploadComplete]
+  );
   const canPay = useMemo(() => orderId.length > 0 && Boolean(script) && isScriptApproved, [isScriptApproved, orderId, script]);
+  const isAnyActionLoading = useMemo(() => Object.values(actionLoading).some(Boolean), [actionLoading]);
+  const uploadProgressPct = useMemo(() => {
+    if (uploadProgress.totalFiles <= 0) {
+      return 0;
+    }
+    return Math.round((uploadProgress.uploadedFiles / uploadProgress.totalFiles) * 100);
+  }, [uploadProgress.totalFiles, uploadProgress.uploadedFiles]);
+
+  const stepIndex = useMemo(() => {
+    if (!userId) {
+      return 1;
+    }
+    if (!orderId) {
+      return 2;
+    }
+    if (!uploadComplete) {
+      return 3;
+    }
+    return 4;
+  }, [
+    userId,
+    orderId,
+    uploadComplete
+  ]);
+
+  const stepStates: Record<StepKey, StepState> = useMemo(
+    () => ({
+      identity: userId ? 'complete' : stepIndex === 1 ? 'active' : 'locked',
+      order: orderId ? 'complete' : stepIndex === 2 ? 'active' : 'locked',
+      upload: uploadComplete ? 'complete' : stepIndex === 3 ? 'active' : 'locked',
+      scriptPayment: paymentQueued ? 'complete' : stepIndex === 4 ? 'active' : 'locked'
+    }),
+    [
+      userId,
+      orderId,
+      stepIndex,
+      uploadComplete,
+      paymentQueued
+    ]
+  );
+
+  useEffect(() => {
+    latestPhotoUploadsRef.current = photoUploads;
+  }, [photoUploads]);
+
+  useEffect(() => {
+    return () => {
+      for (const photo of latestPhotoUploadsRef.current) {
+        if (photo.previewUrl) {
+          revokePreviewUrl(photo.previewUrl);
+        }
+      }
+    };
+  }, []);
+
+  function setActionBusy(action: keyof ActionLoadingState, busy: boolean): void {
+    setActionLoading((current) => ({
+      ...current,
+      [action]: busy
+    }));
+  }
+
+  function setStepMessage(step: StepKey, message: string): void {
+    setStepMessages((current) => ({
+      ...current,
+      [step]: message
+    }));
+  }
+
+  function resetUploadProgress(): void {
+    setUploadProgress({
+      totalFiles: 0,
+      uploadedFiles: 0,
+      activeFileName: null,
+      failedFileName: null
+    });
+  }
+
+  function updatePhotoUploadState(args: {
+    uploadId: string;
+    status: UploadStatus;
+    errorMessage?: string | null;
+  }): void {
+    setPhotoUploads((current) =>
+      current.map((item) =>
+        item.id === args.uploadId
+          ? {
+              ...item,
+              status: args.status,
+              errorMessage: args.errorMessage ?? null
+            }
+          : item
+      )
+    );
+  }
+
+  function updateVoiceUploadState(args: { status: UploadStatus; errorMessage?: string | null }): void {
+    setVoiceUpload((current) =>
+      current
+        ? {
+            ...current,
+            status: args.status,
+            errorMessage: args.errorMessage ?? null
+          }
+        : current
+    );
+  }
+
+  function appendPhotoFiles(nextFiles: File[]): void {
+    if (nextFiles.length === 0) {
+      return;
+    }
+
+    resetUploadProgress();
+
+    let nextCount = 0;
+    let addedCount = 0;
+    let duplicateCount = 0;
+    let typeRejectedCount = 0;
+    let overLimitCount = 0;
+
+    setPhotoUploads((current) => {
+      const next = [...current];
+      const seen = new Set(next.map((item) => photoFingerprint(item.file)));
+      for (const file of nextFiles) {
+        if (!allowedPhotoTypes.has(file.type || '')) {
+          typeRejectedCount += 1;
+          continue;
+        }
+
+        if (next.length >= 15) {
+          overLimitCount += 1;
+          continue;
+        }
+
+        const fingerprint = photoFingerprint(file);
+        if (seen.has(fingerprint)) {
+          duplicateCount += 1;
+          continue;
+        }
+
+        seen.add(fingerprint);
+        addedCount += 1;
+        next.push({
+          id: createLocalFileId(),
+          file,
+          previewUrl: URL.createObjectURL(file),
+          status: 'selected',
+          errorMessage: null
+        });
+      }
+
+      nextCount = next.length;
+      return next;
+    });
+
+    const notes: string[] = [];
+    if (addedCount > 0) {
+      notes.push(`Added ${String(addedCount)} photo${addedCount === 1 ? '' : 's'}.`);
+    }
+    if (duplicateCount > 0) {
+      notes.push(`Skipped ${String(duplicateCount)} duplicate${duplicateCount === 1 ? '' : 's'}.`);
+    }
+    if (typeRejectedCount > 0) {
+      notes.push(`Skipped ${String(typeRejectedCount)} unsupported file${typeRejectedCount === 1 ? '' : 's'}.`);
+    }
+    if (overLimitCount > 0) {
+      notes.push(`Skipped ${String(overLimitCount)} file${overLimitCount === 1 ? '' : 's'} above 15-photo limit.`);
+    }
+
+    if (nextCount === 0) {
+      setStepMessage('upload', 'Select 5-15 JPG/PNG photos and one voice sample (WAV/M4A).');
+      return;
+    }
+
+    const summary = `Selected ${String(nextCount)} photo${nextCount === 1 ? '' : 's'}.`;
+    setStepMessage('upload', notes.length > 0 ? `${summary} ${notes.join(' ')}` : summary);
+  }
+
+  function setVoiceFile(nextVoiceFile: File | null): void {
+    resetUploadProgress();
+
+    if (!nextVoiceFile) {
+      setVoiceUpload(null);
+      setStepMessage('upload', 'Select one voice sample (WAV or M4A) to continue.');
+      return;
+    }
+
+    if (nextVoiceFile.type && !allowedVoiceTypes.has(nextVoiceFile.type)) {
+      setStepMessage('upload', `Unsupported voice format (${nextVoiceFile.type}). Use WAV or M4A.`);
+      return;
+    }
+
+    setVoiceUpload({
+      id: createLocalFileId(),
+      file: nextVoiceFile,
+      status: 'selected',
+      errorMessage: null
+    });
+    setStepMessage('upload', `Voice sample selected: ${nextVoiceFile.name}.`);
+  }
+
+  function removePhotoFile(uploadId: string): void {
+    resetUploadProgress();
+    setPhotoUploads((current) => {
+      const target = current.find((item) => item.id === uploadId);
+      if (target?.previewUrl) {
+        revokePreviewUrl(target.previewUrl);
+      }
+
+      return current.filter((item) => item.id !== uploadId);
+    });
+    setStepMessage('upload', 'Photo removed. Keep between 5 and 15 photos selected.');
+  }
+
+  function retryPhotoFile(uploadId: string): void {
+    updatePhotoUploadState({
+      uploadId,
+      status: 'selected',
+      errorMessage: null
+    });
+    setStepMessage('upload', 'Marked failed photo for retry.');
+  }
+
+  function removeVoiceFile(): void {
+    resetUploadProgress();
+    setVoiceUpload(null);
+    setStepMessage('upload', 'Voice sample removed.');
+  }
+
+  function retryVoiceFile(): void {
+    updateVoiceUploadState({
+      status: 'selected',
+      errorMessage: null
+    });
+    setStepMessage('upload', 'Marked voice sample for retry.');
+  }
+
+  function onPhotoDrop(files: File[]): void {
+    appendPhotoFiles(files);
+    setIsPhotoDropActive(false);
+  }
+
+  function onVoiceDrop(files: File[]): void {
+    if (files.length === 0) {
+      return;
+    }
+
+    if (files.length > 1) {
+      setStepMessage('upload', 'Multiple voice files detected. Using the first one.');
+    }
+    setVoiceFile(files[0] ?? null);
+    setIsVoiceDropActive(false);
+  }
 
   async function loadThemes(): Promise<void> {
-    setLoading(true);
+    setActionBusy('loadThemes', true);
+    setStepMessage('order', 'Loading available themes...');
     try {
       const data = await apiFetch<Theme[]>('/themes');
       setThemes(data);
       if (!themeSlug && data[0]) {
         setThemeSlug(data[0].slug);
       }
-      setStatusMessage(`Loaded ${data.length} active themes.`);
+      const message = `Loaded ${data.length} active theme${data.length === 1 ? '' : 's'}.`;
+      setStepMessage('order', message);
+      setStatusMessage(message);
     } catch (error) {
-      setStatusMessage((error as Error).message);
+      const message = (error as Error).message;
+      setStepMessage('order', message);
+      setStatusMessage(message);
     } finally {
-      setLoading(false);
+      setActionBusy('loadThemes', false);
     }
   }
 
   async function upsertUser(): Promise<void> {
-    setLoading(true);
+    setActionBusy('upsertUser', true);
+    setStepMessage('identity', 'Saving parent identity...');
     try {
       const user = await apiFetch<{ id: string; parentAccessToken: string }>('/users/upsert', {
         method: 'POST',
@@ -167,21 +547,28 @@ function CreateOrderPageContent(): JSX.Element {
       setUserId(user.id);
       persistParentSessionToken(user.parentAccessToken);
       if (returnTo) {
-        setStatusMessage(`Parent session restored. Returning to ${recoveringOrderId ?? 'your order'}...`);
+        const message = `Parent session restored. Returning to ${recoveringOrderId ?? 'your order'}...`;
+        setStepMessage('identity', message);
+        setStatusMessage(message);
         router.push(returnTo as Route);
         return;
       }
 
-      setStatusMessage(`User ready: ${user.id}`);
+      const message = `Parent identity ready.`;
+      setStepMessage('identity', message);
+      setStatusMessage(message);
     } catch (error) {
-      setStatusMessage((error as Error).message);
+      const message = (error as Error).message;
+      setStepMessage('identity', message);
+      setStatusMessage(message);
     } finally {
-      setLoading(false);
+      setActionBusy('upsertUser', false);
     }
   }
 
   async function createOrder(): Promise<void> {
-    setLoading(true);
+    setActionBusy('createOrder', true);
+    setStepMessage('order', 'Creating order and capturing consent...');
     try {
       const order = await apiFetch<{ id: string }>('/orders', {
         method: 'POST',
@@ -194,6 +581,24 @@ function CreateOrderPageContent(): JSX.Element {
 
       setOrderId(order.id);
       setPaymentIdempotencyKey(createIdempotencyKey(`pay:${order.id}`));
+      setPaymentQueued(false);
+      resetUploadProgress();
+      setPhotoUploads((current) =>
+        current.map((item) => ({
+          ...item,
+          status: 'selected',
+          errorMessage: null
+        }))
+      );
+      setVoiceUpload((current) =>
+        current
+          ? {
+              ...current,
+              status: 'selected',
+              errorMessage: null
+            }
+          : current
+      );
 
       await apiFetch(`/orders/${order.id}/consent`, {
         method: 'POST',
@@ -204,80 +609,215 @@ function CreateOrderPageContent(): JSX.Element {
         })
       });
 
-      setStatusMessage(`Order created + consent captured: ${order.id}`);
+      const message = `Order created and consent captured.`;
+      setStepMessage('order', message);
+      setStatusMessage(message);
       setScript(null);
       setIsScriptApproved(false);
     } catch (error) {
-      setStatusMessage((error as Error).message);
+      const message = (error as Error).message;
+      setStepMessage('order', message);
+      setStatusMessage(message);
     } finally {
-      setLoading(false);
+      setActionBusy('createOrder', false);
     }
   }
 
   async function signUploads(): Promise<void> {
     if (!orderId) return;
 
-    setLoading(true);
+    setActionBusy('signUploads', true);
     try {
-      const photoCount = photoFiles?.length ?? 0;
+      const photoCount = photoUploads.length;
       if (photoCount < 5 || photoCount > 15) {
         throw new Error('Please select 5-15 photos before signing uploads.');
       }
 
-      if (!voiceFile) {
+      if (!voiceUpload) {
         throw new Error('Please select one voice sample (30-60 seconds) before signing uploads.');
       }
 
-      for (const file of Array.from(photoFiles ?? [])) {
-        const contentType = file.type || 'image/jpeg';
-        const sha256 = await fileSha256(file);
-        const signed = await apiFetch<UploadSignResponse>(`/orders/${orderId}/uploads/sign`, {
-          method: 'POST',
-          body: JSON.stringify({
-            kind: 'photo',
-            contentType,
-            bytes: file.size,
-            sha256
-          })
-        });
-
-        await uploadFileToSignedUrl({
-          signedUploadUrl: signed.signedUploadUrl,
-          contentType,
-          file
-        });
+      for (const { file } of photoUploads) {
+        if (!allowedPhotoTypes.has(file.type || '')) {
+          throw new Error(`Unsupported photo format for ${file.name}. Use JPG or PNG.`);
+        }
       }
 
-      const voiceContentType = voiceFile.type || 'audio/wav';
-      const voiceSha256 = await fileSha256(voiceFile);
-      const signedVoice = await apiFetch<UploadSignResponse>(`/orders/${orderId}/uploads/sign`, {
-        method: 'POST',
-        body: JSON.stringify({
-          kind: 'voice',
-          contentType: voiceContentType,
-          bytes: voiceFile.size,
-          sha256: voiceSha256
-        })
-      });
+      if (voiceUpload.file.type && !allowedVoiceTypes.has(voiceUpload.file.type)) {
+        throw new Error(`Unsupported voice format (${voiceUpload.file.type}). Use WAV or M4A.`);
+      }
 
-      await uploadFileToSignedUrl({
-        signedUploadUrl: signedVoice.signedUploadUrl,
-        contentType: voiceContentType,
-        file: voiceFile
-      });
+      const pendingPhotos = photoUploads.filter((item) => item.status === 'selected' || item.status === 'failed');
+      const pendingVoice = voiceUpload.status === 'selected' || voiceUpload.status === 'failed' ? voiceUpload : null;
+      const totalFiles = photoUploads.length + 1;
+      const alreadyUploadedCount =
+        photoUploads.filter((item) => item.status === 'uploaded').length + (voiceUpload.status === 'uploaded' ? 1 : 0);
+      const pendingCount = pendingPhotos.length + (pendingVoice ? 1 : 0);
 
-      setStatusMessage(`Uploaded ${photoCount + 1} files to signed asset URLs.`);
+      if (pendingCount === 0) {
+        setStepMessage('upload', 'All selected files are already uploaded.');
+        setStatusMessage('All selected files are already uploaded.');
+        return;
+      }
+
+      setUploadProgress({
+        totalFiles,
+        uploadedFiles: alreadyUploadedCount,
+        activeFileName: pendingPhotos[0]?.file.name ?? pendingVoice?.file.name ?? null,
+        failedFileName: null
+      });
+      setStepMessage(
+        'upload',
+        `Uploading ${String(pendingCount)} pending file${pendingCount === 1 ? '' : 's'} (${String(totalFiles)} selected total)...`
+      );
+
+      const uploadResult: UploadAttemptResult = {
+        uploaded: alreadyUploadedCount,
+        failed: 0
+      };
+
+      for (const photoItem of pendingPhotos) {
+        updatePhotoUploadState({
+          uploadId: photoItem.id,
+          status: 'uploading',
+          errorMessage: null
+        });
+
+        const file = photoItem.file;
+        setUploadProgress((current) => ({
+          ...current,
+          activeFileName: file.name
+        }));
+
+        try {
+          const contentType = file.type || 'image/jpeg';
+          const sha256 = await fileSha256(file);
+          const signed = await apiFetch<UploadSignResponse>(`/orders/${orderId}/uploads/sign`, {
+            method: 'POST',
+            body: JSON.stringify({
+              kind: 'photo',
+              contentType,
+              bytes: file.size,
+              sha256
+            })
+          });
+
+          await uploadFileToSignedUrl({
+            signedUploadUrl: signed.signedUploadUrl,
+            contentType,
+            file
+          });
+
+          uploadResult.uploaded += 1;
+          updatePhotoUploadState({
+            uploadId: photoItem.id,
+            status: 'uploaded',
+            errorMessage: null
+          });
+          setUploadProgress((current) => ({
+            ...current,
+            uploadedFiles: uploadResult.uploaded
+          }));
+        } catch (error) {
+          uploadResult.failed += 1;
+          const message = (error as Error).message;
+          updatePhotoUploadState({
+            uploadId: photoItem.id,
+            status: 'failed',
+            errorMessage: message
+          });
+          setUploadProgress((current) => ({
+            ...current,
+            failedFileName: file.name
+          }));
+        }
+      }
+
+      if (pendingVoice) {
+        updateVoiceUploadState({
+          status: 'uploading',
+          errorMessage: null
+        });
+
+        setUploadProgress((current) => ({
+          ...current,
+          activeFileName: pendingVoice.file.name
+        }));
+
+        try {
+          const voiceContentType = pendingVoice.file.type || 'audio/wav';
+          const voiceSha256 = await fileSha256(pendingVoice.file);
+          const signedVoice = await apiFetch<UploadSignResponse>(`/orders/${orderId}/uploads/sign`, {
+            method: 'POST',
+            body: JSON.stringify({
+              kind: 'voice',
+              contentType: voiceContentType,
+              bytes: pendingVoice.file.size,
+              sha256: voiceSha256
+            })
+          });
+
+          await uploadFileToSignedUrl({
+            signedUploadUrl: signedVoice.signedUploadUrl,
+            contentType: voiceContentType,
+            file: pendingVoice.file
+          });
+
+          uploadResult.uploaded += 1;
+          updateVoiceUploadState({
+            status: 'uploaded',
+            errorMessage: null
+          });
+          setUploadProgress((current) => ({
+            ...current,
+            uploadedFiles: uploadResult.uploaded
+          }));
+        } catch (error) {
+          uploadResult.failed += 1;
+          const message = (error as Error).message;
+          updateVoiceUploadState({
+            status: 'failed',
+            errorMessage: message
+          });
+          setUploadProgress((current) => ({
+            ...current,
+            failedFileName: pendingVoice.file.name
+          }));
+        }
+      }
+
+      setUploadProgress((current) => ({
+        ...current,
+        activeFileName: null
+      }));
+
+      const message =
+        uploadResult.failed > 0
+          ? `Uploaded ${String(uploadResult.uploaded)} of ${String(totalFiles)} selected files. ${String(
+              uploadResult.failed
+            )} failed. Use Retry on failed items.`
+          : `Uploaded ${String(uploadResult.uploaded)} file${uploadResult.uploaded === 1 ? '' : 's'} to signed asset URLs.`;
+      setStepMessage('upload', message);
+      setStatusMessage(message);
     } catch (error) {
-      setStatusMessage((error as Error).message);
+      const message = (error as Error).message;
+      setUploadProgress((current) => ({
+        ...current,
+        activeFileName: null,
+        failedFileName: current.activeFileName
+      }));
+      setStepMessage('upload', message);
+      setStatusMessage(message);
     } finally {
-      setLoading(false);
+      setActionBusy('signUploads', false);
     }
   }
 
   async function generateAndPreviewScript(): Promise<void> {
     if (!orderId) return;
 
-    setLoading(true);
+    setActionBusy('generateScript', true);
+    setStepMessage('scriptPayment', 'Generating script and preview...');
     try {
       const generated = await apiFetch<GeneratedScript>(`/orders/${orderId}/script/generate`, {
         method: 'POST',
@@ -289,37 +829,47 @@ function CreateOrderPageContent(): JSX.Element {
 
       setScript(generated);
       setIsScriptApproved(false);
-      setStatusMessage(`Generated script v${generated.version}.`);
+      const message = `Generated script v${generated.version}. Review and approve to continue.`;
+      setStepMessage('scriptPayment', message);
+      setStatusMessage(message);
     } catch (error) {
-      setStatusMessage((error as Error).message);
+      const message = (error as Error).message;
+      setStepMessage('scriptPayment', message);
+      setStatusMessage(message);
     } finally {
-      setLoading(false);
+      setActionBusy('generateScript', false);
     }
   }
 
   async function approveScript(): Promise<void> {
     if (!script || !orderId) return;
 
-    setLoading(true);
+    setActionBusy('approveScript', true);
+    setStepMessage('scriptPayment', `Approving script version ${script.version}...`);
     try {
       await apiFetch(`/orders/${orderId}/script/approve`, {
         method: 'POST',
         body: JSON.stringify({ version: script.version })
       });
 
-      setStatusMessage(`Approved script version ${script.version}.`);
+      const message = `Approved script version ${script.version}. Proceed to payment.`;
+      setStepMessage('scriptPayment', message);
+      setStatusMessage(message);
       setIsScriptApproved(true);
     } catch (error) {
-      setStatusMessage((error as Error).message);
+      const message = (error as Error).message;
+      setStepMessage('scriptPayment', message);
+      setStatusMessage(message);
     } finally {
-      setLoading(false);
+      setActionBusy('approveScript', false);
     }
   }
 
   async function payAndRender(): Promise<void> {
     if (!orderId) return;
 
-    setLoading(true);
+    setActionBusy('pay', true);
+    setStepMessage('scriptPayment', `Starting payment for ${launchPriceLabel}...`);
     try {
       const idempotencyKey = paymentIdempotencyKey || createIdempotencyKey(`pay:${orderId}`);
       if (!paymentIdempotencyKey) {
@@ -335,28 +885,55 @@ function CreateOrderPageContent(): JSX.Element {
       });
 
       if (payResponse.provider === 'stripe' && payResponse.checkoutUrl) {
+        setStepMessage('scriptPayment', 'Redirecting to secure checkout...');
+        setStatusMessage('Redirecting to secure checkout...');
         window.location.href = payResponse.checkoutUrl;
         return;
       }
 
-      setStatusMessage('Payment captured (stub). Async render started.');
+      setPaymentQueued(true);
+      const message = 'Payment captured (stub). Async render started.';
+      setStepMessage('scriptPayment', message);
+      setStatusMessage(message);
     } catch (error) {
-      setStatusMessage((error as Error).message);
+      const message = (error as Error).message;
+      setStepMessage('scriptPayment', message);
+      setStatusMessage(message);
     } finally {
-      setLoading(false);
+      setActionBusy('pay', false);
     }
   }
 
   return (
     <main>
-      <h1>Create Keepsake Order</h1>
-      <p>
-        Guided MVP intake matching your spec: photos + voice upload intent, theme selection, script approval, {launchPriceLabel}{' '}
-        checkout, and async delivery.
-      </p>
+      <section className="card flow-stepper-card">
+        <h1>Create Keepsake Order</h1>
+        <p>
+          Guided intake with clear progression: parent identity, theme + order setup, media upload, script approval, then{' '}
+          {launchPriceLabel} checkout and async delivery.
+        </p>
+        <ol className="flow-stepper" aria-label="Order intake progress">
+          <li className={`flow-stepper-item is-${stepStates.identity}`}>
+            <span className="flow-stepper-index">1</span>
+            <span className="flow-stepper-label">Parent</span>
+          </li>
+          <li className={`flow-stepper-item is-${stepStates.order}`}>
+            <span className="flow-stepper-index">2</span>
+            <span className="flow-stepper-label">Order</span>
+          </li>
+          <li className={`flow-stepper-item is-${stepStates.upload}`}>
+            <span className="flow-stepper-index">3</span>
+            <span className="flow-stepper-label">Upload</span>
+          </li>
+          <li className={`flow-stepper-item is-${stepStates.scriptPayment}`}>
+            <span className="flow-stepper-index">4</span>
+            <span className="flow-stepper-label">Approve + Pay</span>
+          </li>
+        </ol>
+      </section>
 
       {returnTo ? (
-        <section className="card">
+        <section className="card flow-recovery-card">
           <h2>Recover Parent Session</h2>
           <p>
             Your parent session is missing or expired. Re-enter the parent email for{' '}
@@ -372,8 +949,13 @@ function CreateOrderPageContent(): JSX.Element {
       ) : null}
 
       <section className="grid two">
-        <article className="card">
-          <h2>1. Parent Identity</h2>
+        <article className={`card flow-step-card is-${stepStates.identity}`}>
+          <header className="flow-step-header">
+            <h2>1. Parent Identity</h2>
+            <span className={`flow-step-chip is-${stepStates.identity}`}>
+              {stepStates.identity === 'complete' ? 'Complete' : stepStates.identity === 'active' ? 'In Progress' : 'Locked'}
+            </span>
+          </header>
           <label htmlFor="email">Parent Email</label>
           <input
             id="email"
@@ -382,16 +964,24 @@ function CreateOrderPageContent(): JSX.Element {
             value={email}
             onChange={(event) => setEmail(event.target.value)}
           />
-          <button disabled={!canCreateUser || loading} onClick={upsertUser}>
-            {returnTo ? 'Restore Parent Session' : 'Create/Load Parent'}
+          <button disabled={!canCreateUser || actionLoading.upsertUser || isAnyActionLoading} onClick={upsertUser}>
+            {actionLoading.upsertUser ? 'Saving Parent Identity...' : returnTo ? 'Restore Parent Session' : 'Create/Load Parent'}
           </button>
           {userId ? <p className="mono">user_id: {userId}</p> : null}
+          <p className="flow-step-status" aria-live="polite">
+            {stepMessages.identity}
+          </p>
         </article>
 
-        <article className="card">
-          <h2>2. Theme + Child</h2>
-          <button disabled={loading} onClick={loadThemes}>
-            Load Themes
+        <article className={`card flow-step-card is-${stepStates.order}`}>
+          <header className="flow-step-header">
+            <h2>2. Theme + Child</h2>
+            <span className={`flow-step-chip is-${stepStates.order}`}>
+              {stepStates.order === 'complete' ? 'Complete' : stepStates.order === 'active' ? 'In Progress' : 'Locked'}
+            </span>
+          </header>
+          <button disabled={actionLoading.loadThemes || isAnyActionLoading} onClick={loadThemes}>
+            {actionLoading.loadThemes ? 'Loading Themes...' : 'Load Themes'}
           </button>
           <label htmlFor="theme">Theme</label>
           <select id="theme" value={themeSlug} onChange={(event) => setThemeSlug(event.target.value)}>
@@ -411,57 +1001,226 @@ function CreateOrderPageContent(): JSX.Element {
             onChange={(event) => setChildName(event.target.value)}
           />
 
-          <button disabled={!canCreateOrder || loading} onClick={createOrder}>
-            Create Order + Capture Consent
+          <button disabled={!canCreateOrder || actionLoading.createOrder || isAnyActionLoading} onClick={createOrder}>
+            {actionLoading.createOrder ? 'Creating Order...' : 'Create Order + Capture Consent'}
           </button>
           {orderId ? <p className="mono">order_id: {orderId}</p> : null}
+          <p className="flow-step-status" aria-live="polite">
+            {stepMessages.order}
+          </p>
         </article>
       </section>
 
       <section className="grid two">
-        <article className="card">
-          <h2>3. Upload Intake</h2>
+        <article className={`card flow-step-card is-${stepStates.upload}`}>
+          <header className="flow-step-header">
+            <h2>3. Upload Intake</h2>
+            <span className={`flow-step-chip is-${stepStates.upload}`}>
+              {stepStates.upload === 'complete' ? 'Complete' : stepStates.upload === 'active' ? 'In Progress' : 'Locked'}
+            </span>
+          </header>
           <p>Photos: 5-15 JPG/PNG. Voice: one 30-60 second WAV/M4A sample.</p>
 
           <label htmlFor="photos">Child Photos</label>
+          <div
+            className={`upload-dropzone ${isPhotoDropActive ? 'is-active' : ''}`}
+            onDragOver={(event) => {
+              event.preventDefault();
+              setIsPhotoDropActive(true);
+            }}
+            onDragEnter={(event) => {
+              event.preventDefault();
+              setIsPhotoDropActive(true);
+            }}
+            onDragLeave={(event) => {
+              event.preventDefault();
+              setIsPhotoDropActive(false);
+            }}
+            onDrop={(event) => {
+              event.preventDefault();
+              onPhotoDrop(Array.from(event.dataTransfer.files ?? []));
+            }}
+          >
+            <p>Drag and drop photo files here.</p>
+            <p>or choose files with the picker below.</p>
+          </div>
           <input
             id="photos"
             type="file"
             accept="image/png,image/jpeg"
             multiple
-            onChange={(event) => setPhotoFiles(event.target.files)}
+            onChange={(event) => {
+              appendPhotoFiles(Array.from(event.target.files ?? []));
+              event.currentTarget.value = '';
+            }}
           />
+          <div className="upload-summary">
+            <p>
+              Selected photos: <strong>{photoCount}</strong>
+              {photoCount > 0 ? ` (${formatBytes(photoBytes)})` : ''}
+            </p>
+            {photoCount > 0 ? (
+              <p>
+                Uploaded: <strong>{uploadedPhotoCount}</strong> | Failed: <strong>{failedPhotoCount}</strong>
+              </p>
+            ) : null}
+            {photoUploads.length > 0 ? (
+              <ul className="upload-file-list">
+                {photoUploads.map((item, index) => (
+                  <li key={item.id} className={`upload-file-row is-${item.status}`}>
+                    <div className="upload-file-copy">
+                      <div className="upload-file-identity">
+                        <img
+                          className="upload-photo-thumb"
+                          src={item.previewUrl}
+                          alt={`Selected photo ${String(index + 1)}: ${item.file.name}`}
+                        />
+                        <span>{item.file.name}</span>
+                      </div>
+                      <span>{formatBytes(item.file.size)}</span>
+                    </div>
+                    <div className="upload-file-controls">
+                      <span className={`upload-file-state is-${item.status}`}>{item.status}</span>
+                      {item.status === 'failed' ? (
+                        <button
+                          type="button"
+                          className="upload-inline-button"
+                          disabled={actionLoading.signUploads}
+                          onClick={() => retryPhotoFile(item.id)}
+                        >
+                          Retry
+                        </button>
+                      ) : null}
+                      <button
+                        type="button"
+                        className="upload-inline-button"
+                        disabled={actionLoading.signUploads || item.status === 'uploading'}
+                        onClick={() => removePhotoFile(item.id)}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                    {item.errorMessage ? <p className="upload-file-error">{item.errorMessage}</p> : null}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
 
           <label htmlFor="voice">Voice Sample</label>
+          <div
+            className={`upload-dropzone ${isVoiceDropActive ? 'is-active' : ''}`}
+            onDragOver={(event) => {
+              event.preventDefault();
+              setIsVoiceDropActive(true);
+            }}
+            onDragEnter={(event) => {
+              event.preventDefault();
+              setIsVoiceDropActive(true);
+            }}
+            onDragLeave={(event) => {
+              event.preventDefault();
+              setIsVoiceDropActive(false);
+            }}
+            onDrop={(event) => {
+              event.preventDefault();
+              onVoiceDrop(Array.from(event.dataTransfer.files ?? []));
+            }}
+          >
+            <p>Drag and drop one voice sample here.</p>
+            <p>WAV or M4A, 30-60 seconds recommended.</p>
+          </div>
           <input
             id="voice"
             type="file"
             accept="audio/wav,audio/m4a"
-            onChange={(event) => setVoiceFile(event.target.files?.[0] ?? null)}
+            onChange={(event) => {
+              setVoiceFile(event.target.files?.[0] ?? null);
+              event.currentTarget.value = '';
+            }}
           />
+          {voiceUpload ? (
+            <div className="upload-voice-file">
+              <p>
+                Voice file: <strong>{voiceUpload.file.name}</strong> ({formatBytes(voiceUpload.file.size)})
+              </p>
+              <div className="upload-file-controls">
+                <span className={`upload-file-state is-${voiceUpload.status}`}>{voiceUpload.status}</span>
+                {voiceUpload.status === 'failed' ? (
+                  <button
+                    type="button"
+                    className="upload-inline-button"
+                    disabled={actionLoading.signUploads}
+                    onClick={retryVoiceFile}
+                  >
+                    Retry
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  className="upload-inline-button"
+                  disabled={actionLoading.signUploads || voiceUpload.status === 'uploading'}
+                  onClick={removeVoiceFile}
+                >
+                  Remove
+                </button>
+              </div>
+              {voiceUpload.errorMessage ? <p className="upload-file-error">{voiceUpload.errorMessage}</p> : null}
+            </div>
+          ) : null}
 
-          <button disabled={!orderId || loading} onClick={signUploads}>
-            Sign Upload Intents
+          <button disabled={!orderId || actionLoading.signUploads || isAnyActionLoading} onClick={signUploads}>
+            {actionLoading.signUploads ? 'Uploading Files...' : 'Sign Upload Intents + Upload Files'}
           </button>
+          {uploadProgress.totalFiles > 0 ? (
+            <div className="upload-progress-block" aria-live="polite">
+              <div className="upload-progress-meta">
+                <span>
+                  Uploaded {uploadProgress.uploadedFiles} / {uploadProgress.totalFiles}
+                </span>
+                <span>{uploadProgressPct}%</span>
+              </div>
+              <div className="upload-progress-track" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={uploadProgressPct}>
+                <span style={{ width: `${uploadProgressPct}%` }} />
+              </div>
+              {uploadProgress.activeFileName ? <p>Now uploading: {uploadProgress.activeFileName}</p> : null}
+              {uploadProgress.failedFileName ? <p>Upload failed on: {uploadProgress.failedFileName}</p> : null}
+            </div>
+          ) : null}
+          <p className="flow-step-status" aria-live="polite">
+            {stepMessages.upload}
+          </p>
         </article>
 
-        <article className="card">
-          <h2>4. Script, Approve, Pay</h2>
-          <button disabled={!canGenerateScript || loading} onClick={generateAndPreviewScript}>
-            Generate / Regenerate Script
+        <article className={`card flow-step-card is-${stepStates.scriptPayment}`}>
+          <header className="flow-step-header">
+            <h2>4. Script, Approve, Pay</h2>
+            <span className={`flow-step-chip is-${stepStates.scriptPayment}`}>
+              {stepStates.scriptPayment === 'complete'
+                ? 'Complete'
+                : stepStates.scriptPayment === 'active'
+                  ? 'In Progress'
+                  : 'Locked'}
+            </span>
+          </header>
+          <button disabled={!canGenerateScript || actionLoading.generateScript || isAnyActionLoading} onClick={generateAndPreviewScript}>
+            {actionLoading.generateScript ? 'Generating Script...' : 'Generate / Regenerate Script'}
           </button>
-          <button disabled={!script || loading} onClick={approveScript}>
-            Approve Script
+          <button disabled={!script || actionLoading.approveScript || isAnyActionLoading} onClick={approveScript}>
+            {actionLoading.approveScript ? 'Approving Script...' : 'Approve Script'}
           </button>
-          <button disabled={!canPay || loading} onClick={payAndRender}>
-            Pay {launchPriceLabel} + Start Render
+          <button disabled={!canPay || actionLoading.pay || isAnyActionLoading} onClick={payAndRender}>
+            {actionLoading.pay ? `Processing ${launchPriceLabel} Payment...` : `Pay ${launchPriceLabel} + Start Render`}
           </button>
           {orderId ? <Link href={`/orders/${orderId}`}>Open live order status</Link> : null}
+          <p className="flow-step-status" aria-live="polite">
+            {stepMessages.scriptPayment}
+          </p>
         </article>
       </section>
 
       {script ? (
-        <section className="card">
+        <section className="card flow-script-preview-card">
           <h3>{script.script_json.title}</h3>
           {script.previewArtifact?.meta?.signedDownloadUrl ? (
             <p>
@@ -488,7 +1247,7 @@ function CreateOrderPageContent(): JSX.Element {
         </section>
       ) : null}
 
-      <section className="card">
+      <section className="card flow-status-card" aria-live="polite">
         <span className="status-chip">Status</span>
         <p>{statusMessage || 'No actions yet.'}</p>
       </section>

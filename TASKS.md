@@ -221,6 +221,7 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
   - template-first personalized child story videos
   - web-first parent flow
   - immersive Story Worlds landing showcase with orchestrated scene-beat transitions
+  - landing Explore section now plays theme-selected 3-second video cut previews
   - premium seeded 64-84 second outputs today
   - 8-beat theme packs with explicit scene-to-beat planning
   - manifest-driven shot planning

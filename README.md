@@ -193,6 +193,7 @@ This repo is no longer just a thin scaffold. The current build includes:
   - premium 8-shot theme packs with explicit story-beat scene assignments
   - richer scene metadata: anchors, palette, global FX, audio cues, grade, camera motion
   - seeded placeholder audio assets for ambience, music beds, and SFX
+  - landing Explore section includes per-theme 3-second video-cut previews on selection
 
 - Provider integrations
   - internal provider routes: `/voice/clone`, `/voice/render`, `/scene/*`

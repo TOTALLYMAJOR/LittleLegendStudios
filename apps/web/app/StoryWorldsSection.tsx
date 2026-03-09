@@ -17,13 +17,50 @@ type StoryWorldsSectionProps = {
 };
 
 const AUTO_ROTATE_MS = 5600;
+const THEME_CUT_DURATION_SEC = 3;
+
+interface ThemeClip {
+  src: string;
+  startSec: number;
+}
+
+const worldClipMap: Record<string, ThemeClip> = {
+  'space adventure': {
+    src: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4',
+    startSec: 0.2
+  },
+  'fantasy kingdom': {
+    src: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4',
+    startSec: 0.4
+  },
+  'underwater kingdom': {
+    src: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerMeltdowns.mp4',
+    startSec: 0.15
+  },
+  'superhero city': {
+    src: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerJoyrides.mp4',
+    startSec: 0.45
+  }
+};
+
+function resolveThemeClip(worldName: string): ThemeClip {
+  const normalized = worldName.trim().toLowerCase();
+  return (
+    worldClipMap[normalized] ?? {
+      src: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4',
+      startSec: 0.2
+    }
+  );
+}
 
 export function StoryWorldsSection({ worlds }: StoryWorldsSectionProps): JSX.Element {
   const sectionRef = useRef<HTMLElement | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
   const [activeWorldIndex, setActiveWorldIndex] = useState(0);
   const [isInView, setIsInView] = useState(false);
   const [isImmersed, setIsImmersed] = useState(false);
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
+  const [videoUnavailable, setVideoUnavailable] = useState(false);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -89,6 +126,7 @@ export function StoryWorldsSection({ worlds }: StoryWorldsSectionProps): JSX.Ele
   }, [isInView, prefersReducedMotion, worlds.length]);
 
   const activeWorld = worlds[activeWorldIndex] ?? worlds[0];
+  const activeThemeClip = resolveThemeClip(activeWorld?.name ?? '');
 
   if (!activeWorld) {
     return (
@@ -109,6 +147,66 @@ export function StoryWorldsSection({ worlds }: StoryWorldsSectionProps): JSX.Ele
     gridTemplateColumns: `repeat(${worlds.length}, minmax(0, 1fr))`
   } as CSSProperties;
 
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !activeWorld) {
+      return;
+    }
+
+    setVideoUnavailable(false);
+    video.load();
+
+    const restartPreview = (): void => {
+      video.currentTime = activeThemeClip.startSec;
+      video.playbackRate = 1.14;
+
+      if (prefersReducedMotion) {
+        video.pause();
+        return;
+      }
+
+      void video.play().catch(() => {
+        // Ignore autoplay rejection and let manual replay handle interaction cases.
+      });
+    };
+
+    if (video.readyState >= 1) {
+      restartPreview();
+      return;
+    }
+
+    const onLoadedMetadata = (): void => restartPreview();
+    video.addEventListener('loadedmetadata', onLoadedMetadata, { once: true });
+    return () => video.removeEventListener('loadedmetadata', onLoadedMetadata);
+  }, [activeWorld, activeThemeClip.src, activeThemeClip.startSec, prefersReducedMotion]);
+
+  function handleVideoTimeUpdate(): void {
+    const video = videoRef.current;
+    if (!video) {
+      return;
+    }
+
+    const endTime = activeThemeClip.startSec + THEME_CUT_DURATION_SEC;
+    if (video.currentTime >= endTime) {
+      video.currentTime = activeThemeClip.startSec;
+      if (!prefersReducedMotion) {
+        void video.play().catch(() => undefined);
+      }
+    }
+  }
+
+  function replayThemeCut(): void {
+    const video = videoRef.current;
+    if (!video) {
+      return;
+    }
+
+    video.currentTime = activeThemeClip.startSec;
+    if (!prefersReducedMotion) {
+      void video.play().catch(() => undefined);
+    }
+  }
+
   return (
     <section className={`worlds-section immersive-worlds ${isImmersed ? 'immersive-worlds-live' : ''}`} id="worlds" ref={sectionRef}>
       <div className="section-heading">
@@ -122,12 +220,28 @@ export function StoryWorldsSection({ worlds }: StoryWorldsSectionProps): JSX.Ele
 
       <div className="worlds-immersive-grid">
         <article className={`world-stage ${isInView ? 'world-stage-awake' : ''}`} style={stageStyle} aria-live="polite">
+          <div className="world-stage-video-shell">
+            <video
+              ref={videoRef}
+              key={`${activeWorld.name}-${activeThemeClip.src}`}
+              className="world-stage-video"
+              muted
+              playsInline
+              preload="metadata"
+              onTimeUpdate={handleVideoTimeUpdate}
+              onError={() => setVideoUnavailable(true)}
+            >
+              <source src={activeThemeClip.src} type="video/mp4" />
+            </video>
+            <div className="world-stage-video-vignette" aria-hidden="true" />
+            {videoUnavailable ? <span className="world-stage-video-fallback">Video preview unavailable.</span> : null}
+          </div>
           <div className="world-stage-film-grain" aria-hidden="true" />
           <span className="world-stage-light world-stage-light-a" aria-hidden="true" />
           <span className="world-stage-light world-stage-light-b" aria-hidden="true" />
           <span className="world-stage-light world-stage-light-c" aria-hidden="true" />
           <div className="world-stage-copy">
-            <span className="world-stage-kicker">Immersive Preview</span>
+            <span className="world-stage-kicker">3s Theme Cut</span>
             <h3>{activeWorld.name}</h3>
             <p className="world-stage-tone">{activeWorld.tone}</p>
             <p>{activeWorld.description}</p>
@@ -135,6 +249,9 @@ export function StoryWorldsSection({ worlds }: StoryWorldsSectionProps): JSX.Ele
               <span>{activeWorld.accent}</span>
               <span>{activeWorld.ambience}</span>
             </div>
+            <button type="button" className="world-stage-replay" onClick={replayThemeCut}>
+              Replay 3s Cut
+            </button>
             <ol className="world-stage-arc">
               {activeWorld.sceneArc.map((beat, index) => (
                 <li key={beat}>

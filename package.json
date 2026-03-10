@@ -19,7 +19,11 @@
     "build:api": "npm --workspace @little/shared run build && npm --workspace @little/api run build",
     "migrate:api": "npm --workspace @little/api run migrate",
     "start:api": "npm --workspace @little/api run start",
-    "typecheck": "npm --workspace @little/shared run build && npm --workspace @little/shared run typecheck && npm --workspace @little/api run typecheck && npm --workspace @little/worker run typecheck && npm --workspace @little/web run typecheck"
+    "typecheck": "npm --workspace @little/shared run build && npm --workspace @little/shared run typecheck && npm --workspace @little/api run typecheck && npm --workspace @little/worker run typecheck && npm --workspace @little/web run typecheck",
+    "verify": "bash ./scripts/verify.sh",
+    "smoke:local": "bash ./scripts/smoke-local.sh",
+    "changed-files": "bash ./scripts/changed-files.sh",
+    "deploy:summary": "bash ./scripts/deploy-summary.sh"
   },
   "devDependencies": {
     "concurrently": "^9.2.1",

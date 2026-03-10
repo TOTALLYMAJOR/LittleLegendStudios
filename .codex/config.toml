@@ -1,0 +1,20 @@
+# .codex/config.toml
+
+model = "gpt-5.3-codex"
+
+# Safer default posture for an active production repo
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+
+[tools]
+web_search = true
+
+[project]
+trust_level = "trusted"
+
+# Optional: allow additional directories only if needed
+[sandbox_workspace_write]
+additional_roots = ["docs", "scripts"]
+
+# Add MCP servers here later when ready
+[mcp_servers]

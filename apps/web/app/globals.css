@@ -1145,6 +1145,48 @@ ul {
   padding: 0.85rem 0.95rem;
 }
 
+.theme-cut-video-shell {
+  position: relative;
+  overflow: hidden;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 248, 235, 0.2);
+  aspect-ratio: 16 / 9;
+  background: rgba(6, 15, 18, 0.72);
+}
+
+.theme-cut-video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.theme-cut-video-vignette {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at 18% 20%, rgba(255, 255, 255, 0.24), transparent 40%),
+    linear-gradient(180deg, rgba(7, 18, 22, 0.06), rgba(7, 18, 22, 0.52));
+}
+
+.theme-cut-video-fallback {
+  position: absolute;
+  left: 0.65rem;
+  right: 0.65rem;
+  bottom: 0.6rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 248, 235, 0.24);
+  background: rgba(7, 18, 22, 0.72);
+  color: rgba(255, 248, 235, 0.92);
+  font-size: 0.74rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-weight: 600;
+  text-align: center;
+  padding: 0.28rem 0.5rem;
+}
+
 .theme-cut-kicker {
   display: inline-flex;
   width: fit-content;

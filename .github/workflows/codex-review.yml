@@ -1,0 +1,31 @@
+name: codex-review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Codex review
+        uses: openai/codex-action@v1
+        with:
+          prompt: |
+            Review this pull request for:
+            - correctness
+            - edge cases
+            - test coverage
+            - type safety
+            - deployment risk
+            - parent safety and approval flow regressions
+            Leave actionable review comments and a concise summary.
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}

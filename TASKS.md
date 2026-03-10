@@ -33,6 +33,7 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
   - `apps/api/src/provider-routes.ts`: provider-facing routes/contracts for moderation, voice, scene render, and compose
   - `apps/worker/src/index.ts`: orchestration for moderation, voice, render, compose, retry, and delivery
   - `apps/web/app/create/page.tsx`: main parent intake and session recovery entrypoint
+  - `docs/SCENE_PIPELINE_ARCHITECTURE.md`: architecture artifact for scene creation/render composition and core system flow
   - `scripts/smoke.mjs`: end-to-end automation for the intended happy path
   - `packages/shared/src/*`: shared domain model used across app boundaries
 
@@ -64,7 +65,7 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
 - [x] Parent intake + order creation
   - user creation and order creation
   - theme selection
-  - selected-theme 3-second fast-cut preview in the create flow
+  - selected-theme 3-second fast-cut preview in the create flow (looping video clip + fallback copy)
   - parental consent capture
   - signed upload flow for 5-15 photos and exactly 1 voice sample
   - upload content-type and size validation
@@ -86,6 +87,7 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
   - order status, retry, and gift-link actions gated by ownership
   - unauthorized/session-expired recovery path in the web flow
   - browser-session token bridge: create/gift flows persist token to both localStorage + cookie, and order status performs one-time browser-token auto-restore when cookie is missing
+  - order status error-state fallback for API/network failures with explicit recovery guidance
 
 - [x] Payment + checkout path
   - Stripe stub and optional real checkout mode
@@ -255,6 +257,65 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
 - [ ] Landing information architecture cleanup (`apps/web/app/page.tsx`)
   - keep parent conversion path primary and move admin entry points to lower-prominence placement
   - preserve current visual direction while reducing CTA competition in hero/support zones
+
+## Dev Tooling Guardrails (2026-03-09)
+
+- [x] Added project-scoped Codex prompt pack under `.codex/prompts`
+  - includes reusable templates for planning, slice implementation, PR review, and deploy checklist generation
+- [x] Added root skill packs under `skills/*`
+  - `child-director-ux`, `nextjs-architecture`, and `deployment-ops` are now available as repo-local guidance assets
+- [x] Added deployment/docs automation workflows
+  - `.github/workflows/codex-review.yml` and `.github/workflows/codex-docs.yml` provide PR review-oriented Codex automation
+- [x] Added guardrail helper scripts under `scripts/*`
+  - `verify.sh`, `changed-files.sh`, `smoke-local.sh`, and `deploy-summary.sh` are available for repeatable local checks
+
+## Child-Director Foundation Slice (2026-03-09)
+
+- [x] Added shared child-director contracts in `packages/shared/src/child-director.ts`
+  - includes `AgeGroup`, `ChildInterfaceConfig`, `ParentApprovalRequest`, and one config resolver
+  - includes centralized parent-approval reason resolver and request factory for explicit approval paths
+- [x] Added Explorer-mode story lane domain helpers
+  - seeded story-choice cards and deterministic reorder helper for one-lane drag/drop prototyping
+- [x] Added feature-gated web route at `/create/child-director`
+  - guarded by `NEXT_PUBLIC_CHILD_DIRECTOR_ENABLED`
+  - keeps existing parent create flow unchanged when flag is off
+- [x] Added first-pass unit/integration-style tests for child-director contracts and lane behavior
+  - tests live in `packages/shared/src/child-director.test.ts`
+
+## Child-Director Parent Approval Slice (2026-03-09)
+
+- [x] Added centralized parent approval gate evaluator in shared domain logic
+  - gate now evaluates runtime threshold, content-risk threshold, and major-decision threshold
+  - resolver still exposes first-priority reason for compatibility with existing call sites
+- [x] Added Explorer-mode gate controls in `/create/child-director`
+  - runtime target, major-decision count, and content-risk signal are now explicit controls
+  - when thresholds trip, UI can generate pending parent-approval requests from centralized gate output
+- [x] Added validation coverage for centralized gate threshold behavior
+  - shared tests now verify multi-reason gate evaluation in one integration-style path
+
+## Growth Strategy Backlog (Discovery-Pending)
+
+- [ ] Acquisition channel strategy (no execution commitment yet)
+  - evaluate early channels: creator UGC, paid search, parent-community partnerships, referral loop
+  - define one primary + one secondary channel for a 30-day learning sprint before broader spend
+- [ ] Conversion and pricing experiments
+  - test offer/packaging options (single SKU vs tiered bundles) and identify likely AOV upside
+  - validate where conversion drops in create flow (identity, upload, script approval, payment)
+- [ ] Measurement baseline and reporting
+  - define weekly dashboard metrics (visitor-to-start, start-to-pay, CAC, payback, repeat rate, referral rate)
+  - instrument first-touch source and order-stage attribution consistently across web + API
+
+## Open Questions To Resolve
+
+- [ ] GTM decisions not finalized
+  - which audience segment is first (gift buyers, milestone keepsake buyers, or recurring family memory buyers)?
+  - what launch price/packaging position is acceptable relative to fulfillment cost and target CAC?
+  - what guarantee/refund policy best improves conversion without creating abuse risk?
+- [ ] Scene pipeline product decisions not finalized
+  - should scene/shot selection remain deterministic from manifest templates, or introduce controlled per-order variation?
+  - should we expose parent-facing shot/scene customization before payment, or keep approval at script-only level?
+  - what automatic shot-level QA gates are required before compose (framing, motion smoothness, voice timing, subtitle readability)?
+  - how should scene assets and prompt templates be versioned to avoid regression when updating active themes?
 
 ## Next Up
 

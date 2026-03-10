@@ -5,6 +5,7 @@ import type { Route } from 'next';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 
+import { resolveChildDirectorFlags } from '../lib/child-director-flags';
 import { persistParentSessionToken, readParentSessionTokenFromBrowser } from '../lib/parent-session';
 
 type Theme = {
@@ -55,6 +56,7 @@ const launchPriceLabel = '$39';
 const allowedPhotoTypes = new Set(['image/jpeg', 'image/png']);
 const allowedVoiceTypes = new Set(['audio/wav', 'audio/m4a', 'audio/x-m4a', 'audio/mp4']);
 const themeCutFrameMs = 420;
+const childDirectorFlags = resolveChildDirectorFlags();
 
 type StepKey = 'identity' | 'order' | 'upload' | 'scriptPayment';
 type StepState = 'locked' | 'active' | 'complete';
@@ -1062,6 +1064,12 @@ function CreateOrderPageContent(): JSX.Element {
           Guided intake with clear progression: parent identity, theme + order setup, media upload, script approval, then{' '}
           {launchPriceLabel} checkout and async delivery.
         </p>
+        {childDirectorFlags.childDirectorExperienceEnabled ? (
+          <p>
+            Explorer mode prototype is enabled.{' '}
+            <Link href={'/create/child-director' as Route}>Open child story builder</Link>.
+          </p>
+        ) : null}
         <ol className="flow-stepper" aria-label="Order intake progress">
           <li className={`flow-stepper-item is-${stepStates.identity}`}>
             <span className="flow-stepper-index">1</span>

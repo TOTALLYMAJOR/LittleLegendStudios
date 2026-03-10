@@ -6,6 +6,8 @@ Template-first MVP scaffold for personalized cinematic child story videos.
 
 If you are opening this repo in a new Codex 5.3 session, start with [TASKS.md](/home/totallymajor/projects/LittleLegendStudios/TASKS.md). Its `New Session Handoff` section is the explicit repo-state summary, key entrypoints list, and next-work ledger.
 
+For scene-creation internals and end-to-end architecture flow, use [docs/SCENE_PIPELINE_ARCHITECTURE.md](/home/totallymajor/projects/LittleLegendStudios/docs/SCENE_PIPELINE_ARCHITECTURE.md).
+
 ## Stack
 
 - Web: Next.js (`apps/web`)
@@ -114,6 +116,9 @@ Preview envs:
 - `NEXT_PUBLIC_API_BASE_URL`
   - set this to a real public API URL if you want interactive flows to work
   - if you only want a UI preview, the landing page will still render without it, but create/admin actions that need the API will not work
+- `NEXT_PUBLIC_CHILD_DIRECTOR_ENABLED`
+  - set to `true` to expose the experimental `/create/child-director` Explorer-mode story-lane prototype
+  - keep `false` in production until child-directed slices are validated
 - `WEB_APP_BASE_URL`
   - set this to the deployed site URL for any redirects or generated links that depend on the web origin
 

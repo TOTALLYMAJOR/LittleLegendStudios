@@ -10,6 +10,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@little/shared": "file:../../packages/shared",
     "next": "^14.2.24",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"

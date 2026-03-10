@@ -4,8 +4,12 @@ export interface ChildDirectorFlags {
   childDirectorExperienceEnabled: boolean;
 }
 
-export function resolveChildDirectorFlags(env: Record<string, string | undefined> = process.env): ChildDirectorFlags {
+export function resolveChildDirectorFlags(env?: Record<string, string | undefined>): ChildDirectorFlags {
+  const childDirectorFlag = env
+    ? env.NEXT_PUBLIC_CHILD_DIRECTOR_ENABLED
+    : process.env.NEXT_PUBLIC_CHILD_DIRECTOR_ENABLED;
+
   return {
-    childDirectorExperienceEnabled: resolveBooleanFlag(env.NEXT_PUBLIC_CHILD_DIRECTOR_ENABLED)
+    childDirectorExperienceEnabled: resolveBooleanFlag(childDirectorFlag)
   };
 }

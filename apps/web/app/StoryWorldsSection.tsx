@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 
+import { THEME_PREVIEW_DURATION_SEC, resolveThemePreviewClip } from './lib/theme-preview-clips';
+
 export type StoryWorld = {
   name: string;
   tone: string;
@@ -17,41 +19,6 @@ type StoryWorldsSectionProps = {
 };
 
 const AUTO_ROTATE_MS = 5600;
-const THEME_CUT_DURATION_SEC = 3;
-
-interface ThemeClip {
-  src: string;
-  startSec: number;
-}
-
-const worldClipMap: Record<string, ThemeClip> = {
-  'space adventure': {
-    src: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4',
-    startSec: 0.2
-  },
-  'fantasy kingdom': {
-    src: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4',
-    startSec: 0.4
-  },
-  'underwater kingdom': {
-    src: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerMeltdowns.mp4',
-    startSec: 0.15
-  },
-  'superhero city': {
-    src: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerJoyrides.mp4',
-    startSec: 0.45
-  }
-};
-
-function resolveThemeClip(worldName: string): ThemeClip {
-  const normalized = worldName.trim().toLowerCase();
-  return (
-    worldClipMap[normalized] ?? {
-      src: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4',
-      startSec: 0.2
-    }
-  );
-}
 
 export function StoryWorldsSection({ worlds }: StoryWorldsSectionProps): JSX.Element {
   const sectionRef = useRef<HTMLElement | null>(null);
@@ -126,7 +93,7 @@ export function StoryWorldsSection({ worlds }: StoryWorldsSectionProps): JSX.Ele
   }, [isInView, prefersReducedMotion, worlds.length]);
 
   const activeWorld = worlds[activeWorldIndex] ?? worlds[0];
-  const activeThemeClip = resolveThemeClip(activeWorld?.name ?? '');
+  const activeThemeClip = resolveThemePreviewClip(activeWorld?.name ?? '');
 
   if (!activeWorld) {
     return (
@@ -186,7 +153,7 @@ export function StoryWorldsSection({ worlds }: StoryWorldsSectionProps): JSX.Ele
       return;
     }
 
-    const endTime = activeThemeClip.startSec + THEME_CUT_DURATION_SEC;
+    const endTime = activeThemeClip.startSec + THEME_PREVIEW_DURATION_SEC;
     if (video.currentTime >= endTime) {
       video.currentTime = activeThemeClip.startSec;
       if (!prefersReducedMotion) {

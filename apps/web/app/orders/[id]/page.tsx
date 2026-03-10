@@ -238,34 +238,71 @@ function getModerationChipClass(decision: 'pass' | 'manual_review' | 'reject' | 
 async function loadOrder(args: {
   orderId: string;
   parentAccessToken: string | null;
-}): Promise<{ data: OrderStatusResponse | null; unauthorized: boolean }> {
-  const response = await fetch(`${apiBase}/orders/${args.orderId}/status`, {
-    cache: 'no-store',
-    headers: args.parentAccessToken
-      ? {
-          Authorization: `Bearer ${args.parentAccessToken}`
+}): Promise<{
+  data: OrderStatusResponse | null;
+  unauthorized: boolean;
+  notFound: boolean;
+  errorMessage: string | null;
+}> {
+  try {
+    const response = await fetch(`${apiBase}/orders/${args.orderId}/status`, {
+      cache: 'no-store',
+      headers: args.parentAccessToken
+        ? {
+            Authorization: `Bearer ${args.parentAccessToken}`
+          }
+        : undefined
+    });
+
+    if (response.status === 401) {
+      return { data: null, unauthorized: true, notFound: false, errorMessage: null };
+    }
+
+    if (response.status === 404) {
+      return { data: null, unauthorized: false, notFound: true, errorMessage: null };
+    }
+
+    if (!response.ok) {
+      const raw = await response.text();
+      let message = raw.trim();
+      if (message.startsWith('{') && message.endsWith('}')) {
+        try {
+          const parsed = JSON.parse(message) as { message?: string };
+          message = parsed.message?.trim() || message;
+        } catch {
+          // keep raw response text
         }
-      : undefined
-  });
+      }
+      return {
+        data: null,
+        unauthorized: false,
+        notFound: false,
+        errorMessage: message || `Order status request failed (${response.status}).`
+      };
+    }
 
-  if (response.status === 401) {
-    return { data: null, unauthorized: true };
+    return {
+      data: (await response.json()) as OrderStatusResponse,
+      unauthorized: false,
+      notFound: false,
+      errorMessage: null
+    };
+  } catch (error) {
+    return {
+      data: null,
+      unauthorized: false,
+      notFound: false,
+      errorMessage:
+        (error as Error).message ||
+        'Order status is temporarily unavailable. Verify NEXT_PUBLIC_API_BASE_URL points to a reachable API.'
+    };
   }
-
-  if (!response.ok) {
-    return { data: null, unauthorized: false };
-  }
-
-  return {
-    data: (await response.json()) as OrderStatusResponse,
-    unauthorized: false
-  };
 }
 
 export default async function OrderStatusPage({ params }: StatusPageProps): Promise<JSX.Element> {
   const parentAccessToken = cookies().get('parent_access_token')?.value ?? null;
   const recoveryHref = `/create?returnTo=${encodeURIComponent(`/orders/${params.id}`)}`;
-  const { data, unauthorized } = await loadOrder({
+  const { data, unauthorized, notFound, errorMessage } = await loadOrder({
     orderId: params.id,
     parentAccessToken
   });
@@ -274,8 +311,19 @@ export default async function OrderStatusPage({ params }: StatusPageProps): Prom
     return (
       <main>
         <section className="card">
-          <h1>{unauthorized ? 'Parent auth required' : 'Order not found'}</h1>
-          {unauthorized ? <AuthRecoveryCard orderId={params.id} recoveryHref={recoveryHref} /> : <Link href="/create">Back to create flow</Link>}
+          <h1>{unauthorized ? 'Parent auth required' : notFound ? 'Order not found' : 'Order status unavailable'}</h1>
+          {unauthorized ? (
+            <AuthRecoveryCard orderId={params.id} recoveryHref={recoveryHref} />
+          ) : (
+            <>
+              {errorMessage ? <p>{errorMessage}</p> : null}
+              <p>
+                If this happened right after payment redirect, wait a few seconds and refresh. If it persists, verify
+                web env <span className="mono">NEXT_PUBLIC_API_BASE_URL</span> points to your live API.
+              </p>
+              <Link href="/create">Back to create flow</Link>
+            </>
+          )}
         </section>
       </main>
     );

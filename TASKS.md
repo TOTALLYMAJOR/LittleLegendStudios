@@ -65,7 +65,7 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
 - [x] Parent intake + order creation
   - user creation and order creation
   - theme selection
-  - selected-theme 3-second fast-cut preview in the create flow
+  - selected-theme 3-second fast-cut preview in the create flow (looping video clip + fallback copy)
   - parental consent capture
   - signed upload flow for 5-15 photos and exactly 1 voice sample
   - upload content-type and size validation
@@ -87,6 +87,7 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
   - order status, retry, and gift-link actions gated by ownership
   - unauthorized/session-expired recovery path in the web flow
   - browser-session token bridge: create/gift flows persist token to both localStorage + cookie, and order status performs one-time browser-token auto-restore when cookie is missing
+  - order status error-state fallback for API/network failures with explicit recovery guidance
 
 - [x] Payment + checkout path
   - Stripe stub and optional real checkout mode

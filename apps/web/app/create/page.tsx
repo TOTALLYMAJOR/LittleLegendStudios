@@ -7,6 +7,7 @@ import { Suspense, useEffect, useMemo, useRef, useState, type CSSProperties } fr
 
 import { resolveChildDirectorFlags } from '../lib/child-director-flags';
 import { persistParentSessionToken, readParentSessionTokenFromBrowser } from '../lib/parent-session';
+import { resolveThemePreviewClip } from '../lib/theme-preview-clips';
 
 type Theme = {
   id: string;
@@ -297,6 +298,7 @@ function CreateOrderPageContent(): JSX.Element {
   const router = useRouter();
   const searchParams = useSearchParams();
   const latestPhotoUploadsRef = useRef<MediaUploadItem[]>([]);
+  const themeCutVideoRef = useRef<HTMLVideoElement | null>(null);
   const [themes, setThemes] = useState<Theme[]>([]);
   const [email, setEmail] = useState('');
   const [childName, setChildName] = useState('');
@@ -313,6 +315,7 @@ function CreateOrderPageContent(): JSX.Element {
   const [isPhotoDropActive, setIsPhotoDropActive] = useState(false);
   const [isVoiceDropActive, setIsVoiceDropActive] = useState(false);
   const [themeCutFrame, setThemeCutFrame] = useState(0);
+  const [themePreviewUnavailable, setThemePreviewUnavailable] = useState(false);
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
   const [stepMessages, setStepMessages] = useState<StepMessages>({
     identity: 'Enter parent email to load or create account context.',
@@ -344,6 +347,10 @@ function CreateOrderPageContent(): JSX.Element {
   );
   const activeThemeCut = useMemo(
     () => resolveThemeCutPreset(themeSlug, selectedTheme?.name ?? ''),
+    [themeSlug, selectedTheme?.name]
+  );
+  const activeThemePreviewClip = useMemo(
+    () => resolveThemePreviewClip(`${themeSlug} ${selectedTheme?.name ?? ''}`),
     [themeSlug, selectedTheme?.name]
   );
   const activeThemeCutLine = activeThemeCut.cuts[themeCutFrame] ?? activeThemeCut.cuts[0] ?? '';
@@ -465,6 +472,71 @@ function CreateOrderPageContent(): JSX.Element {
 
     return () => window.clearInterval(intervalId);
   }, [themeSlug, prefersReducedMotion, activeThemeCut.id, activeThemeCut.cuts.length]);
+
+  useEffect(() => {
+    if (!themeSlug) {
+      return;
+    }
+
+    const video = themeCutVideoRef.current;
+    if (!video) {
+      return;
+    }
+
+    setThemePreviewUnavailable(false);
+    video.load();
+
+    const restartThemeCut = (): void => {
+      video.currentTime = activeThemePreviewClip.startSec;
+      video.playbackRate = 1.14;
+
+      if (prefersReducedMotion) {
+        video.pause();
+        return;
+      }
+
+      void video.play().catch(() => {
+        // Ignore autoplay rejection and rely on replay button user interaction.
+      });
+    };
+
+    if (video.readyState >= 1) {
+      restartThemeCut();
+      return;
+    }
+
+    video.addEventListener('loadedmetadata', restartThemeCut, { once: true });
+    return () => video.removeEventListener('loadedmetadata', restartThemeCut);
+  }, [themeSlug, activeThemePreviewClip.src, activeThemePreviewClip.startSec, prefersReducedMotion]);
+
+  function handleThemeCutVideoTimeUpdate(): void {
+    const video = themeCutVideoRef.current;
+    if (!video) {
+      return;
+    }
+
+    const previewEndTime = activeThemePreviewClip.startSec + activeThemePreviewClip.durationSec;
+    if (video.currentTime >= previewEndTime) {
+      video.currentTime = activeThemePreviewClip.startSec;
+      if (!prefersReducedMotion) {
+        void video.play().catch(() => undefined);
+      }
+    }
+  }
+
+  function replayThemeCut(): void {
+    setThemeCutFrame(0);
+
+    const video = themeCutVideoRef.current;
+    if (!video) {
+      return;
+    }
+
+    video.currentTime = activeThemePreviewClip.startSec;
+    if (!prefersReducedMotion) {
+      void video.play().catch(() => undefined);
+    }
+  }
 
   function setActionBusy(action: keyof ActionLoadingState, busy: boolean): void {
     setActionLoading((current) => ({
@@ -1155,6 +1227,24 @@ function CreateOrderPageContent(): JSX.Element {
               <div className="theme-cut-stage">
                 <span className="theme-cut-kicker">{activeThemeCut.kicker}</span>
                 <h3>{selectedTheme?.name ?? 'Selected Theme'}</h3>
+                <div className="theme-cut-video-shell">
+                  <video
+                    ref={themeCutVideoRef}
+                    key={`${activeThemeCut.id}-${activeThemePreviewClip.src}`}
+                    className="theme-cut-video"
+                    muted
+                    playsInline
+                    preload="metadata"
+                    onTimeUpdate={handleThemeCutVideoTimeUpdate}
+                    onError={() => setThemePreviewUnavailable(true)}
+                  >
+                    <source src={activeThemePreviewClip.src} type="video/mp4" />
+                  </video>
+                  <div className="theme-cut-video-vignette" aria-hidden="true" />
+                  {themePreviewUnavailable ? (
+                    <span className="theme-cut-video-fallback">Video preview unavailable right now.</span>
+                  ) : null}
+                </div>
                 <p className="theme-cut-vibe">{activeThemeCut.vibe}</p>
                 <div className="theme-cut-frame">
                   <span className="theme-cut-counter">
@@ -1177,7 +1267,7 @@ function CreateOrderPageContent(): JSX.Element {
                 <button
                   type="button"
                   className="theme-cut-replay"
-                  onClick={() => setThemeCutFrame(0)}
+                  onClick={replayThemeCut}
                   disabled={activeThemeCut.cuts.length < 2}
                 >
                   Replay 3s Cut

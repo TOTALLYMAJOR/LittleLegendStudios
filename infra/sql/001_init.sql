@@ -291,6 +291,9 @@ ADD CONSTRAINT jobs_type_check CHECK (
   type IN ('moderation', 'voice_clone', 'voice_render', 'character_pack', 'shot_render', 'final_render', 'refund')
 );
 
+ALTER TABLE jobs
+ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();
+
 ALTER TABLE artifacts
 DROP CONSTRAINT IF EXISTS artifacts_kind_check;
 

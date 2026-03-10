@@ -317,9 +317,10 @@ function CreateOrderPageContent(): JSX.Element {
   const [themeCutFrame, setThemeCutFrame] = useState(0);
   const [themePreviewUnavailable, setThemePreviewUnavailable] = useState(false);
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
+  const [consentChecked, setConsentChecked] = useState(false);
   const [stepMessages, setStepMessages] = useState<StepMessages>({
     identity: 'Enter parent email to load or create account context.',
-    order: 'Load themes, select one, and create an order.',
+    order: 'Load themes, select one, confirm consent, and create an order.',
     upload: 'Select 5-15 photos and one voice sample.',
     scriptPayment: 'Generate, approve, then pay to queue rendering.'
   });
@@ -384,7 +385,10 @@ function CreateOrderPageContent(): JSX.Element {
   }, [photoUploads, voiceUpload]);
 
   const canCreateUser = useMemo(() => email.length > 3, [email]);
-  const canCreateOrder = useMemo(() => userId.length > 0 && themeSlug.length > 0, [themeSlug, userId]);
+  const canCreateOrder = useMemo(
+    () => userId.length > 0 && themeSlug.length > 0 && consentChecked,
+    [themeSlug, userId, consentChecked]
+  );
   const canGenerateScript = useMemo(
     () => Boolean(orderId.length > 0 && childName.length > 0 && uploadComplete),
     [orderId, childName, uploadComplete]
@@ -533,9 +537,7 @@ function CreateOrderPageContent(): JSX.Element {
     }
 
     video.currentTime = activeThemePreviewClip.startSec;
-    if (!prefersReducedMotion) {
-      void video.play().catch(() => undefined);
-    }
+    void video.play().catch(() => undefined);
   }
 
   function setActionBusy(action: keyof ActionLoadingState, busy: boolean): void {
@@ -791,6 +793,13 @@ function CreateOrderPageContent(): JSX.Element {
   }
 
   async function createOrder(): Promise<void> {
+    if (!consentChecked) {
+      const message = 'Confirm parent consent before creating the order.';
+      setStepMessage('order', message);
+      setStatusMessage(message);
+      return;
+    }
+
     setActionBusy('createOrder', true);
     setStepMessage('order', 'Creating order and capturing consent...');
     try {
@@ -838,6 +847,7 @@ function CreateOrderPageContent(): JSX.Element {
       setStatusMessage(message);
       setScript(null);
       setIsScriptApproved(false);
+      setConsentChecked(false);
     } catch (error) {
       const message = (error as Error).message;
       setStepMessage('order', message);
@@ -1272,6 +1282,11 @@ function CreateOrderPageContent(): JSX.Element {
                 >
                   Replay 3s Cut
                 </button>
+                {prefersReducedMotion ? (
+                  <p className="theme-cut-motion-note">
+                    Autoplay is off because reduced-motion is enabled. Use replay to preview the cut.
+                  </p>
+                ) : null}
               </div>
             </section>
           ) : null}
@@ -1283,6 +1298,15 @@ function CreateOrderPageContent(): JSX.Element {
             value={childName}
             onChange={(event) => setChildName(event.target.value)}
           />
+
+          <label className="consent-checkbox">
+            <input
+              type="checkbox"
+              checked={consentChecked}
+              onChange={(event) => setConsentChecked(event.target.checked)}
+            />
+            <span>I confirm I am the parent or legal guardian and consent to processing this media for the keepsake order.</span>
+          </label>
 
           <button disabled={!canCreateOrder || actionLoading.createOrder || isAnyActionLoading} onClick={createOrder}>
             {actionLoading.createOrder ? 'Creating Order...' : 'Create Order + Capture Consent'}

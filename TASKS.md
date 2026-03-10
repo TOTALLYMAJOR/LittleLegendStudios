@@ -66,6 +66,7 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
   - user creation and order creation
   - theme selection
   - selected-theme 3-second fast-cut preview in the create flow (looping video clip + fallback copy)
+  - explicit parent-consent checkbox gate before order creation (consent still persisted via `/orders/:id/consent`)
   - parental consent capture
   - signed upload flow for 5-15 photos and exactly 1 voice sample
   - upload content-type and size validation

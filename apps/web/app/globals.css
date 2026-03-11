@@ -990,6 +990,38 @@ ul {
   gap: 1rem;
 }
 
+.flow-draft-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: center;
+}
+
+.flow-draft-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.83rem;
+}
+
+.flow-draft-note.is-restored {
+  color: var(--success);
+}
+
+.flow-draft-clear {
+  width: auto;
+  min-width: 0;
+  padding: 0.45rem 0.7rem;
+  border-radius: 10px;
+  font-size: 0.78rem;
+  background: rgba(255, 248, 235, 0.08);
+  border: 1px solid var(--line);
+  color: var(--ink);
+}
+
+.flow-draft-clear:hover {
+  background: rgba(255, 248, 235, 0.14);
+}
+
 .flow-stepper {
   list-style: none;
   margin: 0;

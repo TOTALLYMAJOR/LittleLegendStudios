@@ -234,12 +234,12 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
 
 ## UI/UX Review Backlog (2026-03-09)
 
-- [ ] Parent intake flow hardening (`apps/web/app/create/page.tsx`)
+- [x] Parent intake flow hardening (`apps/web/app/create/page.tsx`)
   - first pass shipped: guided stepper with explicit progression and per-step completion states
   - first pass shipped: per-step request states and clearer local success/error messaging
   - second pass shipped: script-generation readiness guidance now lists unmet Step 2/3 prerequisites inline
   - second pass shipped: API error payloads are parsed to show clear `message` text instead of raw JSON blobs
-  - add draft persistence for in-progress intake values so accidental refresh/navigation is less destructive
+  - third pass shipped: browser draft persistence restores parent/order setup fields after refresh (uploaded files intentionally excluded)
 - [ ] Upload UX and validation polish (`apps/web/app/create/page.tsx`)
   - first pass shipped: selected-file summaries and upload progress indicators
   - second pass shipped: drag/drop support for photo + voice inputs

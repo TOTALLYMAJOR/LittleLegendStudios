@@ -57,6 +57,7 @@ const launchPriceLabel = '$39';
 const allowedPhotoTypes = new Set(['image/jpeg', 'image/png']);
 const allowedVoiceTypes = new Set(['audio/wav', 'audio/m4a', 'audio/x-m4a', 'audio/mp4']);
 const themeCutFrameMs = 420;
+const createOrderDraftStorageKey = 'little:create-order-draft:v1';
 const childDirectorFlags = resolveChildDirectorFlags();
 
 type StepKey = 'identity' | 'order' | 'upload' | 'scriptPayment';
@@ -98,6 +99,19 @@ interface UploadProgressState {
 interface UploadAttemptResult {
   uploaded: number;
   failed: number;
+}
+
+interface CreateOrderDraftSnapshot {
+  email: string;
+  childName: string;
+  themeSlug: string;
+  consentChecked: boolean;
+  userId: string;
+  orderId: string;
+  paymentIdempotencyKey: string;
+  isScriptApproved: boolean;
+  paymentQueued: boolean;
+  savedAtIso: string;
 }
 
 interface ThemeCutPreset {
@@ -264,6 +278,72 @@ function parseApiErrorMessage(responseText: string): string | null {
   return trimmed;
 }
 
+function parseCreateOrderDraftSnapshot(value: unknown): CreateOrderDraftSnapshot | null {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  const candidate = value as Record<string, unknown>;
+  const savedAtIso = typeof candidate.savedAtIso === 'string' ? candidate.savedAtIso : '';
+  if (!savedAtIso) {
+    return null;
+  }
+
+  return {
+    email: typeof candidate.email === 'string' ? candidate.email : '',
+    childName: typeof candidate.childName === 'string' ? candidate.childName : '',
+    themeSlug: typeof candidate.themeSlug === 'string' ? candidate.themeSlug : '',
+    consentChecked: candidate.consentChecked === true,
+    userId: typeof candidate.userId === 'string' ? candidate.userId : '',
+    orderId: typeof candidate.orderId === 'string' ? candidate.orderId : '',
+    paymentIdempotencyKey: typeof candidate.paymentIdempotencyKey === 'string' ? candidate.paymentIdempotencyKey : '',
+    isScriptApproved: candidate.isScriptApproved === true,
+    paymentQueued: candidate.paymentQueued === true,
+    savedAtIso
+  };
+}
+
+function readCreateOrderDraftSnapshot(): CreateOrderDraftSnapshot | null {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+
+  try {
+    const raw = window.localStorage.getItem(createOrderDraftStorageKey);
+    if (!raw) {
+      return null;
+    }
+
+    return parseCreateOrderDraftSnapshot(JSON.parse(raw));
+  } catch {
+    return null;
+  }
+}
+
+function writeCreateOrderDraftSnapshot(snapshot: CreateOrderDraftSnapshot): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(createOrderDraftStorageKey, JSON.stringify(snapshot));
+  } catch {
+    // Ignore localStorage write failures.
+  }
+}
+
+function clearCreateOrderDraftSnapshot(): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  try {
+    window.localStorage.removeItem(createOrderDraftStorageKey);
+  } catch {
+    // Ignore localStorage clear failures.
+  }
+}
+
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const parentAccessToken = typeof window === 'undefined' ? null : readParentSessionTokenFromBrowser();
 
@@ -329,6 +409,9 @@ function CreateOrderPageContent(): JSX.Element {
   const [isScriptApproved, setIsScriptApproved] = useState(false);
   const [paymentQueued, setPaymentQueued] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
+  const [hasSavedDraft, setHasSavedDraft] = useState(false);
+  const [draftRestored, setDraftRestored] = useState(false);
+  const [draftHydrated, setDraftHydrated] = useState(false);
   const [photoUploads, setPhotoUploads] = useState<MediaUploadItem[]>([]);
   const [voiceUpload, setVoiceUpload] = useState<MediaUploadItem | null>(null);
   const [isPhotoDropActive, setIsPhotoDropActive] = useState(false);
@@ -504,6 +587,85 @@ function CreateOrderPageContent(): JSX.Element {
       }
     };
   }, []);
+
+  useEffect(() => {
+    const draft = readCreateOrderDraftSnapshot();
+    setDraftHydrated(true);
+    setHasSavedDraft(Boolean(draft));
+
+    if (!draft) {
+      return;
+    }
+
+    if (draft.email) {
+      setEmail(draft.email);
+    }
+
+    if (returnTo) {
+      return;
+    }
+
+    setChildName(draft.childName);
+    setThemeSlug(draft.themeSlug);
+    setConsentChecked(draft.consentChecked);
+    setUserId(draft.userId);
+    setOrderId(draft.orderId);
+    setPaymentIdempotencyKey(draft.paymentIdempotencyKey);
+    setIsScriptApproved(draft.isScriptApproved);
+    setPaymentQueued(draft.paymentQueued);
+    setDraftRestored(true);
+    setStatusMessage('Restored in-progress draft from this browser. Upload files must be selected again.');
+  }, [returnTo]);
+
+  useEffect(() => {
+    if (!draftHydrated || returnTo) {
+      return;
+    }
+
+    const hasDraftData = Boolean(
+      email.trim() ||
+        childName.trim() ||
+        themeSlug ||
+        consentChecked ||
+        userId ||
+        orderId ||
+        paymentIdempotencyKey ||
+        isScriptApproved ||
+        paymentQueued
+    );
+
+    if (!hasDraftData) {
+      clearCreateOrderDraftSnapshot();
+      setHasSavedDraft(false);
+      return;
+    }
+
+    writeCreateOrderDraftSnapshot({
+      email: email.trim(),
+      childName: childName.trim(),
+      themeSlug,
+      consentChecked,
+      userId,
+      orderId,
+      paymentIdempotencyKey,
+      isScriptApproved,
+      paymentQueued,
+      savedAtIso: new Date().toISOString()
+    });
+    setHasSavedDraft(true);
+  }, [
+    childName,
+    consentChecked,
+    draftHydrated,
+    email,
+    isScriptApproved,
+    orderId,
+    paymentIdempotencyKey,
+    paymentQueued,
+    returnTo,
+    themeSlug,
+    userId
+  ]);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -794,6 +956,13 @@ function CreateOrderPageContent(): JSX.Element {
     }
     setVoiceFile(files[0] ?? null);
     setIsVoiceDropActive(false);
+  }
+
+  function clearSavedDraft(): void {
+    clearCreateOrderDraftSnapshot();
+    setHasSavedDraft(false);
+    setDraftRestored(false);
+    setStatusMessage('Saved draft cleared from this browser.');
   }
 
   async function loadThemes(): Promise<void> {
@@ -1181,12 +1350,18 @@ function CreateOrderPageContent(): JSX.Element {
       });
 
       if (payResponse.provider === 'stripe' && payResponse.checkoutUrl) {
+        clearCreateOrderDraftSnapshot();
+        setHasSavedDraft(false);
+        setDraftRestored(false);
         setStepMessage('scriptPayment', 'Redirecting to secure checkout...');
         setStatusMessage('Redirecting to secure checkout...');
         window.location.href = payResponse.checkoutUrl;
         return;
       }
 
+      clearCreateOrderDraftSnapshot();
+      setHasSavedDraft(false);
+      setDraftRestored(false);
       setPaymentQueued(true);
       const message = 'Payment captured (stub). Async render started.';
       setStepMessage('scriptPayment', message);
@@ -1215,6 +1390,16 @@ function CreateOrderPageContent(): JSX.Element {
             <strong>{childDirectorFlags.childDirectorRelease2Enabled ? 'on' : 'off'}</strong>.
           </p>
         ) : null}
+        <div className="flow-draft-controls">
+          <p className={`flow-draft-note ${draftRestored ? 'is-restored' : ''}`}>
+            Browser draft saves parent + order setup fields. Uploaded media files are not persisted.
+          </p>
+          {hasSavedDraft ? (
+            <button type="button" className="flow-draft-clear" onClick={clearSavedDraft} disabled={isAnyActionLoading}>
+              Clear Saved Draft
+            </button>
+          ) : null}
+        </div>
         <ol className="flow-stepper" aria-label="Order intake progress">
           <li className={`flow-stepper-item is-${stepStates.identity}`}>
             <span className="flow-stepper-index">1</span>

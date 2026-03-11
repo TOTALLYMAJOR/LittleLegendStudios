@@ -10,6 +10,7 @@ For scene-creation internals and end-to-end architecture flow, use [docs/SCENE_P
 
 ## Stack
 
+- Canonical stack register (required maintenance target when new tech is introduced): [docs/runbooks/tech-stack.md](/home/totallymajor/projects/LittleLegendStudios/docs/runbooks/tech-stack.md)
 - Web: Next.js (`apps/web`)
 - API: Fastify + Postgres (`apps/api`)
 - Worker: BullMQ + Redis (`apps/worker`)

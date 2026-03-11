@@ -269,6 +269,9 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
   - `.github/workflows/codex-review.yml` and `.github/workflows/codex-docs.yml` provide PR review-oriented Codex automation
 - [x] Added guardrail helper scripts under `scripts/*`
   - `verify.sh`, `changed-files.sh`, `smoke-local.sh`, and `deploy-summary.sh` are available for repeatable local checks
+- [x] Added stack-documentation auto-maintenance guardrail (2026-03-10)
+  - `docs/runbooks/tech-stack.md` is now the canonical stack inventory for AI/human sessions
+  - `AGENTS.md` now requires updating `docs/runbooks/tech-stack.md` and `README.md` `Stack` whenever new technology is introduced
 
 ## Child-Director Foundation Slice (2026-03-09)
 

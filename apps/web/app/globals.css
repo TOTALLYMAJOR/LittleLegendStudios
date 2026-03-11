@@ -1108,6 +1108,19 @@ ul {
   color: var(--muted);
 }
 
+.flow-step-readiness {
+  margin: 0;
+  color: var(--muted);
+}
+
+.flow-step-readiness.is-ready {
+  color: var(--success);
+}
+
+.flow-step-readiness.is-warning {
+  color: var(--warning);
+}
+
 .flow-step-card button {
   margin-top: 0.1rem;
 }

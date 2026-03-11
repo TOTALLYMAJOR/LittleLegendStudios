@@ -246,6 +246,24 @@ function formatBytes(bytes: number): string {
   return `${mb.toFixed(1)} MB`;
 }
 
+function parseApiErrorMessage(responseText: string): string | null {
+  const trimmed = responseText.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed) as { message?: unknown };
+    if (typeof parsed?.message === 'string' && parsed.message.trim().length > 0) {
+      return parsed.message.trim();
+    }
+  } catch {
+    // Ignore parse failures and fall back to plain text below.
+  }
+
+  return trimmed;
+}
+
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const parentAccessToken = typeof window === 'undefined' ? null : readParentSessionTokenFromBrowser();
 
@@ -261,7 +279,8 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(text || `Request failed: ${response.status}`);
+    const message = parseApiErrorMessage(text);
+    throw new Error(message ?? `Request failed: ${response.status}`);
   }
 
   return (await response.json()) as T;
@@ -389,9 +408,46 @@ function CreateOrderPageContent(): JSX.Element {
     () => userId.length > 0 && themeSlug.length > 0 && consentChecked,
     [themeSlug, userId, consentChecked]
   );
+  const trimmedChildName = useMemo(() => childName.trim(), [childName]);
+  const hasUploadedPhotoSet = useMemo(() => photoUploads.length >= 5 && photoUploads.length <= 15, [photoUploads.length]);
+  const allPhotosUploaded = useMemo(
+    () => photoUploads.length > 0 && photoUploads.every((item) => item.status === 'uploaded'),
+    [photoUploads]
+  );
+  const voiceUploadReady = useMemo(() => voiceUpload?.status === 'uploaded', [voiceUpload]);
+  const scriptGenerationBlockers = useMemo(() => {
+    const blockers: string[] = [];
+
+    if (!orderId) {
+      blockers.push('Create order in Step 2.');
+    }
+    if (!trimmedChildName) {
+      blockers.push('Enter child name in Step 2.');
+    }
+    if (!hasUploadedPhotoSet) {
+      blockers.push('Select 5-15 photos in Step 3.');
+    }
+    if (photoUploads.length > 0 && !allPhotosUploaded) {
+      blockers.push('Upload all selected photos in Step 3.');
+    }
+    if (!voiceUpload) {
+      blockers.push('Select one voice sample in Step 3.');
+    } else if (!voiceUploadReady) {
+      blockers.push('Upload the selected voice sample in Step 3.');
+    }
+
+    return blockers;
+  }, [allPhotosUploaded, hasUploadedPhotoSet, orderId, photoUploads.length, trimmedChildName, voiceUpload, voiceUploadReady]);
   const canGenerateScript = useMemo(
-    () => Boolean(orderId.length > 0 && childName.length > 0 && uploadComplete),
-    [orderId, childName, uploadComplete]
+    () => scriptGenerationBlockers.length === 0,
+    [scriptGenerationBlockers]
+  );
+  const scriptGenerationReadinessMessage = useMemo(
+    () =>
+      canGenerateScript
+        ? 'Ready to generate script.'
+        : `Before generating: ${scriptGenerationBlockers.join(' ')}`,
+    [canGenerateScript, scriptGenerationBlockers]
   );
   const canPay = useMemo(() => orderId.length > 0 && Boolean(script) && isScriptApproved, [isScriptApproved, orderId, script]);
   const isAnyActionLoading = useMemo(() => Object.values(actionLoading).some(Boolean), [actionLoading]);
@@ -1049,6 +1105,12 @@ function CreateOrderPageContent(): JSX.Element {
 
   async function generateAndPreviewScript(): Promise<void> {
     if (!orderId) return;
+    if (!canGenerateScript) {
+      const message = `Script generation is blocked. ${scriptGenerationReadinessMessage}`;
+      setStepMessage('scriptPayment', message);
+      setStatusMessage(message);
+      return;
+    }
 
     setActionBusy('generateScript', true);
     setStepMessage('scriptPayment', 'Generating script and preview...');
@@ -1056,7 +1118,7 @@ function CreateOrderPageContent(): JSX.Element {
       const generated = await apiFetch<GeneratedScript>(`/orders/${orderId}/script/generate`, {
         method: 'POST',
         body: JSON.stringify({
-          childName,
+          childName: trimmedChildName,
           keywords: ['cinematic', 'keepsake']
         })
       });
@@ -1511,6 +1573,9 @@ function CreateOrderPageContent(): JSX.Element {
                   : 'Locked'}
             </span>
           </header>
+          <p className={`flow-step-readiness ${canGenerateScript ? 'is-ready' : 'is-warning'}`}>
+            {scriptGenerationReadinessMessage}
+          </p>
           <button disabled={!canGenerateScript || actionLoading.generateScript || isAnyActionLoading} onClick={generateAndPreviewScript}>
             {actionLoading.generateScript ? 'Generating Script...' : 'Generate / Regenerate Script'}
           </button>

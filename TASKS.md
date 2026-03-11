@@ -237,6 +237,8 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
 - [ ] Parent intake flow hardening (`apps/web/app/create/page.tsx`)
   - first pass shipped: guided stepper with explicit progression and per-step completion states
   - first pass shipped: per-step request states and clearer local success/error messaging
+  - second pass shipped: script-generation readiness guidance now lists unmet Step 2/3 prerequisites inline
+  - second pass shipped: API error payloads are parsed to show clear `message` text instead of raw JSON blobs
   - add draft persistence for in-progress intake values so accidental refresh/navigation is less destructive
 - [ ] Upload UX and validation polish (`apps/web/app/create/page.tsx`)
   - first pass shipped: selected-file summaries and upload progress indicators

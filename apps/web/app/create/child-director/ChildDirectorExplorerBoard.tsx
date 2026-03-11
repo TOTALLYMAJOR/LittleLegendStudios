@@ -1,17 +1,25 @@
 'use client';
 
 import {
+  createExplorerPreviewSession,
   createExplorerStoryLane,
   createParentApprovalRequest,
   evaluateParentApprovalGate,
   reorderExplorerStoryChoices,
   resolveChildInterfaceConfig,
+  type ExplorerPreviewSession,
   type ParentApprovalRequest,
   type StoryChoiceCard
 } from '@little/shared/child-director';
 import { useEffect, useMemo, useState, type DragEvent } from 'react';
 
 import styles from './child-director.module.css';
+import {
+  readRelease2PreviewSession,
+  readRelease2PreviewSessionFromApi,
+  saveRelease2PreviewSessionToApi,
+  writeRelease2PreviewSession
+} from './release2-preview-session';
 
 const dragDataKey = 'application/x-little-story-choice-id';
 
@@ -25,7 +33,11 @@ function readDraggedChoiceId(event: DragEvent<HTMLElement>): string | null {
   return fallbackValue || null;
 }
 
-export function ChildDirectorExplorerBoard(): JSX.Element {
+interface ChildDirectorExplorerBoardProps {
+  release2Enabled?: boolean;
+}
+
+export function ChildDirectorExplorerBoard({ release2Enabled = false }: ChildDirectorExplorerBoardProps): JSX.Element {
   const explorerConfig = useMemo(() => resolveChildInterfaceConfig('explorer'), []);
   const [choices, setChoices] = useState<StoryChoiceCard[]>(() => createExplorerStoryLane().choices);
   const [draggingChoiceId, setDraggingChoiceId] = useState<string | null>(null);
@@ -34,6 +46,10 @@ export function ChildDirectorExplorerBoard(): JSX.Element {
   const [majorDecisionCount, setMajorDecisionCount] = useState(1);
   const [contentRiskPct, setContentRiskPct] = useState(20);
   const [approvalRequests, setApprovalRequests] = useState<ParentApprovalRequest[]>([]);
+  const [release2PreviewSession, setRelease2PreviewSession] = useState<ExplorerPreviewSession | null>(null);
+  const [release2PersistedAt, setRelease2PersistedAt] = useState<string | null>(null);
+  const [release2ParentLinked, setRelease2ParentLinked] = useState(false);
+  const [isSavingRelease2Preview, setIsSavingRelease2Preview] = useState(false);
 
   const gateEvaluation = evaluateParentApprovalGate({
     complexityLevel: explorerConfig.complexityLevel,
@@ -51,6 +67,45 @@ export function ChildDirectorExplorerBoard(): JSX.Element {
       setApprovalRequests([]);
     }
   }, [approvalRequests.length, gateEvaluation.required]);
+
+  useEffect(() => {
+    if (!release2Enabled) {
+      setRelease2PreviewSession(null);
+      setRelease2PersistedAt(null);
+      setRelease2ParentLinked(false);
+      return;
+    }
+
+    const storedSession = readRelease2PreviewSession();
+    setRelease2PreviewSession(storedSession);
+    if (!storedSession) {
+      return;
+    }
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const persisted = await readRelease2PreviewSessionFromApi(storedSession.id);
+        if (!persisted || cancelled) {
+          return;
+        }
+
+        setRelease2PreviewSession(persisted.preview);
+        setRelease2PersistedAt(persisted.updatedAt);
+        setRelease2ParentLinked(persisted.parentLinked);
+        setApprovalRequests(persisted.parentApprovalRequests);
+        writeRelease2PreviewSession(persisted.preview);
+      } catch (error) {
+        if (!cancelled) {
+          setStatusMessage(`Loaded local release-2 preview session. API sync unavailable: ${(error as Error).message}`);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [release2Enabled]);
 
   function moveChoiceToIndex(choiceId: string, targetIndex: number): void {
     const sourceIndex = choices.findIndex((choice) => choice.id === choiceId);
@@ -115,6 +170,53 @@ export function ChildDirectorExplorerBoard(): JSX.Element {
 
     setApprovalRequests(nextRequests);
     setStatusMessage(`Parent approval requested for ${String(nextRequests.length)} gate reason(s).`);
+  }
+
+  async function createRelease2PreviewSession(): Promise<void> {
+    if (!release2Enabled) {
+      return;
+    }
+
+    const session = createExplorerPreviewSession({
+      choices,
+      runtimeTargetSec,
+      majorDecisionCount,
+      contentRiskScore: contentRiskPct / 100
+    });
+
+    const linkedApprovalRequests =
+      gateEvaluation.required && approvalRequests.length === 0
+        ? gateEvaluation.reasons.map((reason, index) =>
+            createParentApprovalRequest(`${session.id}-approval-${String(index + 1)}`, reason)
+          )
+        : approvalRequests;
+
+    writeRelease2PreviewSession(session);
+    setRelease2PreviewSession(session);
+    if (linkedApprovalRequests.length > 0) {
+      setApprovalRequests(linkedApprovalRequests);
+    }
+
+    setIsSavingRelease2Preview(true);
+    try {
+      const persisted = await saveRelease2PreviewSessionToApi({
+        session,
+        parentApprovalRequests: linkedApprovalRequests
+      });
+      setRelease2PreviewSession(persisted.preview);
+      setRelease2PersistedAt(persisted.updatedAt);
+      setRelease2ParentLinked(persisted.parentLinked);
+      setApprovalRequests(persisted.parentApprovalRequests);
+      setStatusMessage(
+        `Release 2 preview session saved to API: ${persisted.sessionId} (parent linked: ${persisted.parentLinked ? 'yes' : 'no'}).`
+      );
+    } catch (error) {
+      setRelease2PersistedAt(null);
+      setRelease2ParentLinked(false);
+      setStatusMessage(`Release 2 preview session saved locally. API persistence failed: ${(error as Error).message}`);
+    } finally {
+      setIsSavingRelease2Preview(false);
+    }
   }
 
   return (
@@ -222,6 +324,28 @@ export function ChildDirectorExplorerBoard(): JSX.Element {
                 {request.id}: {request.status} ({request.reason})
               </li>
             ))}
+          </ul>
+        ) : null}
+      </section>
+
+      <section className={styles.gateControls}>
+        <h3>Release 2 Pilot Gate</h3>
+        <p>
+          Release 2 flag status: <strong>{release2Enabled ? 'enabled' : 'disabled'}</strong>
+        </p>
+        <button type="button" disabled={!release2Enabled || isSavingRelease2Preview} onClick={createRelease2PreviewSession}>
+          {isSavingRelease2Preview ? 'Saving Release 2 Preview Session...' : 'Create Release 2 Preview Session'}
+        </button>
+        {release2PreviewSession ? (
+          <ul className={styles.approvalList}>
+            <li>Latest preview session: {release2PreviewSession.id}</li>
+            <li>Created: {release2PreviewSession.createdAtIso}</li>
+            <li>API persisted: {release2PersistedAt ? 'yes' : 'local only'}</li>
+            <li>Parent linked: {release2ParentLinked ? 'yes' : 'no'}</li>
+            <li>Persisted at: {release2PersistedAt ?? 'n/a'}</li>
+            <li>Thumbnail label: {release2PreviewSession.thumbnailLabel}</li>
+            <li>Audio prompt: {release2PreviewSession.shortAudioPrompt}</li>
+            <li>Branch choices: {release2PreviewSession.branchChoices.map((choice) => choice.title).join(', ')}</li>
           </ul>
         ) : null}
       </section>

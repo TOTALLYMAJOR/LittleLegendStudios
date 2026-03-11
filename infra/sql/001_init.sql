@@ -92,6 +92,18 @@ CREATE TABLE IF NOT EXISTS scripts (
   UNIQUE(order_id, version)
 );
 
+CREATE TABLE IF NOT EXISTS child_director_preview_sessions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  session_id TEXT NOT NULL UNIQUE,
+  parent_user_id UUID REFERENCES users(id),
+  age_group TEXT NOT NULL CHECK (age_group IN ('toddler', 'explorer', 'director')),
+  release_track TEXT NOT NULL,
+  preview_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  parent_approval_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS jobs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   order_id UUID NOT NULL REFERENCES orders(id),
@@ -317,6 +329,8 @@ CREATE INDEX IF NOT EXISTS idx_character_identities_user_id ON character_identit
 CREATE INDEX IF NOT EXISTS idx_character_identities_last_used_at ON character_identities(last_used_at DESC);
 CREATE INDEX IF NOT EXISTS idx_uploads_order_id ON uploads(order_id);
 CREATE INDEX IF NOT EXISTS idx_scripts_order_id ON scripts(order_id);
+CREATE INDEX IF NOT EXISTS idx_child_director_preview_sessions_session_id ON child_director_preview_sessions(session_id);
+CREATE INDEX IF NOT EXISTS idx_child_director_preview_sessions_parent_user_id ON child_director_preview_sessions(parent_user_id);
 CREATE INDEX IF NOT EXISTS idx_jobs_order_id ON jobs(order_id);
 CREATE INDEX IF NOT EXISTS idx_artifacts_order_id ON artifacts(order_id);
 CREATE INDEX IF NOT EXISTS idx_provider_tasks_order_id ON provider_tasks(order_id);

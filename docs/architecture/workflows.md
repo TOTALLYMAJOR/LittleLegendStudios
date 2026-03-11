@@ -8,6 +8,10 @@
 5. Limited story branching (three choices, one depth).
 6. Toddler voice-first enhancements.
 
+## Current slice status
+- Steps 1-3 are complete in the current repo.
+- Step 4 is started behind `NEXT_PUBLIC_CHILD_DIRECTOR_RELEASE2_ENABLED` with API-backed preview-session persistence and local fallback.
+
 ## Guardrails
 - Any incomplete slice must be feature-flagged.
 - Parent approval gates must block protected actions.

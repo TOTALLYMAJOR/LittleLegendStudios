@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
+  createExplorerPreviewSession,
   createExplorerStoryLane,
   createParentApprovalRequest,
   evaluateParentApprovalGate,
@@ -94,4 +95,29 @@ test('explorer lane happy-path integration: reorder + approval request creation'
     reason: 'runtime_limit',
     status: 'pending'
   });
+});
+
+test('createExplorerPreviewSession constrains branch choices and normalizes values', () => {
+  const lane = createExplorerStoryLane();
+  const session = createExplorerPreviewSession(
+    {
+      choices: lane.choices,
+      runtimeTargetSec: 400,
+      majorDecisionCount: 2.9,
+      contentRiskScore: 1.8
+    },
+    {
+      id: 'preview-fixed',
+      now: new Date('2026-03-11T00:00:00.000Z')
+    }
+  );
+
+  assert.equal(session.id, 'preview-fixed');
+  assert.equal(session.createdAtIso, '2026-03-11T00:00:00.000Z');
+  assert.equal(session.runtimeTargetSec, 240);
+  assert.equal(session.majorDecisionCount, 2);
+  assert.equal(session.contentRiskScore, 1);
+  assert.equal(session.branchChoices.length, 3);
+  assert.deepEqual(session.choiceOrder, lane.choices.map((choice) => choice.id));
+  assert.equal(session.releaseTrack, 'release-2');
 });

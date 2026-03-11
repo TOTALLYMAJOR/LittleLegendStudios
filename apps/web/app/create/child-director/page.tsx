@@ -29,11 +29,14 @@ export default function ChildDirectorCreatePage(): JSX.Element {
           {' '}| parent controls <strong>{explorerConfig.parentControls ? 'on' : 'off'}</strong>
         </p>
         <p>
+          Release track: <strong>{flags.childDirectorRelease2Enabled ? 'release-2 pilot on' : 'release-1 baseline'}</strong>
+        </p>
+        <p>
           <Link href={'/create' as Route}>Return to parent create flow</Link>
         </p>
       </section>
 
-      <ChildDirectorExplorerBoard />
+      <ChildDirectorExplorerBoard release2Enabled={flags.childDirectorRelease2Enabled} />
     </main>
   );
 }

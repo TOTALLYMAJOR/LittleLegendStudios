@@ -2,6 +2,7 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID }
 
 import cors from '@fastify/cors';
 import { assertOrderTransition, type OrderStatus, type SceneRenderSpec, type ScriptPayload, type ThemeManifest } from '@little/shared';
+import { AGE_GROUPS, PARENT_APPROVAL_REASONS, PARENT_APPROVAL_STATUSES } from '@little/shared/child-director';
 import fastifyRawBody from 'fastify-raw-body';
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import type Stripe from 'stripe';
@@ -174,6 +175,18 @@ interface GiftRedeemOrderRow {
 interface OrderOwnerRow {
   id: string;
   email: string;
+}
+
+interface ChildDirectorPreviewSessionRow {
+  id: string;
+  session_id: string;
+  parent_user_id: string | null;
+  age_group: string;
+  release_track: string;
+  preview_json: Record<string, unknown>;
+  parent_approval_json: Array<Record<string, unknown>>;
+  created_at: string;
+  updated_at: string;
 }
 
 interface PaymentIdempotencyRow {
@@ -458,6 +471,45 @@ const giftRedeemSchema = z.object({
   parentEmail: z.string().email()
 });
 
+const childDirectorPreviewPayloadSchema = z.object({
+  id: z.string().min(1).max(120),
+  ageGroup: z.literal('explorer'),
+  releaseTrack: z.literal('release-2'),
+  createdAtIso: z.string().datetime(),
+  runtimeTargetSec: z.number().int().min(30).max(240),
+  majorDecisionCount: z.number().int().min(0).max(20),
+  contentRiskScore: z.number().min(0).max(1),
+  choiceOrder: z.array(z.string().min(1).max(120)).min(1).max(12),
+  branchChoices: z
+    .array(
+      z.object({
+        id: z.string().min(1).max(120),
+        title: z.string().min(1).max(200)
+      })
+    )
+    .max(3),
+  thumbnailLabel: z.string().min(1).max(240),
+  shortAudioPrompt: z.string().min(1).max(400)
+});
+
+const childDirectorParentApprovalRequestSchema = z.object({
+  id: z.string().min(1).max(120),
+  reason: z.enum(PARENT_APPROVAL_REASONS),
+  status: z.enum(PARENT_APPROVAL_STATUSES)
+});
+
+const childDirectorPreviewSessionCreateSchema = z.object({
+  sessionId: z.string().trim().min(1).max(120),
+  ageGroup: z.enum(AGE_GROUPS),
+  releaseTrack: z.string().trim().min(1).max(40).default('release-2'),
+  preview: childDirectorPreviewPayloadSchema,
+  parentApprovalRequests: z.array(childDirectorParentApprovalRequestSchema).max(10).default([])
+});
+
+const childDirectorPreviewSessionParamsSchema = z.object({
+  sessionId: z.string().trim().min(1).max(120)
+});
+
 function parseBearerToken(value: string | string[] | undefined): string | null {
   if (!value || Array.isArray(value)) {
     return null;
@@ -695,6 +747,29 @@ async function assertParentOwnsUserId(request: FastifyRequest, userId: string): 
   }
 
   return owner.email.toLowerCase() === identity.email.toLowerCase();
+}
+
+async function resolveVerifiedParentUserId(request: FastifyRequest): Promise<string | null> {
+  const token = extractParentAccessToken(request);
+  if (!token) {
+    return null;
+  }
+
+  const identity = verifyParentAccessToken(token);
+  if (!identity) {
+    return null;
+  }
+
+  const owner = await getOrderOwner(identity.userId);
+  if (!owner) {
+    return null;
+  }
+
+  if (owner.email.toLowerCase() !== identity.email.toLowerCase()) {
+    return null;
+  }
+
+  return owner.id;
 }
 
 async function getGiftLinkByToken(token: string): Promise<GiftLinkRow | null> {
@@ -2258,6 +2333,101 @@ async function buildServer(): Promise<FastifyInstance> {
     );
 
     return rows;
+  });
+
+  app.post('/child-director/preview-sessions', async (request, reply) => {
+    const payload = childDirectorPreviewSessionCreateSchema.parse(request.body ?? {});
+    const parentUserId = await resolveVerifiedParentUserId(request);
+
+    const rows = await query<ChildDirectorPreviewSessionRow>(
+      `
+      INSERT INTO child_director_preview_sessions (
+        session_id,
+        parent_user_id,
+        age_group,
+        release_track,
+        preview_json,
+        parent_approval_json
+      )
+      VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb)
+      ON CONFLICT (session_id)
+      DO UPDATE SET
+        parent_user_id = COALESCE(EXCLUDED.parent_user_id, child_director_preview_sessions.parent_user_id),
+        age_group = EXCLUDED.age_group,
+        release_track = EXCLUDED.release_track,
+        preview_json = EXCLUDED.preview_json,
+        parent_approval_json = EXCLUDED.parent_approval_json,
+        updated_at = now()
+      RETURNING *
+      `,
+      [
+        payload.sessionId,
+        parentUserId,
+        payload.ageGroup,
+        payload.releaseTrack,
+        JSON.stringify(payload.preview),
+        JSON.stringify(payload.parentApprovalRequests)
+      ]
+    );
+
+    const session = rows[0];
+    if (!session) {
+      return reply.status(500).send({ message: 'Failed to persist child-director preview session.' });
+    }
+
+    const parentApprovalRequests = Array.isArray(session.parent_approval_json) ? session.parent_approval_json : [];
+
+    return reply.send({
+      id: session.id,
+      sessionId: session.session_id,
+      parentLinked: Boolean(session.parent_user_id),
+      ageGroup: session.age_group,
+      releaseTrack: session.release_track,
+      preview: session.preview_json,
+      parentApprovalRequests,
+      createdAt: session.created_at,
+      updatedAt: session.updated_at
+    });
+  });
+
+  app.get('/child-director/preview-sessions/:sessionId', async (request, reply) => {
+    const params = childDirectorPreviewSessionParamsSchema.parse(request.params ?? {});
+
+    const rows = await query<ChildDirectorPreviewSessionRow>(
+      `
+      SELECT *
+      FROM child_director_preview_sessions
+      WHERE session_id = $1
+      LIMIT 1
+      `,
+      [params.sessionId]
+    );
+
+    const session = rows[0];
+    if (!session) {
+      return reply.status(404).send({ message: 'Preview session not found.' });
+    }
+
+    if (session.parent_user_id) {
+      const hasAccess = await assertParentOwnsUserId(request, session.parent_user_id);
+      if (!hasAccess) {
+        return reply.status(401).send({ message: 'Unauthorized parent request.' });
+      }
+    }
+
+    const parentApprovalRequests = Array.isArray(session.parent_approval_json) ? session.parent_approval_json : [];
+
+    return reply.send({
+      id: session.id,
+      sessionId: session.session_id,
+      parentLinked: Boolean(session.parent_user_id),
+      ageGroup: session.age_group,
+      releaseTrack: session.release_track,
+      preview: session.preview_json,
+      parentApprovalRequests,
+      createdAt: session.created_at,
+      updatedAt: session.updated_at
+    });
   });
 
   app.post('/orders', async (request, reply) => {

@@ -1149,7 +1149,8 @@ function CreateOrderPageContent(): JSX.Element {
         {childDirectorFlags.childDirectorExperienceEnabled ? (
           <p>
             Explorer mode prototype is enabled.{' '}
-            <Link href={'/create/child-director' as Route}>Open child story builder</Link>.
+            <Link href={'/create/child-director' as Route}>Open child story builder</Link>. Release 2 pilot controls are{' '}
+            <strong>{childDirectorFlags.childDirectorRelease2Enabled ? 'on' : 'off'}</strong>.
           </p>
         ) : null}
         <ol className="flow-stepper" aria-label="Order intake progress">

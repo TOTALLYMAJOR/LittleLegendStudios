@@ -66,6 +66,32 @@ export interface ExplorerStoryLane {
   choices: StoryChoiceCard[];
 }
 
+export interface ExplorerPreviewSessionInput {
+  choices: readonly StoryChoiceCard[];
+  runtimeTargetSec: number;
+  majorDecisionCount: number;
+  contentRiskScore: number;
+}
+
+export interface ExplorerPreviewBranchChoice {
+  id: string;
+  title: string;
+}
+
+export interface ExplorerPreviewSession {
+  id: string;
+  ageGroup: 'explorer';
+  releaseTrack: 'release-2';
+  createdAtIso: string;
+  runtimeTargetSec: number;
+  majorDecisionCount: number;
+  contentRiskScore: number;
+  choiceOrder: string[];
+  branchChoices: ExplorerPreviewBranchChoice[];
+  thumbnailLabel: string;
+  shortAudioPrompt: string;
+}
+
 const defaultChildInterfaceByAge: Record<AgeGroup, ChildInterfaceConfig> = {
   toddler: {
     ageGroup: 'toddler',
@@ -201,6 +227,34 @@ export function createExplorerStoryLane(seedChoices: readonly StoryChoiceCard[] 
   };
 }
 
+export function createExplorerPreviewSession(
+  input: ExplorerPreviewSessionInput,
+  options?: { id?: string; now?: Date }
+): ExplorerPreviewSession {
+  const now = options?.now ?? new Date();
+  const runtimeTargetSec = clampNumber(input.runtimeTargetSec, 30, 240);
+  const majorDecisionCount = Math.max(0, Math.floor(input.majorDecisionCount));
+  const contentRiskScore = clampNumber(input.contentRiskScore, 0, 1);
+  const choiceOrder = input.choices.map((choice) => choice.id);
+  const branchChoices = input.choices.slice(0, 3).map((choice) => ({ id: choice.id, title: choice.title }));
+  const thumbnailLabel = branchChoices.length > 0 ? branchChoices.map((choice) => choice.title).slice(0, 2).join(' + ') : 'Explorer Preview';
+  const shortAudioPrompt = `Preview ${String(runtimeTargetSec)}s with ${String(branchChoices.length)} branch choices.`;
+
+  return {
+    id: options?.id ?? `explorer-preview-${String(now.getTime().toString(36))}`,
+    ageGroup: 'explorer',
+    releaseTrack: 'release-2',
+    createdAtIso: now.toISOString(),
+    runtimeTargetSec,
+    majorDecisionCount,
+    contentRiskScore,
+    choiceOrder,
+    branchChoices,
+    thumbnailLabel,
+    shortAudioPrompt
+  };
+}
+
 export function reorderExplorerStoryChoices(
   choices: readonly StoryChoiceCard[],
   fromIndex: number,
@@ -247,4 +301,20 @@ function clampIndex(value: number, length: number): number {
   }
 
   return Math.floor(value);
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) {
+    return min;
+  }
+
+  if (value < min) {
+    return min;
+  }
+
+  if (value > max) {
+    return max;
+  }
+
+  return value;
 }

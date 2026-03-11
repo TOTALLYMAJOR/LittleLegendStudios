@@ -297,6 +297,13 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
   - when thresholds trip, UI can generate pending parent-approval requests from centralized gate output
 - [x] Added validation coverage for centralized gate threshold behavior
   - shared tests now verify multi-reason gate evaluation in one integration-style path
+- [x] Added release-2 pilot flag scaffold for child-director route
+  - `NEXT_PUBLIC_CHILD_DIRECTOR_RELEASE2_ENABLED` now gates release-2 preview-session pilot controls while the base route remains behind `NEXT_PUBLIC_CHILD_DIRECTOR_ENABLED`
+- [x] Added release-2 lightweight preview-session and constrained branching summary slice
+  - release-2 explorer board now creates preview-session state, persists local fallback, and attempts API-backed session persistence behind `NEXT_PUBLIC_CHILD_DIRECTOR_RELEASE2_ENABLED`
+  - API now supports `POST`/`GET` child-director preview sessions with optional parent token linkage and persisted parent-approval request metadata
+  - preview-session payload now includes constrained branch-choice summary (max 3) and short-audio prompt metadata
+  - shared tests now validate preview-session normalization and branch-choice constraint behavior
 
 ## Growth Strategy Backlog (Discovery-Pending)
 

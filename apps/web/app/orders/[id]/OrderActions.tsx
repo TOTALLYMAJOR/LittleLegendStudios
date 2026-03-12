@@ -73,9 +73,35 @@ export function OrderActions({
     () => retryLoading || !retryPolicy.canRetry || !parentAccessToken || Boolean(sessionRecoveryMessage),
     [parentAccessToken, retryLoading, retryPolicy.canRetry, sessionRecoveryMessage]
   );
+  const retryDisabledReason = useMemo(() => {
+    if (sessionRecoveryMessage) {
+      return sessionRecoveryMessage;
+    }
+    if (retryLoading) {
+      return 'Retry request in progress.';
+    }
+    if (!retryPolicy.canRetry) {
+      return retryPolicy.reason ?? 'Retry is available after a failed render.';
+    }
+    return null;
+  }, [retryLoading, retryPolicy.canRetry, retryPolicy.reason, sessionRecoveryMessage]);
+
   const hasPendingGiftLink = giftLinkState?.status === 'pending';
   const resendGiftDisabled = giftLoading || !parentAccessToken || !hasPendingGiftLink || Boolean(sessionRecoveryMessage);
   const revokeGiftDisabled = giftLoading || !parentAccessToken || !hasPendingGiftLink || Boolean(sessionRecoveryMessage);
+  const resendGiftDisabledReason = useMemo(() => {
+    if (sessionRecoveryMessage) {
+      return sessionRecoveryMessage;
+    }
+    if (giftLoading) {
+      return 'Gift action in progress.';
+    }
+    if (!hasPendingGiftLink) {
+      return 'Create a pending gift link before resending or revoking.';
+    }
+    return null;
+  }, [giftLoading, hasPendingGiftLink, sessionRecoveryMessage]);
+
   const createGiftActionLabel = giftLinkState ? 'Regenerate Gift Redemption Link' : 'Create Gift Redemption Link';
 
   function markSessionExpired(): Error {
@@ -278,6 +304,7 @@ export function OrderActions({
         <button disabled={retryDisabled} onClick={retryRender}>
           Retry Render
         </button>
+        {retryDisabled && retryDisabledReason ? <p className="order-action-hint">{retryDisabledReason}</p> : null}
         {retryMessage ? <p>{retryMessage}</p> : null}
       </article>
 
@@ -332,6 +359,9 @@ export function OrderActions({
         <button disabled={revokeGiftDisabled} onClick={revokeGiftLink}>
           Revoke Gift Link
         </button>
+        {(resendGiftDisabled || revokeGiftDisabled) && resendGiftDisabledReason ? (
+          <p className="order-action-hint">{resendGiftDisabledReason}</p>
+        ) : null}
 
         {redemptionUrl ? (
           <p>

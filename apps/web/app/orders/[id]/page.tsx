@@ -194,7 +194,7 @@ const statusLabelMap: Record<OrderStatus, string> = {
 };
 
 const statusMessageMap: Record<OrderStatus, string> = {
-  draft: 'Start by uploading photos and a voice sample.',
+  draft: 'Start by uploading photos/voice, then generate and approve a script in the create flow.',
   intake_validating: 'We are validating media requirements and consent.',
   needs_user_fix: 'Please re-upload valid photos/voice and try generating the script again.',
   awaiting_script_approval: 'Review and approve the generated script to continue.',
@@ -388,7 +388,12 @@ export default async function OrderStatusPage({ params }: StatusPageProps): Prom
               </ul>
             </>
           ) : (
-            <p>No script generated yet.</p>
+            <>
+              <p>No script generated yet.</p>
+              <p>
+                Continue in <Link href="/create">Create Flow</Link> to generate + approve script and start payment.
+              </p>
+            </>
           )}
         </article>
 

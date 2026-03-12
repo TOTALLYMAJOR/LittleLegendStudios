@@ -492,12 +492,6 @@ function CreateOrderPageContent(): JSX.Element {
     [themeSlug, userId, consentChecked]
   );
   const trimmedChildName = useMemo(() => childName.trim(), [childName]);
-  const hasUploadedPhotoSet = useMemo(() => photoUploads.length >= 5 && photoUploads.length <= 15, [photoUploads.length]);
-  const allPhotosUploaded = useMemo(
-    () => photoUploads.length > 0 && photoUploads.every((item) => item.status === 'uploaded'),
-    [photoUploads]
-  );
-  const voiceUploadReady = useMemo(() => voiceUpload?.status === 'uploaded', [voiceUpload]);
   const scriptGenerationBlockers = useMemo(() => {
     const blockers: string[] = [];
 
@@ -507,20 +501,9 @@ function CreateOrderPageContent(): JSX.Element {
     if (!trimmedChildName) {
       blockers.push('Enter child name in Step 2.');
     }
-    if (!hasUploadedPhotoSet) {
-      blockers.push('Select 5-15 photos in Step 3.');
-    }
-    if (photoUploads.length > 0 && !allPhotosUploaded) {
-      blockers.push('Upload all selected photos in Step 3.');
-    }
-    if (!voiceUpload) {
-      blockers.push('Select one voice sample in Step 3.');
-    } else if (!voiceUploadReady) {
-      blockers.push('Upload the selected voice sample in Step 3.');
-    }
 
     return blockers;
-  }, [allPhotosUploaded, hasUploadedPhotoSet, orderId, photoUploads.length, trimmedChildName, voiceUpload, voiceUploadReady]);
+  }, [orderId, trimmedChildName]);
   const canGenerateScript = useMemo(
     () => scriptGenerationBlockers.length === 0,
     [scriptGenerationBlockers]
@@ -528,7 +511,7 @@ function CreateOrderPageContent(): JSX.Element {
   const scriptGenerationReadinessMessage = useMemo(
     () =>
       canGenerateScript
-        ? 'Ready to generate script.'
+        ? 'Ready to generate script. Upload/consent requirements are validated by the server for this order.'
         : `Before generating: ${scriptGenerationBlockers.join(' ')}`,
     [canGenerateScript, scriptGenerationBlockers]
   );

@@ -240,6 +240,7 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
   - second pass shipped: script-generation readiness guidance now lists unmet Step 2/3 prerequisites inline
   - second pass shipped: API error payloads are parsed to show clear `message` text instead of raw JSON blobs
   - third pass shipped: browser draft persistence restores parent/order setup fields after refresh (uploaded files intentionally excluded)
+  - fourth pass shipped: script generation now relies on server-side intake validation so resumed orders with existing uploads are not blocked by missing local file state
 - [ ] Upload UX and validation polish (`apps/web/app/create/page.tsx`)
   - first pass shipped: selected-file summaries and upload progress indicators
   - second pass shipped: drag/drop support for photo + voice inputs

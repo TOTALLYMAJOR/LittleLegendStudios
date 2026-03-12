@@ -248,9 +248,9 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
   - third pass shipped: thumbnail-style visual previews for selected photos
   - keep backend constraints visible in UI copy (5-15 photos, one voice sample, accepted formats/duration)
 - [ ] Parent status readability and focus (`apps/web/app/orders/[id]/page.tsx`, `apps/web/app/orders/[id]/OrderActions.tsx`)
-  - split customer-facing journey summary from technical diagnostics to reduce cognitive load for non-technical parents
-  - emphasize next recommended action per status and reduce raw JSON exposure by default
   - first pass shipped: disabled retry/gift actions now show explicit reasons and no-script status includes a clear create-flow continuation CTA
+  - second pass shipped: order page now includes a dedicated "What To Do Next" card with status-based guidance
+  - second pass shipped: jobs/provider tasks/scene-plan raw JSON moved under collapsed technical diagnostics
   - tighten action-state feedback for retry/gift flows (clear disabled reasons, pending states, and completion confirmations)
 - [ ] Accessibility and interaction quality (`apps/web/app/globals.css`, `apps/web/app/StoryWorldsSection.tsx`)
   - add stronger `:focus-visible` treatments and clear invalid/error input states

@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import type { Route } from 'next';
 import { cookies } from 'next/headers';
 
 import { AuthRecoveryCard } from './AuthRecoveryCard';
@@ -211,6 +212,70 @@ const statusMessageMap: Record<OrderStatus, string> = {
   expired: 'The asset retention window elapsed and download was revoked.'
 };
 
+interface NextActionInfo {
+  title: string;
+  detail: string;
+  ctaHref: string | null;
+  ctaLabel: string | null;
+}
+
+function resolveNextAction(status: OrderStatus): NextActionInfo {
+  switch (status) {
+    case 'draft':
+    case 'intake_validating':
+    case 'needs_user_fix':
+    case 'awaiting_script_approval':
+    case 'script_regenerate':
+    case 'payment_pending':
+      return {
+        title: 'Continue In Create Flow',
+        detail: 'Generate/approve script and complete payment to start rendering.',
+        ctaHref: '/create',
+        ctaLabel: 'Open Create Flow'
+      };
+    case 'paid':
+    case 'running':
+    case 'failed_soft':
+      return {
+        title: 'Wait For Render Progress',
+        detail: 'Render is processing. Refresh this page every 20-30 seconds.',
+        ctaHref: null,
+        ctaLabel: null
+      };
+    case 'failed_hard':
+    case 'refund_queued':
+    case 'manual_review':
+      return {
+        title: 'Use Retry Or Support Actions',
+        detail: 'Check Parent Retry below. If retry is unavailable, review gift/support options.',
+        ctaHref: null,
+        ctaLabel: null
+      };
+    case 'delivered':
+      return {
+        title: 'Download Final Video',
+        detail: 'Your keepsake is ready in the Delivery card below.',
+        ctaHref: null,
+        ctaLabel: null
+      };
+    case 'refunded':
+    case 'expired':
+      return {
+        title: 'Start A New Order',
+        detail: 'This order is closed. Create a new keepsake when ready.',
+        ctaHref: '/create',
+        ctaLabel: 'Create New Order'
+      };
+    default:
+      return {
+        title: 'Review Current Order Status',
+        detail: 'Use lifecycle and action cards below to continue.',
+        ctaHref: null,
+        ctaLabel: null
+      };
+  }
+}
+
 function getCurrentStepIndex(status: OrderStatus): number {
   return lifecycleSteps.findIndex((step) => step.statuses.includes(status));
 }
@@ -332,6 +397,7 @@ export default async function OrderStatusPage({ params }: StatusPageProps): Prom
   const finalArtifact = data.artifacts.find((artifact) => artifact.kind === 'final_video');
   const previewArtifact = data.artifacts.find((artifact) => artifact.kind === 'preview_video');
   const currentStepIndex = getCurrentStepIndex(data.order.status);
+  const nextAction = resolveNextAction(data.order.status);
 
   const failedJobs = data.jobs.filter((job) => job.status === 'failed').length;
   const runningJobs = data.jobs.filter((job) => job.status === 'running').length;
@@ -365,6 +431,17 @@ export default async function OrderStatusPage({ params }: StatusPageProps): Prom
             );
           })}
         </div>
+      </section>
+
+      <section className="card">
+        <h2>What To Do Next</h2>
+        <p>
+          <strong>{nextAction.title}</strong>
+        </p>
+        <p>{nextAction.detail}</p>
+        {nextAction.ctaHref && nextAction.ctaLabel ? (
+          <Link href={nextAction.ctaHref as Route}>{nextAction.ctaLabel}</Link>
+        ) : null}
       </section>
 
       <section className="grid two">
@@ -507,45 +584,47 @@ export default async function OrderStatusPage({ params }: StatusPageProps): Prom
       </section>
 
       <section className="card">
-        <h2>Job Summary</h2>
-        <p>
-          Succeeded: <strong>{succeededJobs}</strong> | Running: <strong>{runningJobs}</strong> | Failed:{' '}
-          <strong>{failedJobs}</strong>
-        </p>
-        <pre className="mono">{JSON.stringify(data.jobs, null, 2)}</pre>
-      </section>
-
-      <section className="card">
-        <h2>Provider Tasks</h2>
-        {data.providerTasks.length === 0 ? (
-          <p>No provider tasks recorded yet.</p>
-        ) : (
-          <pre className="mono">{JSON.stringify(data.providerTasks, null, 2)}</pre>
-        )}
-      </section>
-
-      <section className="card">
-        <h2>Scene Plan + Models</h2>
-        {data.scenePlanError ? <p>{data.scenePlanError}</p> : null}
-        {data.scenePlan.length === 0 ? (
-          <p>No scene plan yet. Generate a script to see per-shot scene specs.</p>
-        ) : (
-          <>
-            <p>
-              Theme: <strong>{data.scenePlanThemeName ?? 'Unknown'}</strong>
-            </p>
-            <ul>
-              {data.scenePlan.map((entry) => (
-                <li key={`${entry.shotNumber}-${entry.sceneRenderSpec.sceneId}`}>
-                  Shot {entry.shotNumber} ({entry.shotType}, {entry.durationSec}s): {entry.sceneRenderSpec.sceneName}{' '}
-                  [{entry.sceneRenderSpec.camera} / {entry.sceneRenderSpec.lighting}] model=
-                  {entry.sceneRenderSpec.modelProfile.avatarModel} + {entry.sceneRenderSpec.modelProfile.compositorModel}
-                  {entry.sceneFallbackUsed ? ' (fallback scene match)' : ''}
-                </li>
-              ))}
-            </ul>
-          </>
-        )}
+        <h2>Technical Diagnostics (Advanced)</h2>
+        <p>Use these details for support/debugging when normal parent actions are not enough.</p>
+        <details>
+          <summary>Jobs JSON</summary>
+          <p>
+            Succeeded: <strong>{succeededJobs}</strong> | Running: <strong>{runningJobs}</strong> | Failed:{' '}
+            <strong>{failedJobs}</strong>
+          </p>
+          <pre className="mono">{JSON.stringify(data.jobs, null, 2)}</pre>
+        </details>
+        <details>
+          <summary>Provider Tasks JSON</summary>
+          {data.providerTasks.length === 0 ? (
+            <p>No provider tasks recorded yet.</p>
+          ) : (
+            <pre className="mono">{JSON.stringify(data.providerTasks, null, 2)}</pre>
+          )}
+        </details>
+        <details>
+          <summary>Scene Plan + Models</summary>
+          {data.scenePlanError ? <p>{data.scenePlanError}</p> : null}
+          {data.scenePlan.length === 0 ? (
+            <p>No scene plan yet. Generate a script to see per-shot scene specs.</p>
+          ) : (
+            <>
+              <p>
+                Theme: <strong>{data.scenePlanThemeName ?? 'Unknown'}</strong>
+              </p>
+              <ul>
+                {data.scenePlan.map((entry) => (
+                  <li key={`${entry.shotNumber}-${entry.sceneRenderSpec.sceneId}`}>
+                    Shot {entry.shotNumber} ({entry.shotType}, {entry.durationSec}s): {entry.sceneRenderSpec.sceneName}{' '}
+                    [{entry.sceneRenderSpec.camera} / {entry.sceneRenderSpec.lighting}] model=
+                    {entry.sceneRenderSpec.modelProfile.avatarModel} + {entry.sceneRenderSpec.modelProfile.compositorModel}
+                    {entry.sceneFallbackUsed ? ' (fallback scene match)' : ''}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+        </details>
       </section>
     </main>
   );

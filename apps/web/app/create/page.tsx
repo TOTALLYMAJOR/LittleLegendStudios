@@ -1366,13 +1366,20 @@ function CreateOrderPageContent(): JSX.Element {
           Guided intake with clear progression: parent identity, theme + order setup, media upload, script approval, then{' '}
           {launchPriceLabel} checkout and async delivery.
         </p>
-        {childDirectorFlags.childDirectorExperienceEnabled ? (
+        <section className="flow-child-director-callout">
           <p>
-            Explorer mode prototype is enabled.{' '}
-            <Link href={'/create/child-director' as Route}>Open child story builder</Link>. Release 2 pilot controls are{' '}
-            <strong>{childDirectorFlags.childDirectorRelease2Enabled ? 'on' : 'off'}</strong>.
+            Child-directed interactive prototype (ages 6-8):{' '}
+            <strong>{childDirectorFlags.childDirectorExperienceEnabled ? 'available' : 'disabled in this environment'}</strong>.
+            {' '}Release 2 pilot controls are <strong>{childDirectorFlags.childDirectorRelease2Enabled ? 'on' : 'off'}</strong>.
           </p>
-        ) : null}
+          {childDirectorFlags.childDirectorExperienceEnabled ? (
+            <p>
+              <Link href={'/create/child-director' as Route}>Open child story builder</Link>
+            </p>
+          ) : (
+            <p className="flow-child-director-hint">Enable `NEXT_PUBLIC_CHILD_DIRECTOR_ENABLED=true` to open this route.</p>
+          )}
+        </section>
         <div className="flow-draft-controls">
           <p className={`flow-draft-note ${draftRestored ? 'is-restored' : ''}`}>
             Browser draft saves parent + order setup fields. Uploaded media files are not persisted.

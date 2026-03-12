@@ -990,6 +990,25 @@ ul {
   gap: 1rem;
 }
 
+.flow-child-director-callout {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0.65rem 0.75rem;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: rgba(255, 248, 235, 0.04);
+}
+
+.flow-child-director-callout p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.flow-child-director-hint {
+  font-size: 0.82rem;
+}
+
 .flow-draft-controls {
   display: flex;
   flex-wrap: wrap;

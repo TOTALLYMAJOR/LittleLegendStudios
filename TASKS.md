@@ -307,6 +307,7 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
   - API now supports `POST`/`GET` child-director preview sessions with optional parent token linkage and persisted parent-approval request metadata
   - preview-session payload now includes constrained branch-choice summary (max 3) and short-audio prompt metadata
   - shared tests now validate preview-session normalization and branch-choice constraint behavior
+  - `/create` now always shows child-director callout + flag status so the interactive path is discoverable even when the route flag is off
 
 ## Growth Strategy Backlog (Discovery-Pending)
 

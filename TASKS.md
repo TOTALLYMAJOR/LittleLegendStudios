@@ -322,6 +322,41 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
   - define weekly dashboard metrics (visitor-to-start, start-to-pay, CAC, payback, repeat rate, referral rate)
   - instrument first-touch source and order-stage attribution consistently across web + API
 
+## Public Beta Safety Checklist (2026-03-13)
+
+- [ ] Rollout control and blast-radius limits
+  - keep launch invite-only at first; cap cohort size and onboard in waves
+  - gate all child-director slices behind feature flags with a tested kill switch
+  - define rollback owner + rollback command path before opening access
+- [ ] Legal, policy, and consent readiness
+  - publish Terms of Use, Privacy Policy, and Beta Terms before public onboarding
+  - ensure parent consent capture is versioned and persisted with timestamp + evidence fields
+  - confirm current child privacy obligations and launch posture with counsel before go-live
+- [ ] Parent safety + child-surface guardrails
+  - verify parent approval gates are required for protected child-directed actions
+  - verify child-facing flows do not bypass parent auth/session ownership controls
+  - keep protected actions blocked by default when feature flags are off
+- [ ] Security and abuse protections
+  - enforce admin MFA and least-privilege access for operational endpoints
+  - keep upload/content-type/size validation and route-level rate limiting enabled
+  - ensure secrets management and key rotation process are documented
+- [ ] Reliability and incident readiness
+  - run `npm run typecheck`, `npm run build`, and `npm run smoke` before each public rollout
+  - keep payment idempotency, webhook replay protection, and queue dedupe paths verified
+  - maintain incident response + communication runbook with named on-call owner
+- [ ] Data lifecycle and deletion readiness
+  - verify manual delete path (`POST /orders/:orderId/delete-data`) with audit trail visibility
+  - verify retention policy config is explicit for launch environment (on/off + window days)
+  - verify provider cleanup failures are logged and support-visible
+- [ ] Support and trust operations
+  - verify admin dashboards are staffed for moderation review, retries, provider triage, and retention history
+  - define SLA target for failed renders, refund handling, and parent support responses
+  - publish support contact path and escalation owner
+- [ ] Go/no-go checklist signoff
+  - require explicit signoff from product, engineering, and operations before widening access
+  - log launch date, cohort size, and active flags in this file after each rollout wave
+  - record post-launch findings and corrective actions in this ledger
+
 ## Open Questions To Resolve
 
 - [ ] GTM decisions not finalized

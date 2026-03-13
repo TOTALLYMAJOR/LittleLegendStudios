@@ -27,6 +27,7 @@ export function StoryWorldsSection({ worlds }: StoryWorldsSectionProps): JSX.Ele
   const [isInView, setIsInView] = useState(false);
   const [isImmersed, setIsImmersed] = useState(false);
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
+  const [isAutoRotatePaused, setIsAutoRotatePaused] = useState(false);
   const [videoUnavailable, setVideoUnavailable] = useState(false);
 
   useEffect(() => {
@@ -85,34 +86,19 @@ export function StoryWorldsSection({ worlds }: StoryWorldsSectionProps): JSX.Ele
       return;
     }
 
+    if (isAutoRotatePaused) {
+      return;
+    }
+
     const intervalId = window.setInterval(() => {
       setActiveWorldIndex((current) => (current + 1) % worlds.length);
     }, AUTO_ROTATE_MS);
 
     return () => window.clearInterval(intervalId);
-  }, [isInView, prefersReducedMotion, worlds.length]);
+  }, [isAutoRotatePaused, isInView, prefersReducedMotion, worlds.length]);
 
   const activeWorld = worlds[activeWorldIndex] ?? worlds[0];
   const activeThemeClip = resolveThemePreviewClip(activeWorld?.name ?? '');
-
-  if (!activeWorld) {
-    return (
-      <section className="worlds-section" id="worlds">
-        <div className="section-heading">
-          <span className="section-kicker">Story Worlds</span>
-          <h2>World previews are loading.</h2>
-        </div>
-      </section>
-    );
-  }
-
-  const stageStyle = {
-    '--world-primary': activeWorld.palette[0],
-    '--world-secondary': activeWorld.palette[1]
-  } as CSSProperties;
-  const progressStyle = {
-    gridTemplateColumns: `repeat(${worlds.length}, minmax(0, 1fr))`
-  } as CSSProperties;
 
   useEffect(() => {
     const video = videoRef.current;
@@ -147,6 +133,26 @@ export function StoryWorldsSection({ worlds }: StoryWorldsSectionProps): JSX.Ele
     return () => video.removeEventListener('loadedmetadata', onLoadedMetadata);
   }, [activeWorld, activeThemeClip.src, activeThemeClip.startSec, prefersReducedMotion]);
 
+  if (!activeWorld) {
+    return (
+      <section className="worlds-section" id="worlds">
+        <div className="section-heading">
+          <span className="section-kicker">Story Worlds</span>
+          <h2>World previews are loading.</h2>
+        </div>
+      </section>
+    );
+  }
+
+  const stageStyle = {
+    '--world-primary': activeWorld.palette[0],
+    '--world-secondary': activeWorld.palette[1]
+  } as CSSProperties;
+  const autoRotateActive = isInView && !prefersReducedMotion && !isAutoRotatePaused && worlds.length > 1;
+  const progressStyle = {
+    gridTemplateColumns: `repeat(${worlds.length}, minmax(0, 1fr))`
+  } as CSSProperties;
+
   function handleVideoTimeUpdate(): void {
     const video = videoRef.current;
     if (!video) {
@@ -174,6 +180,14 @@ export function StoryWorldsSection({ worlds }: StoryWorldsSectionProps): JSX.Ele
     }
   }
 
+  function toggleAutoRotate(): void {
+    if (prefersReducedMotion) {
+      return;
+    }
+
+    setIsAutoRotatePaused((current) => !current);
+  }
+
   return (
     <section className={`worlds-section immersive-worlds ${isImmersed ? 'immersive-worlds-live' : ''}`} id="worlds" ref={sectionRef}>
       <div className="section-heading">
@@ -183,10 +197,32 @@ export function StoryWorldsSection({ worlds }: StoryWorldsSectionProps): JSX.Ele
           Enter a world and watch the scene language shift in real time. Tone, atmosphere, and narrative beats are
           orchestrated together so this feels like a studio slate, not static cards.
         </p>
+        <div className="worlds-rotation-controls">
+          <button
+            type="button"
+            className="worlds-rotation-toggle"
+            onClick={toggleAutoRotate}
+            disabled={prefersReducedMotion || worlds.length < 2}
+            aria-pressed={isAutoRotatePaused}
+          >
+            {prefersReducedMotion
+              ? 'Auto-Rotation Disabled (Reduced Motion)'
+              : isAutoRotatePaused
+                ? 'Resume Auto-Rotation'
+                : 'Pause Auto-Rotation'}
+          </button>
+          <p className="worlds-rotation-note" aria-live="polite">
+            {prefersReducedMotion
+              ? 'Reduced-motion preference is active. World previews stay paused unless you manually switch cards.'
+              : autoRotateActive
+                ? 'World previews are auto-rotating.'
+                : `World previews are paused on ${activeWorld.name}.`}
+          </p>
+        </div>
       </div>
 
       <div className="worlds-immersive-grid">
-        <article className={`world-stage ${isInView ? 'world-stage-awake' : ''}`} style={stageStyle} aria-live="polite">
+        <article className={`world-stage ${isInView ? 'world-stage-awake' : ''}`} style={stageStyle} aria-live={autoRotateActive ? 'off' : 'polite'}>
           <div className="world-stage-video-shell">
             <video
               ref={videoRef}
@@ -253,6 +289,7 @@ export function StoryWorldsSection({ worlds }: StoryWorldsSectionProps): JSX.Ele
                 onClick={() => {
                   setActiveWorldIndex(index);
                   setIsImmersed(true);
+                  setIsAutoRotatePaused(true);
                 }}
                 style={cardStyle}
                 aria-pressed={index === activeWorldIndex}

@@ -14,6 +14,9 @@
   --line-strong: rgba(255, 223, 171, 0.28);
   --success: #9fd0a4;
   --warning: #f1c07a;
+  --danger: #ffb2a7;
+  --focus-ring: rgba(244, 202, 137, 0.82);
+  --focus-ring-shadow: rgba(244, 202, 137, 0.24);
   --shadow: 0 24px 80px rgba(0, 0, 0, 0.34);
 }
 
@@ -523,6 +526,40 @@ ul {
   gap: 0.9rem;
   max-width: 48rem;
   margin-bottom: 1.75rem;
+}
+
+.worlds-rotation-controls {
+  display: grid;
+  gap: 0.45rem;
+  justify-items: start;
+}
+
+.worlds-rotation-toggle {
+  width: auto;
+  min-width: 14rem;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 248, 235, 0.28);
+  background: rgba(4, 11, 13, 0.62);
+  color: var(--ink);
+  padding: 0.58rem 0.88rem;
+  font-size: 0.78rem;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.worlds-rotation-toggle:hover:not(:disabled) {
+  background: rgba(4, 11, 13, 0.82);
+}
+
+.worlds-rotation-toggle[aria-pressed='true']:not(:disabled) {
+  border-color: rgba(142, 200, 196, 0.5);
+  box-shadow: 0 0 0 1px rgba(142, 200, 196, 0.22) inset;
+}
+
+.worlds-rotation-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.84rem;
 }
 
 .worlds-section,
@@ -1606,8 +1643,37 @@ select:focus-visible,
 textarea:focus-visible,
 button:focus-visible,
 a:focus-visible {
-  outline: 2px solid rgba(244, 202, 137, 0.58);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
+  box-shadow: 0 0 0 4px var(--focus-ring-shadow);
+}
+
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  border-color: rgba(244, 202, 137, 0.62);
+}
+
+input[aria-invalid='true'],
+select[aria-invalid='true'],
+textarea[aria-invalid='true'],
+input:invalid:not(:placeholder-shown),
+textarea:invalid:not(:placeholder-shown) {
+  border-color: rgba(255, 160, 148, 0.62);
+  background: rgba(255, 160, 148, 0.12);
+}
+
+input[aria-invalid='true']:focus-visible,
+select[aria-invalid='true']:focus-visible,
+textarea[aria-invalid='true']:focus-visible {
+  outline-color: rgba(255, 160, 148, 0.8);
+  box-shadow: 0 0 0 4px rgba(255, 160, 148, 0.22);
+}
+
+.field-error-text {
+  margin: 0;
+  color: var(--danger);
+  font-size: 0.82rem;
 }
 
 .status-chip {
@@ -1691,6 +1757,32 @@ a:focus-visible {
   margin: 0;
   color: var(--warning);
   font-size: 0.84rem;
+}
+
+.order-action-feedback {
+  margin: 0;
+  padding: 0.6rem 0.7rem;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  font-size: 0.86rem;
+}
+
+.order-action-feedback.is-success {
+  border-color: rgba(159, 208, 164, 0.35);
+  background: rgba(159, 208, 164, 0.08);
+  color: #dff0e3;
+}
+
+.order-action-feedback.is-error {
+  border-color: rgba(255, 160, 148, 0.35);
+  background: rgba(255, 160, 148, 0.08);
+  color: #ffd9d3;
+}
+
+.order-action-feedback.is-info {
+  border-color: rgba(244, 202, 137, 0.35);
+  background: rgba(244, 202, 137, 0.08);
+  color: #ffe5b6;
 }
 
 .table-wrap {
@@ -1930,6 +2022,11 @@ pre {
   .button-primary,
   .button-secondary {
     width: 100%;
+  }
+
+  .worlds-rotation-toggle {
+    width: 100%;
+    min-width: 0;
   }
 
   .flow-stepper {

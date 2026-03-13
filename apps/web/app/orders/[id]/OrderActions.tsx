@@ -32,6 +32,13 @@ interface OrderActionsProps {
   recoveryHref: string;
 }
 
+type FeedbackTone = 'success' | 'error' | 'info';
+
+interface ActionFeedback {
+  tone: FeedbackTone;
+  text: string;
+}
+
 async function parseResponse(response: Response): Promise<any> {
   const text = await response.text();
   if (!text) {
@@ -45,6 +52,16 @@ async function parseResponse(response: Response): Promise<any> {
   }
 }
 
+function validateRecipientEmail(value: string): string | null {
+  const trimmedValue = value.trim();
+  if (!trimmedValue) {
+    return 'Recipient email is required.';
+  }
+
+  const isEmailShapeValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedValue);
+  return isEmailShapeValid ? null : 'Enter a valid recipient email address.';
+}
+
 export function OrderActions({
   orderId,
   parentRetryPolicy: initialRetryPolicy,
@@ -55,15 +72,17 @@ export function OrderActions({
   const [retryPolicy, setRetryPolicy] = useState<ParentRetryPolicy>(initialRetryPolicy);
   const [retryReason, setRetryReason] = useState('');
   const [retryLoading, setRetryLoading] = useState(false);
-  const [retryMessage, setRetryMessage] = useState('');
+  const [retryFeedback, setRetryFeedback] = useState<ActionFeedback | null>(null);
 
   const [giftLinkState, setGiftLinkState] = useState<LatestGiftLink | null>(latestGiftLink);
   const [recipientEmail, setRecipientEmail] = useState(latestGiftLink?.recipientEmail ?? '');
+  const [recipientEmailTouched, setRecipientEmailTouched] = useState(false);
   const [senderName, setSenderName] = useState(latestGiftLink?.senderName ?? '');
   const [giftMessage, setGiftMessage] = useState(latestGiftLink?.giftMessage ?? '');
   const [sendEmail, setSendEmail] = useState(true);
   const [giftLoading, setGiftLoading] = useState(false);
-  const [giftActionMessage, setGiftActionMessage] = useState('');
+  const [giftActiveAction, setGiftActiveAction] = useState<'create' | 'resend' | 'revoke' | null>(null);
+  const [giftFeedback, setGiftFeedback] = useState<ActionFeedback | null>(null);
   const [redemptionUrl, setRedemptionUrl] = useState('');
   const [sessionRecoveryMessage, setSessionRecoveryMessage] = useState(
     parentAccessToken ? '' : 'Parent session missing. Restore it before retrying order actions.'
@@ -101,8 +120,43 @@ export function OrderActions({
     }
     return null;
   }, [giftLoading, hasPendingGiftLink, sessionRecoveryMessage]);
+  const createGiftDisabled = giftLoading || !parentAccessToken || Boolean(sessionRecoveryMessage);
+  const createGiftDisabledReason = useMemo(() => {
+    if (sessionRecoveryMessage) {
+      return sessionRecoveryMessage;
+    }
+    if (giftLoading) {
+      return 'Gift action in progress.';
+    }
+    if (!parentAccessToken) {
+      return 'Parent session missing. Restore it before creating a gift link.';
+    }
+    return null;
+  }, [giftLoading, parentAccessToken, sessionRecoveryMessage]);
+  const giftPendingLabel = useMemo(() => {
+    if (!giftLoading) {
+      return null;
+    }
+    switch (giftActiveAction) {
+      case 'create':
+        return giftLinkState ? 'Regenerating gift link...' : 'Creating gift link...';
+      case 'resend':
+        return 'Resending gift email...';
+      case 'revoke':
+        return 'Revoking gift link...';
+      default:
+        return 'Gift action in progress...';
+    }
+  }, [giftActiveAction, giftLinkState, giftLoading]);
 
   const createGiftActionLabel = giftLinkState ? 'Regenerate Gift Redemption Link' : 'Create Gift Redemption Link';
+  const recipientEmailError = useMemo(() => {
+    if (!recipientEmailTouched) {
+      return null;
+    }
+
+    return validateRecipientEmail(recipientEmail);
+  }, [recipientEmail, recipientEmailTouched]);
 
   function markSessionExpired(): Error {
     setSessionRecoveryMessage('Parent session expired. Restore it, then return to this order.');
@@ -111,7 +165,7 @@ export function OrderActions({
 
   async function retryRender(): Promise<void> {
     setRetryLoading(true);
-    setRetryMessage('');
+    setRetryFeedback(null);
 
     try {
       const response = await fetch(`${apiBase}/orders/${orderId}/retry`, {
@@ -150,22 +204,34 @@ export function OrderActions({
             ? 'Retry queued. Refresh after processing to check whether another retry is needed.'
             : 'Parent retry limit reached for this order.'
       });
-      setRetryMessage('Re-render queued. Refresh in a few seconds to see status changes.');
+      setRetryFeedback({
+        tone: 'success',
+        text: 'Retry queued successfully. Refresh in a few seconds to see status changes.'
+      });
     } catch (error) {
-      setRetryMessage((error as Error).message);
+      setRetryFeedback({
+        tone: 'error',
+        text: (error as Error).message
+      });
     } finally {
       setRetryLoading(false);
     }
   }
 
   async function createGiftLink(): Promise<void> {
-    if (!recipientEmail.trim()) {
-      setGiftActionMessage('Recipient email is required.');
+    setRecipientEmailTouched(true);
+    const recipientEmailValidationError = validateRecipientEmail(recipientEmail);
+    if (recipientEmailValidationError) {
+      setGiftFeedback({
+        tone: 'error',
+        text: recipientEmailValidationError
+      });
       return;
     }
 
     setGiftLoading(true);
-    setGiftActionMessage('');
+    setGiftActiveAction('create');
+    setGiftFeedback(null);
     setRedemptionUrl('');
 
     try {
@@ -199,21 +265,32 @@ export function OrderActions({
       setGiftLinkState((data.giftLink as LatestGiftLink | undefined) ?? null);
       const emailStatus = String(data.emailDelivery?.status ?? 'skipped');
       const actionVerb = giftLinkState ? 'regenerated' : 'created';
-      setGiftActionMessage(
+      setGiftFeedback(
         emailStatus === 'failed'
-          ? `Gift link ${actionVerb}, but email delivery failed: ${String(data.emailDelivery?.errorText ?? 'unknown error')}`
-          : `Gift link ${actionVerb} (${emailStatus}).`
+          ? {
+              tone: 'error',
+              text: `Gift link ${actionVerb}, but email delivery failed: ${String(data.emailDelivery?.errorText ?? 'unknown error')}`
+            }
+          : {
+              tone: 'success',
+              text: `Gift link ${actionVerb} (${emailStatus}).`
+            }
       );
     } catch (error) {
-      setGiftActionMessage((error as Error).message);
+      setGiftFeedback({
+        tone: 'error',
+        text: (error as Error).message
+      });
     } finally {
       setGiftLoading(false);
+      setGiftActiveAction(null);
     }
   }
 
   async function revokeGiftLink(): Promise<void> {
     setGiftLoading(true);
-    setGiftActionMessage('');
+    setGiftActiveAction('revoke');
+    setGiftFeedback(null);
     setRedemptionUrl('');
 
     try {
@@ -235,17 +312,25 @@ export function OrderActions({
 
       setSessionRecoveryMessage('');
       setGiftLinkState((data.giftLink as LatestGiftLink | undefined) ?? giftLinkState);
-      setGiftActionMessage('Gift link revoked. You can generate a replacement when ready.');
+      setGiftFeedback({
+        tone: 'success',
+        text: 'Gift link revoked. You can generate a replacement when ready.'
+      });
     } catch (error) {
-      setGiftActionMessage((error as Error).message);
+      setGiftFeedback({
+        tone: 'error',
+        text: (error as Error).message
+      });
     } finally {
       setGiftLoading(false);
+      setGiftActiveAction(null);
     }
   }
 
   async function resendGiftEmail(): Promise<void> {
     setGiftLoading(true);
-    setGiftActionMessage('');
+    setGiftActiveAction('resend');
+    setGiftFeedback(null);
     setRedemptionUrl('');
 
     try {
@@ -269,15 +354,25 @@ export function OrderActions({
       setRedemptionUrl(String(data.redemptionUrl ?? ''));
       setGiftLinkState((data.giftLink as LatestGiftLink | undefined) ?? giftLinkState);
       const emailStatus = String(data.emailDelivery?.status ?? 'sent');
-      setGiftActionMessage(
+      setGiftFeedback(
         emailStatus === 'failed'
-          ? `Gift email resend failed: ${String(data.emailDelivery?.errorText ?? 'unknown error')}`
-          : `Gift email resent (${emailStatus}).`
+          ? {
+              tone: 'error',
+              text: `Gift email resend failed: ${String(data.emailDelivery?.errorText ?? 'unknown error')}`
+            }
+          : {
+              tone: 'success',
+              text: `Gift email resent (${emailStatus}).`
+            }
       );
     } catch (error) {
-      setGiftActionMessage((error as Error).message);
+      setGiftFeedback({
+        tone: 'error',
+        text: (error as Error).message
+      });
     } finally {
       setGiftLoading(false);
+      setGiftActiveAction(null);
     }
   }
 
@@ -302,10 +397,14 @@ export function OrderActions({
           onChange={(event) => setRetryReason(event.target.value)}
         />
         <button disabled={retryDisabled} onClick={retryRender}>
-          Retry Render
+          {retryLoading ? 'Queueing Retry...' : 'Retry Render'}
         </button>
         {retryDisabled && retryDisabledReason ? <p className="order-action-hint">{retryDisabledReason}</p> : null}
-        {retryMessage ? <p>{retryMessage}</p> : null}
+        {retryFeedback ? (
+          <p className={`order-action-feedback is-${retryFeedback.tone}`} aria-live="polite">
+            {retryFeedback.text}
+          </p>
+        ) : null}
       </article>
 
       <article className="card">
@@ -332,7 +431,16 @@ export function OrderActions({
           placeholder="recipient@example.com"
           value={recipientEmail}
           onChange={(event) => setRecipientEmail(event.target.value)}
+          onBlur={() => setRecipientEmailTouched(true)}
+          required
+          aria-invalid={Boolean(recipientEmailError)}
+          aria-describedby={recipientEmailError ? 'giftRecipientError' : undefined}
         />
+        {recipientEmailError ? (
+          <p id="giftRecipientError" className="field-error-text" aria-live="polite">
+            {recipientEmailError}
+          </p>
+        ) : null}
 
         <label htmlFor="giftSender">Sender Name (optional)</label>
         <input id="giftSender" value={senderName} onChange={(event) => setSenderName(event.target.value)} />
@@ -350,17 +458,27 @@ export function OrderActions({
           <option value="no">No, I will share it manually</option>
         </select>
 
-        <button disabled={giftLoading || !parentAccessToken || Boolean(sessionRecoveryMessage)} onClick={createGiftLink}>
-          {createGiftActionLabel}
+        <button disabled={createGiftDisabled} onClick={createGiftLink}>
+          {giftLoading && giftActiveAction === 'create'
+            ? giftLinkState
+              ? 'Regenerating Gift Redemption Link...'
+              : 'Creating Gift Redemption Link...'
+            : createGiftActionLabel}
         </button>
         <button disabled={resendGiftDisabled} onClick={resendGiftEmail}>
-          Resend Gift Email
+          {giftLoading && giftActiveAction === 'resend' ? 'Resending Gift Email...' : 'Resend Gift Email'}
         </button>
         <button disabled={revokeGiftDisabled} onClick={revokeGiftLink}>
-          Revoke Gift Link
+          {giftLoading && giftActiveAction === 'revoke' ? 'Revoking Gift Link...' : 'Revoke Gift Link'}
         </button>
+        {createGiftDisabled && createGiftDisabledReason ? <p className="order-action-hint">{createGiftDisabledReason}</p> : null}
         {(resendGiftDisabled || revokeGiftDisabled) && resendGiftDisabledReason ? (
           <p className="order-action-hint">{resendGiftDisabledReason}</p>
+        ) : null}
+        {giftPendingLabel ? (
+          <p className="order-action-feedback is-info" aria-live="polite">
+            {giftPendingLabel}
+          </p>
         ) : null}
 
         {redemptionUrl ? (
@@ -368,7 +486,11 @@ export function OrderActions({
             Redemption URL: <a href={redemptionUrl}>{redemptionUrl}</a>
           </p>
         ) : null}
-        {giftActionMessage ? <p>{giftActionMessage}</p> : null}
+        {giftFeedback ? (
+          <p className={`order-action-feedback is-${giftFeedback.tone}`} aria-live="polite">
+            {giftFeedback.text}
+          </p>
+        ) : null}
       </article>
     </section>
   );

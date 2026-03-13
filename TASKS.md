@@ -247,15 +247,17 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
   - second pass shipped: per-file validation feedback plus retry/remove controls
   - third pass shipped: thumbnail-style visual previews for selected photos
   - keep backend constraints visible in UI copy (5-15 photos, one voice sample, accepted formats/duration)
-- [ ] Parent status readability and focus (`apps/web/app/orders/[id]/page.tsx`, `apps/web/app/orders/[id]/OrderActions.tsx`)
+- [x] Parent status readability and focus (`apps/web/app/orders/[id]/page.tsx`, `apps/web/app/orders/[id]/OrderActions.tsx`)
   - first pass shipped: disabled retry/gift actions now show explicit reasons and no-script status includes a clear create-flow continuation CTA
   - second pass shipped: order page now includes a dedicated "What To Do Next" card with status-based guidance
   - second pass shipped: jobs/provider tasks/scene-plan raw JSON moved under collapsed technical diagnostics
-  - tighten action-state feedback for retry/gift flows (clear disabled reasons, pending states, and completion confirmations)
+  - third pass shipped: retry/gift flows now show action-specific pending labels, explicit create/resend/revoke disabled reasons, and structured success/error/info confirmations
 - [ ] Accessibility and interaction quality (`apps/web/app/globals.css`, `apps/web/app/StoryWorldsSection.tsx`)
-  - add stronger `:focus-visible` treatments and clear invalid/error input states
-  - refine live-region usage for rotating/animated content and add explicit pause/play affordance for world auto-rotation
-  - keep reduced-motion parity and verify contrast/readability in all key flows
+  - first pass shipped: stronger global `:focus-visible` rings and explicit invalid/error input states for form controls
+  - first pass shipped: gift-link recipient email now exposes field-level validation messaging with `aria-invalid` semantics
+  - first pass shipped: Story Worlds auto-rotation now has an explicit pause/resume control and reduced live-region chatter while rotating
+  - first pass shipped: manual world-card selection now pauses auto-rotation and reduced-motion mode shows explicit behavior copy
+  - keep contrast/readability verification in all key flows
 - [ ] Admin usability pass (`apps/web/app/admin/*`, `apps/web/app/globals.css`)
   - improve wide-table behavior for smaller screens (mobile card fallback or priority-column collapse)
   - standardize status/feedback surfaces and spacing for dense operational pages
@@ -360,6 +362,14 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
   - require explicit signoff from product, engineering, and operations before widening access
   - log launch date, cohort size, and active flags in this file after each rollout wave
   - record post-launch findings and corrective actions in this ledger
+
+## UI Design Challenge Gate (2026-03-13)
+
+- [x] Required on every UI task before merge/deploy
+  - Is it intuitive on first use?
+  - Does it add new value versus standard patterns?
+  - Does it push modern design principles (intentional typography, strong visual direction, meaningful motion, non-generic layout)?
+  - If any answer is "no", keep implementation unchanged until explicit approval is provided.
 
 ## Open Questions To Resolve
 

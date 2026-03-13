@@ -309,6 +309,10 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
   - preview-session payload now includes constrained branch-choice summary (max 3) and short-audio prompt metadata
   - shared tests now validate preview-session normalization and branch-choice constraint behavior
   - `/create` now always shows child-director callout + flag status so the interactive path is discoverable even when the route flag is off
+- [x] Added Vercel preview fallback defaults for child-director flags (2026-03-13)
+  - when child-director env flags are unset, Vercel preview builds now default `NEXT_PUBLIC_CHILD_DIRECTOR_ENABLED` and `NEXT_PUBLIC_CHILD_DIRECTOR_RELEASE2_ENABLED` to enabled
+  - production behavior remains explicit-flag controlled and default-off
+  - deploy docs updated in `README.md` and `docs/runbooks/deploy-vercel.md`
 
 ## Growth Strategy Backlog (Discovery-Pending)
 

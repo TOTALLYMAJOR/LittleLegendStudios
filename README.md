@@ -119,10 +119,12 @@ Preview envs:
   - if you only want a UI preview, the landing page will still render without it, but create/admin actions that need the API will not work
 - `NEXT_PUBLIC_CHILD_DIRECTOR_ENABLED`
   - set to `true` to expose the experimental `/create/child-director` Explorer-mode story-lane prototype
+  - when unset on Vercel preview deployments, the route now defaults to enabled so branch previews include the child-interactive surface
   - keep `false` in production until child-directed slices are validated
 - `NEXT_PUBLIC_CHILD_DIRECTOR_RELEASE2_ENABLED`
   - set to `true` to enable release-2 pilot controls inside the child-director prototype route
   - current release-2 slice adds API-backed preview-session persistence (with local fallback) + constrained branch-choice summary
+  - when unset on Vercel preview deployments, release-2 controls now default to enabled with the same preview-only fallback
   - keep `false` in production until release-2 preview-session behavior is validated
 - `WEB_APP_BASE_URL`
   - set this to the deployed site URL for any redirects or generated links that depend on the web origin

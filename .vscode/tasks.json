@@ -4,7 +4,7 @@
     {
       "label": "Agents: Dispatch Next",
       "type": "shell",
-      "command": "node scripts/agents/orchestrate.mjs --mode=dispatch --profile=reliability --max-parallel=2 --batch-size=1 --automerge=true",
+      "command": "npm run agents:dispatch",
       "options": {
         "cwd": "${workspaceFolder}"
       },
@@ -13,7 +13,7 @@
     {
       "label": "Agents: Dispatch Batch",
       "type": "shell",
-      "command": "node scripts/agents/orchestrate.mjs --mode=dispatch --profile=reliability --max-parallel=2 --batch-size=2 --automerge=true",
+      "command": "npm run agents:dispatch:batch",
       "options": {
         "cwd": "${workspaceFolder}"
       },
@@ -22,7 +22,7 @@
     {
       "label": "Agents: Dry Run",
       "type": "shell",
-      "command": "node scripts/agents/orchestrate.mjs --mode=dry-run --section=\"Architecture And Scale Hardening Backlog (2026-03-14)\" --batch-size=2 --write-runbook=true",
+      "command": "npm run agents:dry-run",
       "options": {
         "cwd": "${workspaceFolder}"
       },
@@ -31,7 +31,7 @@
     {
       "label": "Agents: Resume Failed",
       "type": "shell",
-      "command": "node scripts/agents/orchestrate.mjs --mode=resume --profile=reliability --max-parallel=2 --automerge=true",
+      "command": "npm run agents:resume",
       "options": {
         "cwd": "${workspaceFolder}"
       },

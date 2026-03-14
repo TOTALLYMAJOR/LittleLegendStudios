@@ -45,6 +45,16 @@ Run artifacts are written to `.codex/runs/<task-id>/`.
 
 If `AGENT_IMPLEMENTER_CMD` is not configured, dispatch marks the task as `blocked` and stops before code mutation.
 
+Recommended implementer command:
+- `bash ./scripts/agents/implementer.sh`
+
+Where to configure:
+- GitHub (`agent-dispatch` workflow): repository variable `AGENT_IMPLEMENTER_CMD`
+- Local terminal/VS Code: environment variable `AGENT_IMPLEMENTER_CMD` (or set in `.env` and run via `scripts/agents/run.sh`)
+
+GitHub CLI helper:
+- `gh variable set AGENT_IMPLEMENTER_CMD --body 'bash ./scripts/agents/implementer.sh' --repo TOTALLYMAJOR/LittleLegendStudios`
+
 ## GitHub Workflows
 - `agent-dispatch.yml`
   - Scheduled and manual orchestration dispatch

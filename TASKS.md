@@ -301,6 +301,10 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
   - new dispatcher/queue/runbook scripts under `scripts/agents/*` with deterministic queue ordering from `TASKS.md`
   - new workflows: `agent-dispatch`, `agent-automerge`, and `agent-failsafe` for unattended dispatch, PR contract enforcement, and repeated-failure incident surfacing
   - new runbook: `docs/runbooks/agent-autopilot.md` for env contracts, operational defaults, and stage flow
+- [x] Added default implementer-command local wiring for agent dispatch (2026-03-14)
+  - new helper scripts: `scripts/agents/implementer.sh` and `scripts/agents/run.sh`
+  - local agent npm scripts now auto-load `.env` via `scripts/agents/run.sh`, so `AGENT_IMPLEMENTER_CMD` in `.env` is picked up without manual export
+  - `.env.example` now documents `AGENT_IMPLEMENTER_CMD=bash ./scripts/agents/implementer.sh` as the default local command
 
 ## Child-Director Foundation Slice (2026-03-09)
 

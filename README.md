@@ -113,6 +113,7 @@ Common commands:
 - `npm run agents:dispatch`
 - `npm run agents:dispatch:batch`
 - `npm run agents:resume`
+- set `AGENT_IMPLEMENTER_CMD=bash ./scripts/agents/implementer.sh` (repo variable for CI, env var for local)
 
 ## Vercel UI Preview
 

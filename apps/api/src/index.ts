@@ -489,7 +489,15 @@ const childDirectorPreviewPayloadSchema = z.object({
     )
     .max(3),
   thumbnailLabel: z.string().min(1).max(240),
-  shortAudioPrompt: z.string().min(1).max(400)
+  shortAudioPrompt: z.string().min(1).max(400),
+  promptBundle: z
+    .object({
+      systemInstructions: z.string().min(1).max(900),
+      storyDirectorPrompt: z.string().min(1).max(1800),
+      narrationPrompt: z.string().min(1).max(400),
+      parentSummaryPrompt: z.string().min(1).max(700)
+    })
+    .optional()
 });
 
 const childDirectorParentApprovalRequestSchema = z.object({

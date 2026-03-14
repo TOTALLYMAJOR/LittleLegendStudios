@@ -78,6 +78,13 @@ export interface ExplorerPreviewBranchChoice {
   title: string;
 }
 
+export interface ExplorerPromptBundle {
+  systemInstructions: string;
+  storyDirectorPrompt: string;
+  narrationPrompt: string;
+  parentSummaryPrompt: string;
+}
+
 export interface ExplorerPreviewSession {
   id: string;
   ageGroup: 'explorer';
@@ -90,6 +97,14 @@ export interface ExplorerPreviewSession {
   branchChoices: ExplorerPreviewBranchChoice[];
   thumbnailLabel: string;
   shortAudioPrompt: string;
+  promptBundle?: ExplorerPromptBundle;
+}
+
+interface ExplorerPromptBundleInput {
+  runtimeTargetSec: number;
+  majorDecisionCount: number;
+  contentRiskScore: number;
+  branchChoices: readonly ExplorerPreviewBranchChoice[];
 }
 
 const defaultChildInterfaceByAge: Record<AgeGroup, ChildInterfaceConfig> = {
@@ -235,10 +250,19 @@ export function createExplorerPreviewSession(
   const runtimeTargetSec = clampNumber(input.runtimeTargetSec, 30, 240);
   const majorDecisionCount = Math.max(0, Math.floor(input.majorDecisionCount));
   const contentRiskScore = clampNumber(input.contentRiskScore, 0, 1);
-  const choiceOrder = input.choices.map((choice) => choice.id);
-  const branchChoices = input.choices.slice(0, 3).map((choice) => ({ id: choice.id, title: choice.title }));
+  const choiceOrder = normalizeChoiceOrder(input.choices);
+  const branchChoices = input.choices.slice(0, 3).map((choice, index) => ({
+    id: normalizeChoiceId(choice.id, `choice_${String(index + 1)}`),
+    title: normalizeChoiceTitle(choice.title, `Choice ${String(index + 1)}`)
+  }));
   const thumbnailLabel = branchChoices.length > 0 ? branchChoices.map((choice) => choice.title).slice(0, 2).join(' + ') : 'Explorer Preview';
-  const shortAudioPrompt = `Preview ${String(runtimeTargetSec)}s with ${String(branchChoices.length)} branch choices.`;
+  const promptBundle = buildExplorerPromptBundle({
+    runtimeTargetSec,
+    majorDecisionCount,
+    contentRiskScore,
+    branchChoices
+  });
+  const shortAudioPrompt = sanitizePromptText(promptBundle.narrationPrompt, 400);
 
   return {
     id: options?.id ?? `explorer-preview-${String(now.getTime().toString(36))}`,
@@ -251,7 +275,66 @@ export function createExplorerPreviewSession(
     choiceOrder,
     branchChoices,
     thumbnailLabel,
-    shortAudioPrompt
+    shortAudioPrompt,
+    promptBundle
+  };
+}
+
+export function buildExplorerPromptBundle(input: ExplorerPromptBundleInput): ExplorerPromptBundle {
+  const runtimeTargetSec = clampNumber(input.runtimeTargetSec, 30, 240);
+  const majorDecisionCount = Math.max(0, Math.floor(input.majorDecisionCount));
+  const contentRiskScore = clampNumber(input.contentRiskScore, 0, 1);
+  const contentRiskPct = Math.round(contentRiskScore * 100);
+  const branchSummary = summarizeBranchChoices(input.branchChoices);
+  const complexityTier =
+    majorDecisionCount >= 5 ? 'high-complexity' : majorDecisionCount >= 3 ? 'medium-complexity' : 'low-complexity';
+
+  const systemInstructions = sanitizePromptText(
+    [
+      'You are a child-directed story copilot for ages 6-8.',
+      'Always keep output warm, non-violent, and emotionally safe.',
+      'Never include fear, injury, romance, or real-world personal data.',
+      'Prefer concrete action verbs, short clauses, and visual clarity.',
+      'If input is ambiguous, choose the safest playful interpretation.'
+    ].join(' '),
+    900
+  );
+
+  const storyDirectorPrompt = sanitizePromptText(
+    [
+      `Build a ${String(runtimeTargetSec)}-second release-2 preview with ${complexityTier} pacing.`,
+      `Branch priorities: ${branchSummary}.`,
+      `Major decisions allowed: ${String(majorDecisionCount)}.`,
+      `Content-risk signal: ${String(contentRiskPct)}%.`,
+      'Output requirements: exactly 3 beats, each beat 1-2 short sentences, clear beginning/middle/end arc, and one joyful landing line.',
+      'Language constraints: age-appropriate vocabulary, no sarcasm, no dark themes, no cliffhanger ending.'
+    ].join(' '),
+    1800
+  );
+
+  const narrationPrompt = sanitizePromptText(
+    [
+      `Write a narration teaser for a ${String(runtimeTargetSec)}-second interactive preview.`,
+      `Use these branch cues: ${branchSummary}.`,
+      'Return 2-3 short lines, each under 18 words, with an upbeat cinematic tone and clear child-safe language.'
+    ].join(' '),
+    400
+  );
+
+  const parentSummaryPrompt = sanitizePromptText(
+    [
+      'Provide a parent-facing summary with: runtime target, branch-order highlights, and safety posture.',
+      `Runtime target: ${String(runtimeTargetSec)}s; major decisions: ${String(majorDecisionCount)}; content risk signal: ${String(contentRiskPct)}%.`,
+      'Use plain language and include one explicit note that parent approval is required when risk thresholds are exceeded.'
+    ].join(' '),
+    700
+  );
+
+  return {
+    systemInstructions,
+    storyDirectorPrompt,
+    narrationPrompt,
+    parentSummaryPrompt
   };
 }
 
@@ -317,4 +400,55 @@ function clampNumber(value: number, min: number, max: number): number {
   }
 
   return value;
+}
+
+function normalizeChoiceId(value: string, fallback: string): string {
+  const normalized = value.trim().replaceAll(/\s+/g, '_');
+  return normalized.length > 0 ? normalized.slice(0, 120) : fallback;
+}
+
+function normalizeChoiceTitle(value: string, fallback: string): string {
+  const normalized = sanitizePromptText(value, 120);
+  return normalized.length > 0 ? normalized : fallback;
+}
+
+function normalizeChoiceOrder(choices: readonly StoryChoiceCard[]): string[] {
+  const seen = new Set<string>();
+  const order: string[] = [];
+
+  for (const [index, choice] of choices.entries()) {
+    const id = normalizeChoiceId(choice.id, `choice_${String(index + 1)}`);
+    if (seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+    order.push(id);
+  }
+
+  return order;
+}
+
+function summarizeBranchChoices(branchChoices: readonly ExplorerPreviewBranchChoice[]): string {
+  const normalized = branchChoices
+    .slice(0, 3)
+    .map((choice, index) => `${String(index + 1)}:${normalizeChoiceTitle(choice.title, `Choice ${String(index + 1)}`)}`);
+
+  if (normalized.length === 0) {
+    return '1:Opening Scene, 2:Helpful Friend, 3:Ending Beat';
+  }
+
+  return normalized.join(', ');
+}
+
+function sanitizePromptText(value: string, maxLength: number): string {
+  const normalized = value
+    .replaceAll(/[\u0000-\u001f\u007f]/g, ' ')
+    .replaceAll(/\s+/g, ' ')
+    .trim();
+
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+
+  return normalized.slice(0, maxLength).trim();
 }

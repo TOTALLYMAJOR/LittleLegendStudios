@@ -651,6 +651,48 @@ function normalizePath(value: string): string {
   return value.startsWith('/') ? value : `/${value}`;
 }
 
+function sanitizePromptText(value: string, maxChars = 260): string {
+  const normalized = value
+    .replaceAll(/[\u0000-\u001f\u007f]/g, ' ')
+    .replaceAll(/\s+/g, ' ')
+    .trim();
+
+  if (normalized.length <= maxChars) {
+    return normalized;
+  }
+
+  return normalized.slice(0, maxChars).trim();
+}
+
+function promptSegment(label: string, value: string | null, maxChars = 260): string | null {
+  if (!value) {
+    return null;
+  }
+
+  const sanitized = sanitizePromptText(value, maxChars);
+  if (!sanitized) {
+    return null;
+  }
+
+  return `${label}: ${sanitized}`;
+}
+
+function promptJson(value: unknown, maxChars = 320): string {
+  try {
+    return sanitizePromptText(JSON.stringify(value), maxChars);
+  } catch {
+    return '';
+  }
+}
+
+function clampPrompt(prompt: string, maxChars = 2200): string {
+  if (prompt.length <= maxChars) {
+    return prompt;
+  }
+
+  return `${prompt.slice(0, maxChars - 16).trim()}\nTRUNCATED: true`;
+}
+
 async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), env.PROVIDER_HTTP_TIMEOUT_MS);
@@ -1894,30 +1936,44 @@ async function queueHeyGenShot(args: {
   }
 
   const endpoint = `${normalizeBaseUrl(env.HEYGEN_BASE_URL)}${normalizePath(env.HEYGEN_VIDEO_GENERATE_PATH)}`;
-  const prompt = [
-    `${args.themeName} cinematic scene \"${args.sceneRenderSpec.sceneName || args.sceneName}\"`,
-    `${args.sceneRenderSpec.sceneArchitecture} composition`,
-    `${args.sceneRenderSpec.camera} camera`,
-    `${args.sceneRenderSpec.lighting} lighting`,
-    args.sceneRenderSpec.cameraMove ? `${args.sceneRenderSpec.cameraMove} camera move` : null,
-    args.sceneRenderSpec.parallaxStrength !== undefined
-      ? `parallax strength ${String(args.sceneRenderSpec.parallaxStrength)}`
-      : null,
-    `environment motion ${args.sceneRenderSpec.environmentMotion.join(', ') || 'ambient particles'}`,
-    args.sceneRenderSpec.palette.length > 0 ? `palette ${args.sceneRenderSpec.palette.join(', ')}` : null,
-    args.sceneRenderSpec.globalFx.length > 0 ? `global fx ${args.sceneRenderSpec.globalFx.join(', ')}` : null,
-    args.sceneRenderSpec.audio.sfx && args.sceneRenderSpec.audio.sfx.length > 0
-      ? `sfx ${args.sceneRenderSpec.audio.sfx.join(', ')}`
-      : null,
-    args.shot.shotType === 'dialogue' ? `child speaks: ${args.shot.dialogue}` : `narration beat: ${args.shot.narration}`,
-    args.shot.characterDirection
-      ? `character direction ${JSON.stringify(args.shot.characterDirection)}`
-      : null,
-    args.shot.companions && args.shot.companions.length > 0 ? `companions ${JSON.stringify(args.shot.companions)}` : null,
-    `character id ${args.characterProfile.characterId}`
-  ]
-    .filter((part): part is string => Boolean(part))
-    .join('; ');
+  const speechLine =
+    args.shot.shotType === 'dialogue'
+      ? `dialogue line: ${args.shot.dialogue}`
+      : `narration beat: ${args.shot.narration}`;
+
+  const prompt = clampPrompt(
+    [
+      promptSegment('STYLE', `${args.themeName} cinematic child-safe scene`),
+      promptSegment('SCENE_NAME', args.sceneRenderSpec.sceneName || args.sceneName),
+      promptSegment('SCENE_ARCHITECTURE', args.sceneRenderSpec.sceneArchitecture),
+      promptSegment('CAMERA', args.sceneRenderSpec.camera),
+      promptSegment('LIGHTING', args.sceneRenderSpec.lighting),
+      promptSegment('CAMERA_MOVE', args.sceneRenderSpec.cameraMove ?? null),
+      args.sceneRenderSpec.parallaxStrength !== undefined
+        ? promptSegment('PARALLAX_STRENGTH', String(args.sceneRenderSpec.parallaxStrength), 80)
+        : null,
+      promptSegment(
+        'ENVIRONMENT_MOTION',
+        args.sceneRenderSpec.environmentMotion.length > 0 ? args.sceneRenderSpec.environmentMotion.join(', ') : 'ambient particles'
+      ),
+      args.sceneRenderSpec.palette.length > 0 ? promptSegment('PALETTE', args.sceneRenderSpec.palette.join(', ')) : null,
+      args.sceneRenderSpec.globalFx.length > 0 ? promptSegment('GLOBAL_FX', args.sceneRenderSpec.globalFx.join(', ')) : null,
+      args.sceneRenderSpec.audio.sfx && args.sceneRenderSpec.audio.sfx.length > 0
+        ? promptSegment('SFX', args.sceneRenderSpec.audio.sfx.join(', '))
+        : null,
+      promptSegment('SHOT_TEXT', speechLine, 420),
+      args.shot.characterDirection
+        ? promptSegment('CHARACTER_DIRECTION', promptJson(args.shot.characterDirection), 420)
+        : null,
+      args.shot.companions && args.shot.companions.length > 0
+        ? promptSegment('COMPANIONS', promptJson(args.shot.companions), 420)
+        : null,
+      promptSegment('CHARACTER_ID', args.characterProfile.characterId, 120),
+      promptSegment('OUTPUT_RULES', 'Return one cinematic shot clip only; keep motion coherent and age-appropriate.', 220)
+    ]
+      .filter((part): part is string => Boolean(part))
+      .join('\n')
+  );
 
   const payload = await postJson({
     url: endpoint,

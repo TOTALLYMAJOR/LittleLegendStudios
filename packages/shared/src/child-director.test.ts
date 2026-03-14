@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
+  buildExplorerPromptBundle,
   createExplorerPreviewSession,
   createExplorerStoryLane,
   createParentApprovalRequest,
@@ -120,4 +121,29 @@ test('createExplorerPreviewSession constrains branch choices and normalizes valu
   assert.equal(session.branchChoices.length, 3);
   assert.deepEqual(session.choiceOrder, lane.choices.map((choice) => choice.id));
   assert.equal(session.releaseTrack, 'release-2');
+  assert.ok(session.promptBundle);
+  assert.match(session.promptBundle?.storyDirectorPrompt ?? '', /Build a 240-second release-2 preview/);
+  assert.equal(session.shortAudioPrompt, session.promptBundle?.narrationPrompt);
+});
+
+test('buildExplorerPromptBundle returns bounded prompts with safety constraints', () => {
+  const bundle = buildExplorerPromptBundle({
+    runtimeTargetSec: 92,
+    majorDecisionCount: 4,
+    contentRiskScore: 0.61,
+    branchChoices: [
+      { id: 'opening', title: 'Opening Scene' },
+      { id: 'helper', title: 'Helpful Friend' },
+      { id: 'ending', title: 'Ending Beat' }
+    ]
+  });
+
+  assert.ok(bundle.systemInstructions.length > 40);
+  assert.ok(bundle.storyDirectorPrompt.length > 120);
+  assert.ok(bundle.narrationPrompt.length > 40);
+  assert.ok(bundle.parentSummaryPrompt.length > 80);
+  assert.match(bundle.systemInstructions, /child-directed story copilot/);
+  assert.match(bundle.storyDirectorPrompt, /Branch priorities/);
+  assert.match(bundle.narrationPrompt, /interactive preview/);
+  assert.match(bundle.parentSummaryPrompt, /parent-facing summary/);
 });

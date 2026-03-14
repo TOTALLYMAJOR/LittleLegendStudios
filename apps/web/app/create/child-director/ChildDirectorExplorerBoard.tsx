@@ -1,12 +1,14 @@
 'use client';
 
 import {
+  buildExplorerPromptBundle,
   createExplorerPreviewSession,
   createExplorerStoryLane,
   createParentApprovalRequest,
   evaluateParentApprovalGate,
   reorderExplorerStoryChoices,
   resolveChildInterfaceConfig,
+  type ExplorerPromptBundle,
   type ExplorerPreviewSession,
   type ParentApprovalRequest,
   type StoryChoiceCard
@@ -50,6 +52,7 @@ export function ChildDirectorExplorerBoard({ release2Enabled = false }: ChildDir
   const [release2PersistedAt, setRelease2PersistedAt] = useState<string | null>(null);
   const [release2ParentLinked, setRelease2ParentLinked] = useState(false);
   const [isSavingRelease2Preview, setIsSavingRelease2Preview] = useState(false);
+  const [promptCopyMessage, setPromptCopyMessage] = useState('');
 
   const gateEvaluation = evaluateParentApprovalGate({
     complexityLevel: explorerConfig.complexityLevel,
@@ -57,6 +60,23 @@ export function ChildDirectorExplorerBoard({ release2Enabled = false }: ChildDir
     majorDecisionCount,
     contentRiskScore: contentRiskPct / 100
   });
+
+  const release2PromptBundle = useMemo<ExplorerPromptBundle | null>(() => {
+    if (!release2PreviewSession) {
+      return null;
+    }
+
+    if (release2PreviewSession.promptBundle) {
+      return release2PreviewSession.promptBundle;
+    }
+
+    return buildExplorerPromptBundle({
+      runtimeTargetSec: release2PreviewSession.runtimeTargetSec,
+      majorDecisionCount: release2PreviewSession.majorDecisionCount,
+      contentRiskScore: release2PreviewSession.contentRiskScore,
+      branchChoices: release2PreviewSession.branchChoices
+    });
+  }, [release2PreviewSession]);
 
   useEffect(() => {
     if (gateEvaluation.required) {
@@ -219,6 +239,25 @@ export function ChildDirectorExplorerBoard({ release2Enabled = false }: ChildDir
     }
   }
 
+  async function copyRelease2PromptBundle(): Promise<void> {
+    if (!release2PromptBundle) {
+      setPromptCopyMessage('Create a release-2 preview session first.');
+      return;
+    }
+
+    if (!navigator?.clipboard?.writeText) {
+      setPromptCopyMessage('Clipboard access is unavailable in this browser context.');
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(release2PromptBundle, null, 2));
+      setPromptCopyMessage('Prompt bundle copied to clipboard.');
+    } catch (error) {
+      setPromptCopyMessage(`Copy failed: ${(error as Error).message}`);
+    }
+  }
+
   return (
     <section className="card">
       <header className={styles.header}>
@@ -336,6 +375,9 @@ export function ChildDirectorExplorerBoard({ release2Enabled = false }: ChildDir
         <button type="button" disabled={!release2Enabled || isSavingRelease2Preview} onClick={createRelease2PreviewSession}>
           {isSavingRelease2Preview ? 'Saving Release 2 Preview Session...' : 'Create Release 2 Preview Session'}
         </button>
+        <button type="button" disabled={!release2Enabled || !release2PromptBundle} onClick={() => void copyRelease2PromptBundle()}>
+          Copy Prompt Bundle JSON
+        </button>
         {release2PreviewSession ? (
           <ul className={styles.approvalList}>
             <li>Latest preview session: {release2PreviewSession.id}</li>
@@ -348,6 +390,13 @@ export function ChildDirectorExplorerBoard({ release2Enabled = false }: ChildDir
             <li>Branch choices: {release2PreviewSession.branchChoices.map((choice) => choice.title).join(', ')}</li>
           </ul>
         ) : null}
+        {release2PromptBundle ? (
+          <details className={styles.promptDetails}>
+            <summary>Robust Prompt Bundle</summary>
+            <pre className={styles.promptCode}>{JSON.stringify(release2PromptBundle, null, 2)}</pre>
+          </details>
+        ) : null}
+        {promptCopyMessage ? <p className={styles.promptStatus}>{promptCopyMessage}</p> : null}
       </section>
 
       <p className={styles.status} aria-live="polite">

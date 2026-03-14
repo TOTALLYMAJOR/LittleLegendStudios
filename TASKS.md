@@ -387,6 +387,15 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
   - log launch date, cohort size, and active flags in this file after each rollout wave
   - record post-launch findings and corrective actions in this ledger
 
+## Deployment Validation Snapshot (2026-03-14)
+
+- [x] Web surface is externally reachable (user-reported)
+  - current user signal indicates the website is live
+  - log canonical deployment URL/domain in this file once confirmed
+- [ ] Confirm at least one finished product video from deployed environment
+  - validate deployed `create -> upload -> approve -> pay -> render -> deliver` end to end (not local-only smoke)
+  - record order ID and any blocking failure point if render/delivery does not complete
+
 ## UI Design Challenge Gate (2026-03-13)
 
 - [x] Required on every UI task before merge/deploy
@@ -448,6 +457,7 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
 - Character identity still needs a parent-facing management and curation surface
 - Final compose still needs deeper polish around subtitle branding, audio finishing, and presentation quality
 - Parent/admin web UX still needs a product-grade pass for flow clarity, accessibility, and responsive operability
+- Deployed web availability is confirmed by user report, but deployed finished-video delivery still needs explicit end-to-end validation
 
 ## Notes
 

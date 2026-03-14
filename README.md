@@ -195,6 +195,7 @@ Operational notes:
 - `GET /health/worker` returns worker heartbeat readiness (returns `503` when no fresh worker heartbeat exists)
 - Railway pre-deploy commands run in a separate container, so use them for migrations only
 - keep `PROVIDER_INTEGRATION_MODE=stub` (and worker provider modes `stub`) for initial UI/staging deploys unless real providers are configured
+- if the web app is already live, run one deployed full order (`create -> upload -> approve -> pay -> render -> deliver`) to confirm finished-video output before calling deployment production-ready
 
 ## Built Features
 

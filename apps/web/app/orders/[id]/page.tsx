@@ -246,6 +246,11 @@ interface NextActionInfo {
   ctaLabel: string | null;
 }
 
+interface DeliveryInfo {
+  detail: string;
+  showWorkerHint: boolean;
+}
+
 function resolveNextAction(args: {
   status: OrderStatus;
   workerHealth: WorkerHealthResponse | null;
@@ -362,6 +367,45 @@ function getModerationChipClass(decision: 'pass' | 'manual_review' | 'reject' | 
     return 'status-chip warning';
   }
   return 'status-chip';
+}
+
+function resolveDeliveryInfo(status: OrderStatus): DeliveryInfo {
+  switch (status) {
+    case 'paid':
+    case 'running':
+    case 'failed_soft':
+      return {
+        detail: 'Final video is not ready yet. Refresh this page while worker runs.',
+        showWorkerHint: true
+      };
+    case 'failed_hard':
+    case 'refund_queued':
+    case 'manual_review':
+      return {
+        detail: 'Rendering did not complete for this order. Review retry/refund guidance below.',
+        showWorkerHint: false
+      };
+    case 'refunded':
+      return {
+        detail: 'This order is refunded and closed. Final video will not be delivered.',
+        showWorkerHint: false
+      };
+    case 'expired':
+      return {
+        detail: 'This order is expired and closed. Final delivery is unavailable.',
+        showWorkerHint: false
+      };
+    case 'delivered':
+      return {
+        detail: 'Delivery is marked complete, but final artifact link is not visible yet. Refresh shortly or contact support.',
+        showWorkerHint: false
+      };
+    default:
+      return {
+        detail: 'Final delivery starts after script approval and payment.',
+        showWorkerHint: false
+      };
+  }
 }
 
 async function loadOrder(args: {
@@ -513,6 +557,7 @@ export default async function OrderStatusPage({ params }: StatusPageProps): Prom
     : { data: null as WorkerHealthResponse | null, errorMessage: null as string | null };
   const workerHealth = workerHealthState.data;
   const latestWorker = workerHealth?.workers?.[0];
+  const deliveryInfo = resolveDeliveryInfo(data.order.status);
   const nextAction = resolveNextAction({
     status: data.order.status,
     workerHealth,
@@ -524,6 +569,16 @@ export default async function OrderStatusPage({ params }: StatusPageProps): Prom
   const succeededJobs = data.jobs.filter((job) => job.status === 'succeeded').length;
   const moderationScoreEntries = Object.entries(data.latestModeration?.aggregateScores ?? {});
   const moderationCheckEntries = Object.entries(data.latestModeration?.checks ?? {});
+  const failedModerationChecks = moderationCheckEntries
+    .filter(([, value]) => value.trim().toLowerCase() === 'failed')
+    .map(([key]) => key);
+  const moderationFallbackSummary =
+    data.latestModeration && data.latestModeration.summary.length === 0 && failedModerationChecks.length > 0
+      ? [
+          `Moderation flagged failed checks: ${failedModerationChecks.join(', ')}.`,
+          'Try clearer front-facing photos and a cleaner voice sample, then retry.'
+        ]
+      : [];
 
   return (
     <main>
@@ -619,13 +674,13 @@ export default async function OrderStatusPage({ params }: StatusPageProps): Prom
             </>
           ) : (
             <>
-              <p>Final video is not ready yet. Refresh this page while worker runs.</p>
-              {shouldLoadWorkerHealth && workerHealth && !workerHealth.ok ? (
+              <p>{deliveryInfo.detail}</p>
+              {deliveryInfo.showWorkerHint && shouldLoadWorkerHealth && workerHealth && !workerHealth.ok ? (
                 <p className="status-chip warning">
                   Worker heartbeat is stale/offline. Rendering will not complete until the worker service is healthy.
                 </p>
               ) : null}
-              {shouldLoadWorkerHealth && latestWorker ? (
+              {deliveryInfo.showWorkerHint && shouldLoadWorkerHealth && latestWorker ? (
                 <p className="mono">
                   latest_worker: {latestWorker.serviceName} / {latestWorker.status} / age=
                   {latestWorker.ageSec ?? 'unknown'}s
@@ -638,6 +693,7 @@ export default async function OrderStatusPage({ params }: StatusPageProps): Prom
 
       <OrderActions
         orderId={data.order.id}
+        orderStatus={data.order.status}
         parentRetryPolicy={data.parentRetryPolicy}
         latestGiftLink={data.latestGiftLink}
         parentAccessToken={parentAccessToken}
@@ -660,6 +716,12 @@ export default async function OrderStatusPage({ params }: StatusPageProps): Prom
             {data.latestModeration.summary.length > 0 ? (
               <ul>
                 {data.latestModeration.summary.map((line) => (
+                  <li key={line}>{line}</li>
+                ))}
+              </ul>
+            ) : moderationFallbackSummary.length > 0 ? (
+              <ul>
+                {moderationFallbackSummary.map((line) => (
                   <li key={line}>{line}</li>
                 ))}
               </ul>

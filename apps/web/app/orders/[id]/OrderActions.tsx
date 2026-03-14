@@ -24,8 +24,26 @@ interface LatestGiftLink {
   createdAt: string;
 }
 
+type OrderStatus =
+  | 'draft'
+  | 'intake_validating'
+  | 'needs_user_fix'
+  | 'awaiting_script_approval'
+  | 'script_regenerate'
+  | 'payment_pending'
+  | 'paid'
+  | 'running'
+  | 'failed_soft'
+  | 'failed_hard'
+  | 'refund_queued'
+  | 'manual_review'
+  | 'delivered'
+  | 'refunded'
+  | 'expired';
+
 interface OrderActionsProps {
   orderId: string;
+  orderStatus: OrderStatus;
   parentRetryPolicy: ParentRetryPolicy;
   latestGiftLink: LatestGiftLink | null;
   parentAccessToken: string | null;
@@ -64,6 +82,7 @@ function validateRecipientEmail(value: string): string | null {
 
 export function OrderActions({
   orderId,
+  orderStatus,
   parentRetryPolicy: initialRetryPolicy,
   latestGiftLink,
   parentAccessToken,
@@ -87,6 +106,10 @@ export function OrderActions({
   const [sessionRecoveryMessage, setSessionRecoveryMessage] = useState(
     parentAccessToken ? '' : 'Parent session missing. Restore it before retrying order actions.'
   );
+  const giftBlockedByStatus = orderStatus === 'refunded' || orderStatus === 'expired';
+  const giftBlockedStatusReason = giftBlockedByStatus
+    ? `Order status ${orderStatus} is closed; gift actions are unavailable.`
+    : null;
 
   const retryDisabled = useMemo(
     () => retryLoading || !retryPolicy.canRetry || !parentAccessToken || Boolean(sessionRecoveryMessage),
@@ -106,11 +129,16 @@ export function OrderActions({
   }, [retryLoading, retryPolicy.canRetry, retryPolicy.reason, sessionRecoveryMessage]);
 
   const hasPendingGiftLink = giftLinkState?.status === 'pending';
-  const resendGiftDisabled = giftLoading || !parentAccessToken || !hasPendingGiftLink || Boolean(sessionRecoveryMessage);
-  const revokeGiftDisabled = giftLoading || !parentAccessToken || !hasPendingGiftLink || Boolean(sessionRecoveryMessage);
+  const resendGiftDisabled =
+    giftLoading || !parentAccessToken || !hasPendingGiftLink || Boolean(sessionRecoveryMessage) || giftBlockedByStatus;
+  const revokeGiftDisabled =
+    giftLoading || !parentAccessToken || !hasPendingGiftLink || Boolean(sessionRecoveryMessage) || giftBlockedByStatus;
   const resendGiftDisabledReason = useMemo(() => {
     if (sessionRecoveryMessage) {
       return sessionRecoveryMessage;
+    }
+    if (giftBlockedStatusReason) {
+      return giftBlockedStatusReason;
     }
     if (giftLoading) {
       return 'Gift action in progress.';
@@ -119,11 +147,14 @@ export function OrderActions({
       return 'Create a pending gift link before resending or revoking.';
     }
     return null;
-  }, [giftLoading, hasPendingGiftLink, sessionRecoveryMessage]);
-  const createGiftDisabled = giftLoading || !parentAccessToken || Boolean(sessionRecoveryMessage);
+  }, [giftBlockedStatusReason, giftLoading, hasPendingGiftLink, sessionRecoveryMessage]);
+  const createGiftDisabled = giftLoading || !parentAccessToken || Boolean(sessionRecoveryMessage) || giftBlockedByStatus;
   const createGiftDisabledReason = useMemo(() => {
     if (sessionRecoveryMessage) {
       return sessionRecoveryMessage;
+    }
+    if (giftBlockedStatusReason) {
+      return giftBlockedStatusReason;
     }
     if (giftLoading) {
       return 'Gift action in progress.';
@@ -132,7 +163,7 @@ export function OrderActions({
       return 'Parent session missing. Restore it before creating a gift link.';
     }
     return null;
-  }, [giftLoading, parentAccessToken, sessionRecoveryMessage]);
+  }, [giftBlockedStatusReason, giftLoading, parentAccessToken, sessionRecoveryMessage]);
   const giftPendingLabel = useMemo(() => {
     if (!giftLoading) {
       return null;
@@ -424,6 +455,7 @@ export function OrderActions({
         ) : (
           <p>No gift link created for this order yet.</p>
         )}
+        {giftBlockedStatusReason ? <p>{giftBlockedStatusReason}</p> : null}
         <label htmlFor="giftRecipient">Recipient Email</label>
         <input
           id="giftRecipient"

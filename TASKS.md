@@ -258,6 +258,7 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
   - second pass shipped: jobs/provider tasks/scene-plan raw JSON moved under collapsed technical diagnostics
   - third pass shipped: retry/gift flows now show action-specific pending labels, explicit create/resend/revoke disabled reasons, and structured success/error/info confirmations
   - fourth pass shipped: `paid`/`running`/`failed_soft` order states now surface worker heartbeat diagnostics from `/health/worker`, with explicit stale/offline guidance when rendering cannot progress
+  - fifth pass shipped: delivery card copy is now status-aware for closed orders (`refunded`/`expired`) and moderation fallback summary now explains failed checks when provider summary text is empty
 - [ ] Accessibility and interaction quality (`apps/web/app/globals.css`, `apps/web/app/StoryWorldsSection.tsx`)
   - first pass shipped: stronger global `:focus-visible` rings and explicit invalid/error input states for form controls
   - first pass shipped: gift-link recipient email now exposes field-level validation messaging with `aria-invalid` semantics

@@ -6,7 +6,7 @@ Template-first MVP scaffold for personalized cinematic child story videos.
 
 If you are opening this repo in a new Codex 5.3 session, start with [TASKS.md](/home/totallymajor/projects/LittleLegendStudios/TASKS.md). Its `New Session Handoff` section is the explicit repo-state summary, key entrypoints list, and next-work ledger.
 
-For scene-creation internals and end-to-end architecture flow, use [docs/SCENE_PIPELINE_ARCHITECTURE.md](/home/totallymajor/projects/LittleLegendStudios/docs/SCENE_PIPELINE_ARCHITECTURE.md).
+For architecture flow and child-director workflow context, use [docs/architecture/workflows.md](/home/totallymajor/projects/LittleLegendStudios/docs/architecture/workflows.md) and [docs/decisions/adr-003-preview-pipeline.md](/home/totallymajor/projects/LittleLegendStudios/docs/decisions/adr-003-preview-pipeline.md).
 
 ## Stack
 
@@ -198,6 +198,7 @@ This repo is no longer just a thin scaffold. The current build includes:
   - guided 4-step create-flow UI with per-step status messaging and upload progress feedback
   - drag/drop upload zones plus per-file remove/retry controls during intake
   - thumbnail-style previews for selected photos in the intake flow
+  - persistent intake-requirement checklist + upload-readiness guidance so backend constraints stay visible before upload starts (5-15 photos, one voice sample, accepted formats/duration)
 
 - Script generation + review
   - manifest-driven script planning
@@ -237,6 +238,8 @@ This repo is no longer just a thin scaffold. The current build includes:
   - parent auth + ownership enforcement
   - gift link create / inspect / redeem / resend / revoke / regenerate
   - admin render incident dashboard for worker heartbeat + queue dead-letter monitoring/retry, including auto-refresh + server-side dead-letter page/filter views
+  - responsive admin table hardening with priority-column collapse on dense operational views
+  - phone-sized admin card fallbacks across high-frequency operational list views (`render-incident`, `moderation-reviews`, `email-notifications`, `retry-history`, `provider-task-triage`)
   - admin dead-letter retry view
   - email notification failure view
   - retry request history view
@@ -259,23 +262,9 @@ For the full build ledger, use [TASKS.md](/home/totallymajor/projects/LittleLege
 
 ## Remaining Work
 
-The main unfinished areas in the repo are:
+All open tasks and backlog tracking are maintained in one place: [TASKS.md](/home/totallymajor/projects/LittleLegendStudios/TASKS.md).
 
-- Moderation hardening
-  - current moderation now returns explicit decisions and evidence, but is still heuristic-first
-  - next step is provider-grade photo safety, face/quality validation, and stronger voice quality checks
-
-- Reusable character identity
-  - the worker now persists and reuses character identities across matching photo sets
-  - it still does not expose parent-facing identity management or curation controls
-
-- Final video polish
-  - the real compose pipeline exists
-  - subtitle branding, finishing quality, and deeper mix polish still need another pass
-
-- Parent/admin web UX hardening
-  - the core flows are functional, but key screens still need product-grade UX refinement (guided intake, upload progress clarity, parent-focused status readability)
-  - admin operational pages still need a responsiveness/scannability pass for dense tables and action-heavy workflows
+Use `TASKS.md` `Next Up`, `Architecture And Scale Hardening Backlog (2026-03-14)`, and `Remaining Work Summary` as the canonical planning source.
 
 ## Notes
 

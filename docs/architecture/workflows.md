@@ -10,7 +10,8 @@
 
 ## Current slice status
 - Steps 1-3 are complete in the current repo.
-- Step 4 is started behind `NEXT_PUBLIC_CHILD_DIRECTOR_RELEASE2_ENABLED` with API-backed preview-session persistence and local fallback.
+- Step 4 core implementation is shipped behind `NEXT_PUBLIC_CHILD_DIRECTOR_RELEASE2_ENABLED` with API-backed preview-session persistence, local fallback, constrained branch-choice summary, and structured prompt-bundle export support.
+- Steps 5-6 are still planned and not yet shipped.
 
 ## Guardrails
 - Any incomplete slice must be feature-flagged.

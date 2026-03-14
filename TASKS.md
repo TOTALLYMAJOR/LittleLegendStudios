@@ -33,7 +33,8 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
   - `apps/api/src/provider-routes.ts`: provider-facing routes/contracts for moderation, voice, scene render, and compose
   - `apps/worker/src/index.ts`: orchestration for moderation, voice, render, compose, retry, and delivery
   - `apps/web/app/create/page.tsx`: main parent intake and session recovery entrypoint
-  - `docs/SCENE_PIPELINE_ARCHITECTURE.md`: architecture artifact for scene creation/render composition and core system flow
+  - `docs/architecture/workflows.md`: child-director workflow status and phased slice context
+  - `docs/decisions/adr-003-preview-pipeline.md`: preview-pipeline decision context and constraints
   - `scripts/smoke.mjs`: end-to-end automation for the intended happy path
   - `packages/shared/src/*`: shared domain model used across app boundaries
 
@@ -46,7 +47,7 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
   - moderation is explicit and structured, but still heuristic-first rather than production-grade model-backed review
   - character identity reuse exists in the pipeline, but there is no parent-facing management surface
   - final compose works, but subtitle branding, mix polish, and finishing quality still need more work
-  - parent/admin web UX is functional but still scaffold-level in key areas (guided intake, upload clarity, parent-facing status readability, admin mobile responsiveness, and accessibility polish)
+  - parent/admin web UX has shipped multi-pass intake/status/admin responsiveness improvements, but still needs accessibility polish and product-grade consistency refinement
 
 - Working assumptions for the next session
   - prefer updating this file when meaningful build state changes land
@@ -411,6 +412,28 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
 - [ ] Ship a product-grade parent/admin UX pass across intake, status, admin, and accessibility surfaces
   - implement the `UI/UX Review Backlog (2026-03-09)` items in phased slices with smoke-verified behavior parity
   - prioritize parent conversion/clarity first, then admin responsiveness and deeper design-system consistency
+
+## Architecture And Scale Hardening Backlog (2026-03-14)
+
+- [ ] Add provider webhook + retry failure-mode contract/integration tests (highest near-term ROI)
+  - cover `/provider-tasks/webhook` auth and payload validation behavior
+  - cover dead-letter and provider-task retry flows for both success and persistent-failure paths
+  - document expected failure-mode outcomes so smoke/manual verification stays consistent
+- [ ] Add secret/token lifecycle hardening runbook for rotation and observability
+  - define rotation cadence and rollout steps for `PARENT_AUTH_SECRET`, `PROVIDER_AUTH_TOKEN`, and `PROVIDER_WEBHOOK_SECRET`
+  - define minimum audit/telemetry fields for auth-token failures and webhook auth rejects
+  - define emergency invalidate-and-recover procedure for leaked token scenarios
+- [ ] Add auto-generated ERD artifact from migration SQL for change reviewability
+  - generate from `infra/sql/*.sql` during docs refresh or CI
+  - publish artifact under `docs/architecture` and keep generation command documented
+- [ ] Introduce bounded-context data-access modules to reduce SQL sprawl without hiding domain intent
+  - start incrementally with high-churn areas (`orders`, `jobs`, `provider_tasks`)
+  - keep SQL explicit but move query construction out of route handlers/orchestrators
+  - add domain-level tests around moved query modules before wider rollout
+- [ ] Evaluate split options for high-churn operational data (`jobs`, `provider_tasks`)
+  - capture current query/lock/latency baseline first
+  - compare dedicated schema vs service-boundary options with migration/ops cost
+  - defer implementation until metrics demonstrate clear scale or coupling pressure
 
 ## Remaining Work Summary
 

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000';
 
@@ -63,6 +63,20 @@ export default function AdminRetryHistoryPage(): JSX.Element {
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('Enter the admin token, then load retry request history.');
   const [data, setData] = useState<RetryHistoryResponse | null>(null);
+  const [isCompactViewport, setIsCompactViewport] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const mediaQuery = window.matchMedia('(max-width: 640px)');
+    const updateViewport = (): void => setIsCompactViewport(mediaQuery.matches);
+    updateViewport();
+
+    mediaQuery.addEventListener('change', updateViewport);
+    return () => mediaQuery.removeEventListener('change', updateViewport);
+  }, []);
 
   async function loadRetryHistory(): Promise<void> {
     if (!adminToken.trim()) {
@@ -227,40 +241,64 @@ export default function AdminRetryHistoryPage(): JSX.Element {
         {!data ? <p>No data loaded yet.</p> : null}
         {data && data.retryRequests.length === 0 ? <p>No retry requests matched the current filters.</p> : null}
         {data && data.retryRequests.length > 0 ? (
-          <div className="table-wrap">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th className="col-hide-mobile">Created</th>
-                  <th>Order</th>
-                  <th className="col-hide-tablet">Actor</th>
-                  <th className="col-hide-mobile">Requested Status</th>
-                  <th>Outcome</th>
-                  <th>Reason</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.retryRequests.map((retry) => (
-                  <tr key={retry.id}>
-                    <td className="col-hide-mobile">{new Date(retry.createdAt).toLocaleString()}</td>
-                    <td>
-                      <div className="mono">{retry.orderId}</div>
-                      <div>Current: {retry.currentOrderStatus}</div>
-                      <div>{retry.parentEmail}</div>
-                    </td>
-                    <td className="col-hide-tablet">{formatActorLabel(retry.actor)}</td>
-                    <td className="col-hide-mobile">{retry.requestedStatus}</td>
-                    <td>
-                      <span className={`status-chip ${retry.accepted ? 'success' : 'warning'}`}>
-                        {retry.accepted ? 'Accepted' : 'Rejected'}
-                      </span>
-                    </td>
-                    <td>{retry.reason ?? 'No reason provided.'}</td>
+          isCompactViewport ? (
+            <div className="mobile-data-list">
+              {data.retryRequests.map((retry) => (
+                <article key={retry.id} className="mobile-data-card">
+                  <div className="mobile-data-card-header">
+                    <div>
+                      <p className="mobile-data-kicker">Order</p>
+                      <p className="mono mobile-data-value">{retry.orderId}</p>
+                    </div>
+                    <span className={`status-chip ${retry.accepted ? 'success' : 'warning'}`}>
+                      {retry.accepted ? 'Accepted' : 'Rejected'}
+                    </span>
+                  </div>
+                  <p className="mobile-data-value">Created: {new Date(retry.createdAt).toLocaleString()}</p>
+                  <p className="mobile-data-value">Actor: {formatActorLabel(retry.actor)}</p>
+                  <p className="mobile-data-value">Current status: {retry.currentOrderStatus}</p>
+                  <p className="mobile-data-value">Requested status: {retry.requestedStatus}</p>
+                  <p className="mobile-data-value">Parent: {retry.parentEmail}</p>
+                  <p className="mobile-data-value">Reason: {retry.reason ?? 'No reason provided.'}</p>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <div className="table-wrap">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th className="col-hide-mobile">Created</th>
+                    <th>Order</th>
+                    <th className="col-hide-tablet">Actor</th>
+                    <th className="col-hide-mobile">Requested Status</th>
+                    <th>Outcome</th>
+                    <th>Reason</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {data.retryRequests.map((retry) => (
+                    <tr key={retry.id}>
+                      <td className="col-hide-mobile">{new Date(retry.createdAt).toLocaleString()}</td>
+                      <td>
+                        <div className="mono">{retry.orderId}</div>
+                        <div>Current: {retry.currentOrderStatus}</div>
+                        <div>{retry.parentEmail}</div>
+                      </td>
+                      <td className="col-hide-tablet">{formatActorLabel(retry.actor)}</td>
+                      <td className="col-hide-mobile">{retry.requestedStatus}</td>
+                      <td>
+                        <span className={`status-chip ${retry.accepted ? 'success' : 'warning'}`}>
+                          {retry.accepted ? 'Accepted' : 'Rejected'}
+                        </span>
+                      </td>
+                      <td>{retry.reason ?? 'No reason provided.'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )
         ) : null}
       </section>
     </main>

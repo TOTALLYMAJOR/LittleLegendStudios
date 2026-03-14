@@ -272,6 +272,7 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
   - second pass shipped: priority-column collapse now hides lower-priority columns on tablet/mobile in the densest admin tables (`render-incident`, `moderation-reviews`, `retention-history`) while keeping primary action/status columns visible
   - third pass shipped: priority-column collapse coverage now extends to all remaining admin tables (`email-notifications`, `retry-history`, `provider-task-triage`) for consistent small-screen behavior across the admin suite
   - fourth pass shipped: true mobile card fallbacks now replace dense tables at `<=640px` for `render-incident` and `moderation-reviews`, preserving key actions/status without horizontal-table dependency
+  - fifth pass shipped: true mobile card fallbacks now also cover `email-notifications` and `retry-history`, so failure/retry triage remains readable without table scrolling on phones
   - improve wide-table behavior for smaller screens (mobile card fallback or priority-column collapse)
   - standardize status/feedback surfaces and spacing for dense operational pages
   - preserve high-information admin workflows while improving scannability

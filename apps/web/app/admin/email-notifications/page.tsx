@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000';
 
@@ -71,6 +71,20 @@ export default function AdminEmailFailuresPage(): JSX.Element {
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('Enter the admin token, then load recent failed email notifications.');
   const [data, setData] = useState<EmailFailureResponse | null>(null);
+  const [isCompactViewport, setIsCompactViewport] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const mediaQuery = window.matchMedia('(max-width: 640px)');
+    const updateViewport = (): void => setIsCompactViewport(mediaQuery.matches);
+    updateViewport();
+
+    mediaQuery.addEventListener('change', updateViewport);
+    return () => mediaQuery.removeEventListener('change', updateViewport);
+  }, []);
 
   async function loadFailures(): Promise<void> {
     if (!adminToken.trim()) {
@@ -224,47 +238,77 @@ export default function AdminEmailFailuresPage(): JSX.Element {
         {!data ? <p>No data loaded yet.</p> : null}
         {data && data.failures.length === 0 ? <p>No failed notifications matched the current filters.</p> : null}
         {data && data.failures.length > 0 ? (
-          <div className="table-wrap">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th className="col-hide-mobile">Created</th>
-                  <th>Order</th>
-                  <th>Type</th>
-                  <th className="col-hide-tablet">Recipient</th>
-                  <th className="col-hide-mobile">Provider</th>
-                  <th className="col-hide-tablet">Subject</th>
-                  <th>Error</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.failures.map((failure) => (
-                  <tr key={failure.id}>
-                    <td className="col-hide-mobile">{new Date(failure.createdAt).toLocaleString()}</td>
-                    <td>
-                      <div className="mono">{failure.orderId}</div>
-                      <div>{failure.orderStatus}</div>
-                      <div>{failure.parentEmail}</div>
-                    </td>
-                    <td>{formatTypeLabel(failure.notificationType)}</td>
-                    <td className="col-hide-tablet">{failure.recipientEmail}</td>
-                    <td className="col-hide-mobile">
-                      <div>{failure.provider}</div>
-                      {failure.providerMessageId ? <div className="mono">{failure.providerMessageId}</div> : null}
-                    </td>
-                    <td className="col-hide-tablet">{failure.subject}</td>
-                    <td>
-                      <p>{failure.errorText ?? 'No provider error text recorded.'}</p>
-                      <details>
-                        <summary>Payload</summary>
-                        <pre>{JSON.stringify(failure.payload, null, 2)}</pre>
-                      </details>
-                    </td>
+          isCompactViewport ? (
+            <div className="mobile-data-list">
+              {data.failures.map((failure) => (
+                <article key={failure.id} className="mobile-data-card">
+                  <div className="mobile-data-card-header">
+                    <div>
+                      <p className="mobile-data-kicker">Order</p>
+                      <p className="mono mobile-data-value">{failure.orderId}</p>
+                    </div>
+                    <span className="status-chip warning">{formatTypeLabel(failure.notificationType)}</span>
+                  </div>
+                  <p className="mobile-data-value">Status: {failure.orderStatus}</p>
+                  <p className="mobile-data-value">Parent: {failure.parentEmail}</p>
+                  <p className="mobile-data-value">Recipient: {failure.recipientEmail}</p>
+                  <p className="mobile-data-value">
+                    Provider: {failure.provider}
+                    {failure.providerMessageId ? ` (${failure.providerMessageId})` : ''}
+                  </p>
+                  <p className="mobile-data-value">Subject: {failure.subject}</p>
+                  <p className="mobile-data-value">Created: {new Date(failure.createdAt).toLocaleString()}</p>
+                  <p className="mobile-data-value">Error: {failure.errorText ?? 'No provider error text recorded.'}</p>
+                  <details>
+                    <summary>Payload</summary>
+                    <pre>{JSON.stringify(failure.payload, null, 2)}</pre>
+                  </details>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <div className="table-wrap">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th className="col-hide-mobile">Created</th>
+                    <th>Order</th>
+                    <th>Type</th>
+                    <th className="col-hide-tablet">Recipient</th>
+                    <th className="col-hide-mobile">Provider</th>
+                    <th className="col-hide-tablet">Subject</th>
+                    <th>Error</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {data.failures.map((failure) => (
+                    <tr key={failure.id}>
+                      <td className="col-hide-mobile">{new Date(failure.createdAt).toLocaleString()}</td>
+                      <td>
+                        <div className="mono">{failure.orderId}</div>
+                        <div>{failure.orderStatus}</div>
+                        <div>{failure.parentEmail}</div>
+                      </td>
+                      <td>{formatTypeLabel(failure.notificationType)}</td>
+                      <td className="col-hide-tablet">{failure.recipientEmail}</td>
+                      <td className="col-hide-mobile">
+                        <div>{failure.provider}</div>
+                        {failure.providerMessageId ? <div className="mono">{failure.providerMessageId}</div> : null}
+                      </td>
+                      <td className="col-hide-tablet">{failure.subject}</td>
+                      <td>
+                        <p>{failure.errorText ?? 'No provider error text recorded.'}</p>
+                        <details>
+                          <summary>Payload</summary>
+                          <pre>{JSON.stringify(failure.payload, null, 2)}</pre>
+                        </details>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )
         ) : null}
       </section>
     </main>

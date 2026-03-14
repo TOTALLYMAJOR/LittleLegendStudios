@@ -311,6 +311,7 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
   - API now supports `POST`/`GET` child-director preview sessions with optional parent token linkage and persisted parent-approval request metadata
   - preview-session payload now includes constrained branch-choice summary (max 3) and short-audio prompt metadata
   - preview-session payload now includes a structured robust prompt bundle (system/story/audio/parent summary) and the explorer board supports one-click prompt JSON copy for prompt-testing loops
+  - explorer board visual pass now includes child-friendly presentation cues (playful hero panel, energy meter, sticker-style beat cards, and friendlier action copy) while preserving existing gate + session logic
   - shared tests now validate preview-session normalization and branch-choice constraint behavior
   - `/create` now always shows child-director callout + flag status so the interactive path is discoverable even when the route flag is off
 - [x] Added Vercel preview fallback defaults for child-director flags (2026-03-13)

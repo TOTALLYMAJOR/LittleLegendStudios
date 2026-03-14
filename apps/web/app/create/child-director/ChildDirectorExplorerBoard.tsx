@@ -60,6 +60,8 @@ export function ChildDirectorExplorerBoard({ release2Enabled = false }: ChildDir
     majorDecisionCount,
     contentRiskScore: contentRiskPct / 100
   });
+  const adventureEnergy = Math.max(0, Math.min(100, Math.round(((runtimeTargetSec - 45) / (180 - 45)) * 100)));
+  const safetyTone = contentRiskPct <= 30 ? 'gentle' : contentRiskPct <= 60 ? 'balanced' : 'high-alert';
 
   const release2PromptBundle = useMemo<ExplorerPromptBundle | null>(() => {
     if (!release2PreviewSession) {
@@ -259,12 +261,21 @@ export function ChildDirectorExplorerBoard({ release2Enabled = false }: ChildDir
   }
 
   return (
-    <section className="card">
-      <header className={styles.header}>
-        <h2>Explorer Story Lane</h2>
+    <section className={`card ${styles.explorerShell}`}>
+      <header className={styles.kidHero}>
+        <p className={styles.kidHeroEyebrow}>Explorer Playground</p>
+        <h2>Build Your Adventure</h2>
         <p>
-          Child-facing prototype: drag cards to shape the story order. Arrow controls are included as touch and keyboard fallback.
+          Drag story beats into your favorite order, then save a release-2 preview. Arrow controls are included as a touch and keyboard fallback.
         </p>
+        <div className={styles.heroBadges}>
+          <span>Energy: {adventureEnergy}%</span>
+          <span>Safety tone: {safetyTone}</span>
+          <span>Choices: {choices.length}</span>
+        </div>
+        <div className={styles.energyRail} aria-label="Adventure energy meter">
+          <span style={{ width: `${String(adventureEnergy)}%` }} />
+        </div>
       </header>
 
       <div className={styles.lane} role="list" aria-label="Explorer story beats">
@@ -282,6 +293,7 @@ export function ChildDirectorExplorerBoard({ release2Enabled = false }: ChildDir
               onDrop={(event) => onDropAtIndex(event, index)}
               onDragEnd={() => setDraggingChoiceId(null)}
             >
+              <span className={styles.cardSticker}>Beat {String(index + 1)}</span>
               <div className={styles.cardMeta}>
                 <span className={styles.cardIndex}>{String(index + 1).padStart(2, '0')}</span>
                 <h3>{choice.title}</h3>
@@ -289,14 +301,14 @@ export function ChildDirectorExplorerBoard({ release2Enabled = false }: ChildDir
               <p>{choice.detail}</p>
               <div className={styles.actions}>
                 <button type="button" disabled={index === 0} onClick={() => moveChoiceByDelta(index, -1)}>
-                  Move Left
+                  Move Earlier
                 </button>
                 <button
                   type="button"
                   disabled={index === choices.length - 1}
                   onClick={() => moveChoiceByDelta(index, 1)}
                 >
-                  Move Right
+                  Move Later
                 </button>
               </div>
             </article>
@@ -305,11 +317,11 @@ export function ChildDirectorExplorerBoard({ release2Enabled = false }: ChildDir
       </div>
 
       <div className={styles.dropTail} onDragOver={(event) => event.preventDefault()} onDrop={onDropAtEnd}>
-        Drop here to move a card to the end.
+        Drop here to place this beat at the finale.
       </div>
 
       <section className={styles.gateControls}>
-        <h3>Parent Approval Gate</h3>
+        <h3>Grown-up Checkpoint</h3>
         <label htmlFor="runtime-target">
           Runtime target: <strong>{runtimeTargetSec}s</strong>
         </label>
@@ -368,7 +380,7 @@ export function ChildDirectorExplorerBoard({ release2Enabled = false }: ChildDir
       </section>
 
       <section className={styles.gateControls}>
-        <h3>Release 2 Pilot Gate</h3>
+        <h3>Release 2 Save + Prompt Kit</h3>
         <p>
           Release 2 flag status: <strong>{release2Enabled ? 'enabled' : 'disabled'}</strong>
         </p>
@@ -399,7 +411,7 @@ export function ChildDirectorExplorerBoard({ release2Enabled = false }: ChildDir
         {promptCopyMessage ? <p className={styles.promptStatus}>{promptCopyMessage}</p> : null}
       </section>
 
-      <p className={styles.status} aria-live="polite">
+      <p className={styles.statusBubble} aria-live="polite">
         {statusMessage}
       </p>
 

@@ -201,7 +201,7 @@ const statusMessageMap: Record<OrderStatus, string> = {
   awaiting_script_approval: 'Review and approve the generated script to continue.',
   script_regenerate: 'A new script version is being generated.',
   payment_pending: 'Script approved. Complete checkout to start rendering.',
-  paid: 'Payment captured. The render job is queued.',
+  paid: 'Payment captured. Render is queued and should start shortly.',
   running: 'Your cinematic video is rendering now.',
   failed_soft: 'A transient provider issue occurred. Automatic retry is in progress.',
   failed_hard: 'Rendering failed after retries or hit a hard policy/provider error.',
@@ -234,6 +234,12 @@ function resolveNextAction(status: OrderStatus): NextActionInfo {
         ctaLabel: 'Open Create Flow'
       };
     case 'paid':
+      return {
+        title: 'Confirm Render Starts',
+        detail: 'If status stays queued for more than a couple minutes, use Parent Retry below to requeue rendering.',
+        ctaHref: null,
+        ctaLabel: null
+      };
     case 'running':
     case 'failed_soft':
       return {

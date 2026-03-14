@@ -100,7 +100,7 @@ export function OrderActions({
       return 'Retry request in progress.';
     }
     if (!retryPolicy.canRetry) {
-      return retryPolicy.reason ?? 'Retry is available after a failed render.';
+      return retryPolicy.reason ?? 'Retry is available for queued or failed renders.';
     }
     return null;
   }, [retryLoading, retryPolicy.canRetry, retryPolicy.reason, sessionRecoveryMessage]);

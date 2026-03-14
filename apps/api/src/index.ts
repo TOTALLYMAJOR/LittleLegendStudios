@@ -366,7 +366,7 @@ const MIN_PHOTO_UPLOADS = 5;
 const MAX_PHOTO_UPLOADS = 15;
 const REQUIRED_VOICE_UPLOADS = 1;
 const MAX_SCRIPT_VERSIONS_PER_ORDER = 3;
-const parentRetryableStatuses: OrderStatus[] = ['failed_soft', 'failed_hard', 'manual_review'];
+const parentRetryableStatuses: OrderStatus[] = ['paid', 'failed_soft', 'failed_hard', 'manual_review'];
 const postPaymentStatuses = new Set<OrderStatus>([
   'paid',
   'running',

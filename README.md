@@ -135,38 +135,52 @@ Local-to-preview parity:
 - deployed preview:
   - use the same `NEXT_PUBLIC_API_BASE_URL` shape you expect in production/staging
 
-## Railway API Deploy
+## Railway API + Worker Deploy
 
-For the API, use Railway rather than trying to force the Fastify + Postgres + Redis service onto Vercel.
+Use Railway for both API and worker surfaces. If the worker service is not running, paid orders stay queued and final video delivery will not complete.
 
 Recommended Railway service setup:
-- repo root: `/`
-- build command: `npm run build:api`
-- start command: `npm run start:api`
-- pre-deploy command: `npm run migrate:api`
+- API service
+  - repo root: `/`
+  - build command: `npm run build:api`
+  - start command: `npm run start:api`
+  - pre-deploy command: `npm run migrate:api`
+- Worker service
+  - repo root: `/`
+  - build command: `npm run build:worker`
+  - start command: `npm run start:worker`
+  - no pre-deploy command
 
 Why this shape:
 - the repo is a shared npm monorepo
-- the API depends on the local `@little/shared` package
-- building from the repo root keeps shared package compilation explicit instead of relying on stale checked-in artifacts
+- API and worker both depend on the local `@little/shared` package
+- building from repo root keeps shared package compilation explicit instead of relying on stale checked-in artifacts
 
 Required Railway envs:
-- `DATABASE_URL`
-- `REDIS_URL`
-- `WEB_APP_BASE_URL`
-- `NEXT_PUBLIC_API_BASE_URL`
-- `PUBLIC_ASSET_BASE_URL`
-- `ASSET_SIGNING_SECRET`
-- `PARENT_AUTH_SECRET`
+- API service
+  - `DATABASE_URL`
+  - `REDIS_URL`
+  - `WEB_APP_BASE_URL`
+  - `NEXT_PUBLIC_API_BASE_URL`
+  - `PUBLIC_ASSET_BASE_URL`
+  - `ASSET_SIGNING_SECRET`
+  - `PARENT_AUTH_SECRET`
+- Worker service
+  - `DATABASE_URL`
+  - `REDIS_URL`
+  - `WEB_APP_BASE_URL`
+  - `PUBLIC_ASSET_BASE_URL`
+  - `ASSET_SIGNING_SECRET`
+  - provider-mode envs needed for your chosen run mode (`*_PROVIDER_MODE`, `*_PROVIDER_BASE_URL`, and provider API keys when not using stub)
 
 Port behavior:
 - local dev still uses `API_PORT`
 - Railway injects `PORT`, and the API now binds to that automatically in production
 
 Operational notes:
-- `GET /health` is available for health checks
+- `GET /health` is available for API health checks
 - Railway pre-deploy commands run in a separate container, so use them for migrations only
-- keep `PROVIDER_INTEGRATION_MODE=stub` for an initial UI/staging deploy unless you are also wiring real provider secrets
+- keep `PROVIDER_INTEGRATION_MODE=stub` (and worker provider modes `stub`) for initial UI/staging deploys unless real providers are configured
 
 ## Built Features
 
@@ -216,7 +230,7 @@ This repo is no longer just a thin scaffold. The current build includes:
 
 - Parent + admin experience
   - parent order status page with provider-task visibility
-  - parent retry endpoint with limits
+  - parent retry endpoint with limits (including queued `paid` orders when render start needs requeue)
   - parent auth + ownership enforcement
   - gift link create / inspect / redeem / resend / revoke / regenerate
   - admin dead-letter retry view

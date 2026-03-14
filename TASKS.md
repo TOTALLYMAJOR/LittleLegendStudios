@@ -149,6 +149,7 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
   - render lifecycle visibility
   - structured moderation report visibility (decision, checks, score bands, reasons)
   - parent-facing retry endpoint with limits
+  - parent retry now also supports `paid` orders so queued-but-not-started renders can be requeued without admin intervention
   - gift link create, inspect, redeem, resend, revoke, regenerate
 
 - [x] Admin + support tooling

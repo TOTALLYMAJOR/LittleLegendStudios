@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000';
 
@@ -55,6 +55,20 @@ export default function AdminProviderTaskTriagePage(): JSX.Element {
   const [message, setMessage] = useState('Load failed provider tasks to inspect provider errors and retry individual tasks.');
   const [tasks, setTasks] = useState<ProviderTask[]>([]);
   const [activeTaskId, setActiveTaskId] = useState('');
+  const [isCompactViewport, setIsCompactViewport] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const mediaQuery = window.matchMedia('(max-width: 640px)');
+    const updateViewport = (): void => setIsCompactViewport(mediaQuery.matches);
+    updateViewport();
+
+    mediaQuery.addEventListener('change', updateViewport);
+    return () => mediaQuery.removeEventListener('change', updateViewport);
+  }, []);
 
   const providerSummary = useMemo(() => {
     const counts = new Map<string, number>();
@@ -267,54 +281,88 @@ export default function AdminProviderTaskTriagePage(): JSX.Element {
         {tasks.length === 0 ? (
           <p>No failed provider tasks matched the current filters.</p>
         ) : (
-          <div className="table-wrap">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th className="col-hide-mobile">Updated</th>
-                  <th>Provider Task</th>
-                  <th>Order</th>
-                  <th className="col-hide-tablet">Provider</th>
-                  <th>Error</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {tasks.map((task) => (
-                  <tr key={task.providerTaskId}>
-                    <td className="col-hide-mobile">
-                      <div>{new Date(task.updatedAt).toLocaleString()}</div>
-                      {task.lastPolledAt ? <div>Polled: {new Date(task.lastPolledAt).toLocaleString()}</div> : null}
-                    </td>
-                    <td>
-                      <div className="mono">{task.providerTaskId}</div>
-                      <div>{task.jobType ?? 'unknown'}</div>
-                      {task.artifactKey ? <div className="mono">{task.artifactKey}</div> : null}
-                    </td>
-                    <td>{task.orderId ? <span className="mono">{task.orderId}</span> : 'None'}</td>
-                    <td className="col-hide-tablet">{task.provider}</td>
-                    <td>
-                      <p>{task.errorText ?? 'No provider error text recorded.'}</p>
-                      <details>
-                        <summary>Output</summary>
-                        <pre>{JSON.stringify(task.output, null, 2)}</pre>
-                      </details>
-                    </td>
-                    <td>
-                      <div className="admin-inline-actions">
-                        <button disabled={Boolean(activeTaskId)} onClick={() => refreshTask(task.providerTaskId)}>
-                          {activeTaskId === task.providerTaskId ? 'Working...' : 'Refresh'}
-                        </button>
-                        <button disabled={Boolean(activeTaskId)} onClick={() => retryTask(task.providerTaskId)}>
-                          {activeTaskId === task.providerTaskId ? 'Working...' : 'Retry'}
-                        </button>
-                      </div>
-                    </td>
+          isCompactViewport ? (
+            <div className="mobile-data-list">
+              {tasks.map((task) => (
+                <article key={task.providerTaskId} className="mobile-data-card">
+                  <div className="mobile-data-card-header">
+                    <div>
+                      <p className="mobile-data-kicker">Provider Task</p>
+                      <p className="mono mobile-data-value">{task.providerTaskId}</p>
+                    </div>
+                    <span className="status-chip warning">{task.provider}</span>
+                  </div>
+                  <p className="mobile-data-value">Updated: {new Date(task.updatedAt).toLocaleString()}</p>
+                  {task.lastPolledAt ? <p className="mobile-data-value">Polled: {new Date(task.lastPolledAt).toLocaleString()}</p> : null}
+                  <p className="mobile-data-value">Job type: {task.jobType ?? 'unknown'}</p>
+                  {task.artifactKey ? <p className="mono mobile-data-value">Artifact: {task.artifactKey}</p> : null}
+                  <p className="mobile-data-value">Order: {task.orderId ?? 'None'}</p>
+                  <p className="mobile-data-value">Error: {task.errorText ?? 'No provider error text recorded.'}</p>
+                  <details>
+                    <summary>Output</summary>
+                    <pre>{JSON.stringify(task.output, null, 2)}</pre>
+                  </details>
+                  <div className="admin-inline-actions">
+                    <button disabled={Boolean(activeTaskId)} onClick={() => refreshTask(task.providerTaskId)}>
+                      {activeTaskId === task.providerTaskId ? 'Working...' : 'Refresh'}
+                    </button>
+                    <button disabled={Boolean(activeTaskId)} onClick={() => retryTask(task.providerTaskId)}>
+                      {activeTaskId === task.providerTaskId ? 'Working...' : 'Retry'}
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <div className="table-wrap">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th className="col-hide-mobile">Updated</th>
+                    <th>Provider Task</th>
+                    <th>Order</th>
+                    <th className="col-hide-tablet">Provider</th>
+                    <th>Error</th>
+                    <th>Actions</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {tasks.map((task) => (
+                    <tr key={task.providerTaskId}>
+                      <td className="col-hide-mobile">
+                        <div>{new Date(task.updatedAt).toLocaleString()}</div>
+                        {task.lastPolledAt ? <div>Polled: {new Date(task.lastPolledAt).toLocaleString()}</div> : null}
+                      </td>
+                      <td>
+                        <div className="mono">{task.providerTaskId}</div>
+                        <div>{task.jobType ?? 'unknown'}</div>
+                        {task.artifactKey ? <div className="mono">{task.artifactKey}</div> : null}
+                      </td>
+                      <td>{task.orderId ? <span className="mono">{task.orderId}</span> : 'None'}</td>
+                      <td className="col-hide-tablet">{task.provider}</td>
+                      <td>
+                        <p>{task.errorText ?? 'No provider error text recorded.'}</p>
+                        <details>
+                          <summary>Output</summary>
+                          <pre>{JSON.stringify(task.output, null, 2)}</pre>
+                        </details>
+                      </td>
+                      <td>
+                        <div className="admin-inline-actions">
+                          <button disabled={Boolean(activeTaskId)} onClick={() => refreshTask(task.providerTaskId)}>
+                            {activeTaskId === task.providerTaskId ? 'Working...' : 'Refresh'}
+                          </button>
+                          <button disabled={Boolean(activeTaskId)} onClick={() => retryTask(task.providerTaskId)}>
+                            {activeTaskId === task.providerTaskId ? 'Working...' : 'Retry'}
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )
         )}
       </section>
     </main>

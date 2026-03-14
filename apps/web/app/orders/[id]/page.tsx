@@ -70,6 +70,31 @@ interface ProviderTaskRow {
   updated_at: string;
 }
 
+interface WorkerHealthWorker {
+  workerId: string;
+  serviceName: string;
+  status: 'idle' | 'processing' | 'error';
+  activeJobs: number;
+  latestOrderId: string | null;
+  lastHeartbeatAt: string;
+  updatedAt: string;
+  ageSec: number | null;
+  stale: boolean;
+  meta?: Record<string, unknown>;
+}
+
+interface WorkerHealthResponse {
+  ok: boolean;
+  staleAfterSec?: number;
+  activeWorkers?: number;
+  processingWorkers?: number;
+  latestHeartbeatAt?: string | null;
+  workerCount?: number;
+  workers?: WorkerHealthWorker[];
+  checkedAt?: string;
+  message?: string;
+}
+
 interface OrderStatusResponse {
   order: {
     id: string;
@@ -212,6 +237,8 @@ const statusMessageMap: Record<OrderStatus, string> = {
   expired: 'The asset retention window elapsed and download was revoked.'
 };
 
+const workerSensitiveStatuses: OrderStatus[] = ['paid', 'running', 'failed_soft'];
+
 interface NextActionInfo {
   title: string;
   detail: string;
@@ -219,7 +246,38 @@ interface NextActionInfo {
   ctaLabel: string | null;
 }
 
-function resolveNextAction(status: OrderStatus): NextActionInfo {
+function resolveNextAction(args: {
+  status: OrderStatus;
+  workerHealth: WorkerHealthResponse | null;
+  workerHealthError: string | null;
+}): NextActionInfo {
+  const { status, workerHealth, workerHealthError } = args;
+
+  if (workerSensitiveStatuses.includes(status) && workerHealth && !workerHealth.ok) {
+    const latestAgeSec = workerHealth.workers?.[0]?.ageSec;
+    const staleAfterSec = workerHealth.staleAfterSec;
+    const timingHint =
+      typeof latestAgeSec === 'number' && typeof staleAfterSec === 'number'
+        ? `Latest heartbeat age is ${latestAgeSec}s (stale after ${staleAfterSec}s).`
+        : null;
+
+    return {
+      title: 'Worker Service Needs Attention',
+      detail: `${workerHealth.message ?? 'No fresh worker heartbeat detected.'} Rendering will not progress until the worker service is running with DATABASE_URL and REDIS_URL configured.${timingHint ? ` ${timingHint}` : ''}`,
+      ctaHref: null,
+      ctaLabel: null
+    };
+  }
+
+  if (workerSensitiveStatuses.includes(status) && workerHealthError) {
+    return {
+      title: 'Verify Worker Health Endpoint',
+      detail: `Worker diagnostics are currently unavailable (${workerHealthError}). Rendering may still be running; refresh this page and check deployment logs.`,
+      ctaHref: null,
+      ctaLabel: null
+    };
+  }
+
   switch (status) {
     case 'draft':
     case 'intake_validating':
@@ -370,6 +428,52 @@ async function loadOrder(args: {
   }
 }
 
+async function loadWorkerHealth(): Promise<{
+  data: WorkerHealthResponse | null;
+  errorMessage: string | null;
+}> {
+  try {
+    const response = await fetch(`${apiBase}/health/worker`, {
+      cache: 'no-store',
+      signal: AbortSignal.timeout(3500)
+    });
+    const raw = await response.text();
+    if (!raw.trim()) {
+      return {
+        data: null,
+        errorMessage: response.ok ? 'Worker health response was empty.' : `Worker health request failed (${response.status}).`
+      };
+    }
+
+    let parsed: WorkerHealthResponse | null = null;
+    try {
+      parsed = JSON.parse(raw) as WorkerHealthResponse;
+    } catch {
+      return {
+        data: null,
+        errorMessage: response.ok ? 'Worker health response was not valid JSON.' : `Worker health request failed (${response.status}).`
+      };
+    }
+
+    if (!parsed || typeof parsed.ok !== 'boolean') {
+      return {
+        data: null,
+        errorMessage: 'Worker health response shape was invalid.'
+      };
+    }
+
+    return {
+      data: parsed,
+      errorMessage: null
+    };
+  } catch (error) {
+    return {
+      data: null,
+      errorMessage: (error as Error).message || 'Worker health request failed.'
+    };
+  }
+}
+
 export default async function OrderStatusPage({ params }: StatusPageProps): Promise<JSX.Element> {
   const parentAccessToken = cookies().get('parent_access_token')?.value ?? null;
   const recoveryHref = `/create?returnTo=${encodeURIComponent(`/orders/${params.id}`)}`;
@@ -403,7 +507,17 @@ export default async function OrderStatusPage({ params }: StatusPageProps): Prom
   const finalArtifact = data.artifacts.find((artifact) => artifact.kind === 'final_video');
   const previewArtifact = data.artifacts.find((artifact) => artifact.kind === 'preview_video');
   const currentStepIndex = getCurrentStepIndex(data.order.status);
-  const nextAction = resolveNextAction(data.order.status);
+  const shouldLoadWorkerHealth = workerSensitiveStatuses.includes(data.order.status);
+  const workerHealthState = shouldLoadWorkerHealth
+    ? await loadWorkerHealth()
+    : { data: null as WorkerHealthResponse | null, errorMessage: null as string | null };
+  const workerHealth = workerHealthState.data;
+  const latestWorker = workerHealth?.workers?.[0];
+  const nextAction = resolveNextAction({
+    status: data.order.status,
+    workerHealth,
+    workerHealthError: workerHealthState.errorMessage
+  });
 
   const failedJobs = data.jobs.filter((job) => job.status === 'failed').length;
   const runningJobs = data.jobs.filter((job) => job.status === 'running').length;
@@ -445,6 +559,20 @@ export default async function OrderStatusPage({ params }: StatusPageProps): Prom
           <strong>{nextAction.title}</strong>
         </p>
         <p>{nextAction.detail}</p>
+        {shouldLoadWorkerHealth ? (
+          <>
+            {workerHealth ? (
+              <p className={workerHealth.ok ? 'status-chip success' : 'status-chip warning'}>
+                Worker health: {workerHealth.ok ? 'online' : 'offline/stale'} (active workers:{' '}
+                {workerHealth.activeWorkers ?? 0}, processing: {workerHealth.processingWorkers ?? 0})
+              </p>
+            ) : (
+              <p className="status-chip warning">
+                Worker health check unavailable: {workerHealthState.errorMessage ?? 'unknown error'}
+              </p>
+            )}
+          </>
+        ) : null}
         {nextAction.ctaHref && nextAction.ctaLabel ? (
           <Link href={nextAction.ctaHref as Route}>{nextAction.ctaLabel}</Link>
         ) : null}
@@ -490,7 +618,20 @@ export default async function OrderStatusPage({ params }: StatusPageProps): Prom
               </a>
             </>
           ) : (
-            <p>Final video is not ready yet. Refresh this page while worker runs.</p>
+            <>
+              <p>Final video is not ready yet. Refresh this page while worker runs.</p>
+              {shouldLoadWorkerHealth && workerHealth && !workerHealth.ok ? (
+                <p className="status-chip warning">
+                  Worker heartbeat is stale/offline. Rendering will not complete until the worker service is healthy.
+                </p>
+              ) : null}
+              {shouldLoadWorkerHealth && latestWorker ? (
+                <p className="mono">
+                  latest_worker: {latestWorker.serviceName} / {latestWorker.status} / age=
+                  {latestWorker.ageSec ?? 'unknown'}s
+                </p>
+              ) : null}
+            </>
           )}
         </article>
       </section>

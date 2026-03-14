@@ -165,12 +165,14 @@ Required Railway envs:
   - `PUBLIC_ASSET_BASE_URL`
   - `ASSET_SIGNING_SECRET`
   - `PARENT_AUTH_SECRET`
+  - optional: `WORKER_HEARTBEAT_STALE_SEC` (default `90`)
 - Worker service
   - `DATABASE_URL`
   - `REDIS_URL`
   - `WEB_APP_BASE_URL`
   - `PUBLIC_ASSET_BASE_URL`
   - `ASSET_SIGNING_SECRET`
+  - optional: `WORKER_HEARTBEAT_INTERVAL_MS` (default `15000`)
   - provider-mode envs needed for your chosen run mode (`*_PROVIDER_MODE`, `*_PROVIDER_BASE_URL`, and provider API keys when not using stub)
 
 Port behavior:
@@ -179,6 +181,7 @@ Port behavior:
 
 Operational notes:
 - `GET /health` is available for API health checks
+- `GET /health/worker` returns worker heartbeat readiness (returns `503` when no fresh worker heartbeat exists)
 - Railway pre-deploy commands run in a separate container, so use them for migrations only
 - keep `PROVIDER_INTEGRATION_MODE=stub` (and worker provider modes `stub`) for initial UI/staging deploys unless real providers are configured
 

@@ -86,6 +86,17 @@ interface ProviderTaskStatusRow {
   updated_at: string;
 }
 
+interface WorkerHeartbeatRow {
+  worker_id: string;
+  service_name: string;
+  status: 'idle' | 'processing' | 'error';
+  active_jobs: number;
+  latest_order_id: string | null;
+  last_heartbeat_at: string;
+  updated_at: string;
+  meta_json: Record<string, unknown>;
+}
+
 type ProviderDeleteTargetType = 'voice_clone' | 'video' | 'render' | 'hosted_asset';
 type ProviderDeleteIdentifierSource =
   | 'artifact_meta'
@@ -2156,6 +2167,15 @@ async function buildParentRetryPolicy(order: OrderRow): Promise<{
   };
 }
 
+function heartbeatAgeSec(lastHeartbeatAt: string): number | null {
+  const timestamp = Date.parse(lastHeartbeatAt);
+  if (!Number.isFinite(timestamp)) {
+    return null;
+  }
+
+  return Math.max(0, Math.round((Date.now() - timestamp) / 1000));
+}
+
 async function buildServer(): Promise<FastifyInstance> {
   const app = Fastify({ logger: true });
 
@@ -2188,6 +2208,69 @@ async function buildServer(): Promise<FastifyInstance> {
   }
 
   app.get('/health', async () => ({ ok: true }));
+  app.get('/health/worker', async (request, reply) => {
+    try {
+      const rows = await query<WorkerHeartbeatRow>(
+        `
+        SELECT
+          worker_id,
+          service_name,
+          status,
+          active_jobs,
+          latest_order_id,
+          last_heartbeat_at,
+          updated_at,
+          meta_json
+        FROM worker_heartbeats
+        ORDER BY last_heartbeat_at DESC
+        LIMIT 20
+        `
+      );
+
+      const staleAfterSec = env.WORKER_HEARTBEAT_STALE_SEC;
+      const workers = rows.map((row) => {
+        const ageSec = heartbeatAgeSec(row.last_heartbeat_at);
+        const stale = ageSec === null ? true : ageSec > staleAfterSec;
+        return {
+          workerId: row.worker_id,
+          serviceName: row.service_name,
+          status: row.status,
+          activeJobs: row.active_jobs,
+          latestOrderId: row.latest_order_id,
+          lastHeartbeatAt: row.last_heartbeat_at,
+          updatedAt: row.updated_at,
+          ageSec,
+          stale,
+          meta: row.meta_json
+        };
+      });
+
+      const activeWorkers = workers.filter((worker) => !worker.stale).length;
+      const processingWorkers = workers.filter((worker) => !worker.stale && worker.status === 'processing').length;
+      const latestHeartbeatAt = workers[0]?.lastHeartbeatAt ?? null;
+      const ok = activeWorkers > 0;
+
+      const payload = {
+        ok,
+        staleAfterSec,
+        activeWorkers,
+        processingWorkers,
+        latestHeartbeatAt,
+        workerCount: workers.length,
+        workers,
+        checkedAt: new Date().toISOString()
+      };
+
+      return reply.status(ok ? 200 : 503).send(payload);
+    } catch (error) {
+      request.log.error({ err: error }, 'Worker health query failed');
+      return reply.status(503).send({
+        ok: false,
+        message: `Worker health unavailable: ${(error as Error).message}`,
+        checkedAt: new Date().toISOString()
+      });
+    }
+  });
   registerAssetRoutes(app);
   registerProviderRoutes(app);
 

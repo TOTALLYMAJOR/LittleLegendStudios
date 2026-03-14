@@ -173,6 +173,7 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
   - provider task state persistence
   - order status provider task visibility
   - scene-plan and render metadata introspection in order status
+  - worker heartbeat persistence + API readiness endpoint (`GET /health/worker`) to detect missing/stale worker processing paths
   - migration compatibility guard: `jobs.created_at` is now backfilled via `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` so order-status/admin job queries remain safe on older databases
 
 - [x] Data deletion + retention

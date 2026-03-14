@@ -104,6 +104,18 @@ CREATE TABLE IF NOT EXISTS child_director_preview_sessions (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS worker_heartbeats (
+  worker_id TEXT PRIMARY KEY,
+  service_name TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('idle', 'processing', 'error')),
+  active_jobs INT NOT NULL DEFAULT 0,
+  latest_order_id UUID REFERENCES orders(id),
+  meta_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS jobs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   order_id UUID NOT NULL REFERENCES orders(id),
@@ -331,6 +343,7 @@ CREATE INDEX IF NOT EXISTS idx_uploads_order_id ON uploads(order_id);
 CREATE INDEX IF NOT EXISTS idx_scripts_order_id ON scripts(order_id);
 CREATE INDEX IF NOT EXISTS idx_child_director_preview_sessions_session_id ON child_director_preview_sessions(session_id);
 CREATE INDEX IF NOT EXISTS idx_child_director_preview_sessions_parent_user_id ON child_director_preview_sessions(parent_user_id);
+CREATE INDEX IF NOT EXISTS idx_worker_heartbeats_last_heartbeat_at ON worker_heartbeats(last_heartbeat_at DESC);
 CREATE INDEX IF NOT EXISTS idx_jobs_order_id ON jobs(order_id);
 CREATE INDEX IF NOT EXISTS idx_artifacts_order_id ON artifacts(order_id);
 CREATE INDEX IF NOT EXISTS idx_provider_tasks_order_id ON provider_tasks(order_id);

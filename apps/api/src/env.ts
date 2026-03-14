@@ -71,6 +71,7 @@ const schema = z.object({
   GIFT_REDEMPTION_TTL_DAYS: z.coerce.number().int().min(1).max(365).default(30),
   PROVIDER_TASK_POLL_MIN_INTERVAL_MS: z.coerce.number().int().positive().default(5000),
   PROVIDER_TASK_ASSUME_SUCCESS_AFTER_SEC: z.coerce.number().int().positive().default(45),
+  WORKER_HEARTBEAT_STALE_SEC: z.coerce.number().int().positive().default(90),
   ELEVENLABS_API_KEY: z
     .string()
     .optional()

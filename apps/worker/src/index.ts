@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import { type JobType, type SceneRenderSpec, type ScriptPayload, type ThemeManifest, assertOrderTransition, type OrderStatus } from '@little/shared';
 import { QueueEvents, Worker } from 'bullmq';
@@ -22,6 +22,9 @@ import { createRefund, isStripeRefundEnabled } from './stripe.js';
 
 const QUEUE_NAME = 'render-orders';
 const providers = buildProviderRegistry();
+const HEARTBEAT_SERVICE_FALLBACK = 'worker';
+
+type WorkerHeartbeatStatus = 'idle' | 'processing' | 'error';
 
 class ModerationFailure extends Error {
   constructor(
@@ -258,6 +261,60 @@ async function sendRenderFailureNotification(orderId: string, failureMessage: st
       failureMessage
     }
   });
+}
+
+function resolveWorkerServiceName(): string {
+  const value = process.env.RAILWAY_SERVICE_NAME ?? process.env.WORKER_SERVICE_NAME ?? HEARTBEAT_SERVICE_FALLBACK;
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized.slice(0, 80) : HEARTBEAT_SERVICE_FALLBACK;
+}
+
+async function writeWorkerHeartbeat(args: {
+  workerId: string;
+  serviceName: string;
+  status: WorkerHeartbeatStatus;
+  activeJobs: number;
+  latestOrderId: string | null;
+  lastErrorText: string | null;
+}): Promise<void> {
+  await query(
+    `
+    INSERT INTO worker_heartbeats (
+      worker_id,
+      service_name,
+      status,
+      active_jobs,
+      latest_order_id,
+      meta_json,
+      started_at,
+      last_heartbeat_at,
+      updated_at
+    )
+    VALUES ($1, $2, $3, $4, $5, $6::jsonb, now(), now(), now())
+    ON CONFLICT (worker_id)
+    DO UPDATE SET
+      service_name = EXCLUDED.service_name,
+      status = EXCLUDED.status,
+      active_jobs = EXCLUDED.active_jobs,
+      latest_order_id = EXCLUDED.latest_order_id,
+      meta_json = EXCLUDED.meta_json,
+      last_heartbeat_at = now(),
+      updated_at = now()
+    `,
+    [
+      args.workerId,
+      args.serviceName,
+      args.status,
+      args.activeJobs,
+      args.latestOrderId,
+      JSON.stringify({
+        pid: process.pid,
+        queue: QUEUE_NAME,
+        heartbeatIntervalMs: env.WORKER_HEARTBEAT_INTERVAL_MS,
+        ...(args.lastErrorText ? { lastErrorText: args.lastErrorText.slice(0, 320) } : {})
+      })
+    ]
+  );
 }
 
 async function setOrderStatus(orderId: string, nextStatus: OrderStatus): Promise<void> {
@@ -1667,6 +1724,41 @@ async function main(): Promise<void> {
     username: redisUrl.username || undefined,
     maxRetriesPerRequest: null
   };
+  const workerServiceName = resolveWorkerServiceName();
+  const workerId = `${workerServiceName}-${String(process.pid)}-${randomUUID().slice(0, 8)}`;
+  let activeJobs = 0;
+  let latestOrderId: string | null = null;
+  let lastErrorText: string | null = null;
+  let heartbeatEnabled = true;
+
+  const heartbeatStatus = (): WorkerHeartbeatStatus => {
+    if (lastErrorText) {
+      return 'error';
+    }
+    return activeJobs > 0 ? 'processing' : 'idle';
+  };
+
+  const safeWriteHeartbeat = async (): Promise<void> => {
+    if (!heartbeatEnabled) {
+      return;
+    }
+
+    try {
+      await writeWorkerHeartbeat({
+        workerId,
+        serviceName: workerServiceName,
+        status: heartbeatStatus(),
+        activeJobs,
+        latestOrderId,
+        lastErrorText
+      });
+    } catch (error) {
+      heartbeatEnabled = false;
+      process.stderr.write(
+        `[worker] Heartbeat disabled for ${workerId}: ${(error as Error).message}. Verify DB migration and connectivity.\n`
+      );
+    }
+  };
 
   const queueEvents = new QueueEvents(QUEUE_NAME, { connection });
   queueEvents.on('completed', ({ jobId }) => {
@@ -1682,11 +1774,17 @@ async function main(): Promise<void> {
     async (job) => {
       const orderId = String(job.data.orderId);
       const attempt = job.attemptsStarted;
+      activeJobs += 1;
+      latestOrderId = orderId;
+      lastErrorText = null;
+      await safeWriteHeartbeat();
 
       try {
         await runPipeline(orderId, attempt);
       } catch (error) {
         const message = (error as Error).message;
+        lastErrorText = message.slice(0, 320);
+        await safeWriteHeartbeat();
         process.stderr.write(`Worker pipeline error for order ${orderId}: ${message}\n`);
         const maxAttempts = job.opts.attempts ?? 1;
         const transient = isTransientErrorMessage(message);
@@ -1698,6 +1796,12 @@ async function main(): Promise<void> {
           await markFailedHard(orderId, message, attempt);
         }
         throw error;
+      } finally {
+        activeJobs = Math.max(0, activeJobs - 1);
+        if (activeJobs === 0) {
+          latestOrderId = null;
+        }
+        await safeWriteHeartbeat();
       }
     },
     {
@@ -1711,10 +1815,22 @@ async function main(): Promise<void> {
   });
 
   worker.on('error', (error) => {
+    lastErrorText = error.message.slice(0, 320);
     process.stderr.write(`Worker error: ${error.message}\n`);
   });
 
+  await safeWriteHeartbeat();
+  const heartbeatTimer = setInterval(() => {
+    void safeWriteHeartbeat();
+  }, env.WORKER_HEARTBEAT_INTERVAL_MS);
+  heartbeatTimer.unref();
+
   const cleanup = async (): Promise<void> => {
+    clearInterval(heartbeatTimer);
+    activeJobs = 0;
+    latestOrderId = null;
+    lastErrorText = null;
+    await safeWriteHeartbeat();
     await worker.close();
     await queueEvents.close();
     process.exit(0);

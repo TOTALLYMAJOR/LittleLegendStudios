@@ -22,15 +22,18 @@ Use Railway for API and worker surfaces.
   - `PUBLIC_ASSET_BASE_URL`
   - `ASSET_SIGNING_SECRET`
   - `PARENT_AUTH_SECRET`
+  - optional: `WORKER_HEARTBEAT_STALE_SEC` (default `90`)
 - Worker service:
   - `DATABASE_URL`
   - `REDIS_URL`
   - `WEB_APP_BASE_URL`
   - `PUBLIC_ASSET_BASE_URL`
   - `ASSET_SIGNING_SECRET`
+  - optional: `WORKER_HEARTBEAT_INTERVAL_MS` (default `15000`)
   - provider-mode + provider-secret envs for the active integration mode
 
 ## Post-deploy checks
 - `GET /health` returns success.
+- `GET /health/worker` returns success (`ok: true`) after worker starts.
 - Worker logs include `Worker listening on queue render-orders`.
 - Smoke flow passes against deployed API.

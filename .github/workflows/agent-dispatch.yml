@@ -1,0 +1,83 @@
+name: agent-dispatch
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Orchestrator mode
+        required: false
+        default: dispatch
+      task_id:
+        description: Optional task ID override
+        required: false
+      batch_size:
+        description: Number of tasks to dispatch in one run
+        required: false
+        default: '1'
+      execute:
+        description: Execute pipeline stages after claiming tasks
+        required: false
+        default: 'true'
+  schedule:
+    - cron: '0 */4 * * 1-5'
+
+concurrency:
+  group: agent-dispatch
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Configure git identity
+        run: |
+          git config user.name "agent-dispatch[bot]"
+          git config user.email "agent-dispatch[bot]@users.noreply.github.com"
+
+      - name: Run orchestrator
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          AGENT_PLANNER_CMD: ${{ vars.AGENT_PLANNER_CMD }}
+          AGENT_IMPLEMENTER_CMD: ${{ vars.AGENT_IMPLEMENTER_CMD }}
+          AGENT_REVIEWER_CMD: ${{ vars.AGENT_REVIEWER_CMD }}
+          AGENT_RELEASE_CMD: ${{ vars.AGENT_RELEASE_CMD }}
+          INPUT_MODE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.mode || 'dispatch' }}
+          INPUT_TASK_ID: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.task_id || '' }}
+          INPUT_BATCH_SIZE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.batch_size || '1' }}
+          INPUT_EXECUTE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.execute || 'true' }}
+        run: |
+          set -euo pipefail
+
+          ARGS=(
+            "--mode=${INPUT_MODE}"
+            "--profile=reliability"
+            "--max-parallel=2"
+            "--batch-size=${INPUT_BATCH_SIZE}"
+            "--automerge=true"
+            "--execute=${INPUT_EXECUTE}"
+          )
+
+          if [[ -n "${INPUT_TASK_ID}" ]]; then
+            ARGS+=("--task-id=${INPUT_TASK_ID}")
+          fi
+
+          node scripts/agents/orchestrate.mjs "${ARGS[@]}"

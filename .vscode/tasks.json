@@ -1,0 +1,51 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Agents: Dispatch Next",
+      "type": "shell",
+      "command": "node scripts/agents/orchestrate.mjs --mode=dispatch --profile=reliability --max-parallel=2 --batch-size=1 --automerge=true",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Agents: Dispatch Batch",
+      "type": "shell",
+      "command": "node scripts/agents/orchestrate.mjs --mode=dispatch --profile=reliability --max-parallel=2 --batch-size=2 --automerge=true",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Agents: Dry Run",
+      "type": "shell",
+      "command": "node scripts/agents/orchestrate.mjs --mode=dry-run --section=\"Architecture And Scale Hardening Backlog (2026-03-14)\" --batch-size=2 --write-runbook=true",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Agents: Resume Failed",
+      "type": "shell",
+      "command": "node scripts/agents/orchestrate.mjs --mode=resume --profile=reliability --max-parallel=2 --automerge=true",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Verify: Full",
+      "type": "shell",
+      "command": "RUN_SMOKE=1 bash ./scripts/verify.sh",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "test",
+      "problemMatcher": []
+    }
+  ]
+}

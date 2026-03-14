@@ -24,6 +24,11 @@
     "typecheck": "npm --workspace @little/shared run build && npm --workspace @little/shared run typecheck && npm --workspace @little/api run typecheck && npm --workspace @little/worker run typecheck && npm --workspace @little/web run typecheck",
     "verify": "bash ./scripts/verify.sh",
     "smoke:local": "bash ./scripts/smoke-local.sh",
+    "test:agents": "node --test scripts/agents/tests/*.test.mjs",
+    "agents:dispatch": "node scripts/agents/orchestrate.mjs --mode=dispatch --profile=reliability --max-parallel=2 --batch-size=1 --automerge=true",
+    "agents:dispatch:batch": "node scripts/agents/orchestrate.mjs --mode=dispatch --profile=reliability --max-parallel=2 --batch-size=2 --automerge=true",
+    "agents:dry-run": "node scripts/agents/orchestrate.mjs --mode=dry-run --section=\"Architecture And Scale Hardening Backlog (2026-03-14)\" --batch-size=2 --write-runbook=true",
+    "agents:resume": "node scripts/agents/orchestrate.mjs --mode=resume --profile=reliability --max-parallel=2 --automerge=true",
     "changed-files": "bash ./scripts/changed-files.sh",
     "deploy:summary": "bash ./scripts/deploy-summary.sh"
   },

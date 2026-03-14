@@ -1,0 +1,38 @@
+name: agent-automerge
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, labeled, edited, ready_for_review]
+
+jobs:
+  enable-automerge:
+    if: github.event.pull_request.state == 'open' && contains(github.event.pull_request.labels.*.name, 'agent:auto')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Validate agent PR body contract
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = context.payload.pull_request.body || '';
+            const requiredHeadings = [
+              '## Summary',
+              '## Files changed',
+              '## Risks / follow-ups',
+              '## Commands run',
+              '## Tests/lint/build results'
+            ];
+            const missing = requiredHeadings.filter((heading) => !body.includes(heading));
+            if (missing.length > 0) {
+              core.setFailed(`Missing required PR headings: ${missing.join(', ')}`);
+            }
+
+      - name: Enable GitHub auto-merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh pr merge --auto --squash "$PR_NUMBER" --repo "$REPO"

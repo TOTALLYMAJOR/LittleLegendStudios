@@ -103,6 +103,17 @@ Notes:
 - Start API + worker first (`npm run dev:boot` in a separate terminal).
 - If `STRIPE_SECRET_KEY` is set, `/pay` uses live checkout and smoke exits by design. Use stub mode for automation.
 
+## VS Code Agent Autopilot
+
+For low-intervention multi-agent orchestration (task dispatch, runbook generation, verification, PR automation), use the runbook:
+- [docs/runbooks/agent-autopilot.md](/home/totallymajor/projects/LittleLegendStudios/docs/runbooks/agent-autopilot.md)
+
+Common commands:
+- `npm run agents:dry-run`
+- `npm run agents:dispatch`
+- `npm run agents:dispatch:batch`
+- `npm run agents:resume`
+
 ## Vercel UI Preview
 
 If the immediate goal is to let people see the UI while the full backend keeps evolving, deploy only the web app to Vercel first.

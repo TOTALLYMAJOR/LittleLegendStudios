@@ -66,6 +66,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Agent orchestration tests
+        run: npm run test:agents
+
       - name: Typecheck
         run: npm run typecheck
 

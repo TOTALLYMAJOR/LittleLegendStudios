@@ -35,6 +35,7 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
   - `apps/web/app/create/page.tsx`: main parent intake and session recovery entrypoint
   - `docs/architecture/workflows.md`: child-director workflow status and phased slice context
   - `docs/decisions/adr-003-preview-pipeline.md`: preview-pipeline decision context and constraints
+  - `scripts/agents/orchestrate.mjs`: VS Code/CI multi-agent dispatcher for task claims, runbook generation, and stage orchestration
   - `scripts/smoke.mjs`: end-to-end automation for the intended happy path
   - `packages/shared/src/*`: shared domain model used across app boundaries
 
@@ -295,6 +296,11 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
 - [x] Added stack-documentation auto-maintenance guardrail (2026-03-10)
   - `docs/runbooks/tech-stack.md` is now the canonical stack inventory for AI/human sessions
   - `AGENTS.md` now requires updating `docs/runbooks/tech-stack.md` and `README.md` `Stack` whenever new technology is introduced
+- [x] Added VS Code hybrid multi-agent autopilot scaffold (2026-03-14)
+  - new local control plane in `.vscode/tasks.json` plus extension/settings defaults for repeatable dispatch loops
+  - new dispatcher/queue/runbook scripts under `scripts/agents/*` with deterministic queue ordering from `TASKS.md`
+  - new workflows: `agent-dispatch`, `agent-automerge`, and `agent-failsafe` for unattended dispatch, PR contract enforcement, and repeated-failure incident surfacing
+  - new runbook: `docs/runbooks/agent-autopilot.md` for env contracts, operational defaults, and stage flow
 
 ## Child-Director Foundation Slice (2026-03-09)
 

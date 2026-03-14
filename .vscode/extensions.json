@@ -1,0 +1,8 @@
+{
+  "recommendations": [
+    "GitHub.vscode-pull-request-github",
+    "redhat.vscode-yaml",
+    "DavidAnson.vscode-markdownlint",
+    "EditorConfig.EditorConfig"
+  ]
+}

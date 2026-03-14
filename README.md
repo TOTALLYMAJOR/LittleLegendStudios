@@ -236,7 +236,7 @@ This repo is no longer just a thin scaffold. The current build includes:
   - parent retry endpoint with limits (including queued `paid` orders when render start needs requeue)
   - parent auth + ownership enforcement
   - gift link create / inspect / redeem / resend / revoke / regenerate
-  - admin render incident dashboard for worker heartbeat + queue dead-letter monitoring/retry
+  - admin render incident dashboard for worker heartbeat + queue dead-letter monitoring/retry, including auto-refresh + severity/filter views
   - admin dead-letter retry view
   - email notification failure view
   - retry request history view

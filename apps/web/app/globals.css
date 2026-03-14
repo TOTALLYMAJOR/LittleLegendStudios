@@ -1698,6 +1698,11 @@ textarea[aria-invalid='true']:focus-visible {
   color: var(--success);
 }
 
+.status-chip.critical {
+  background: rgba(255, 133, 130, 0.2);
+  color: #ff9a96;
+}
+
 .mono {
   font-family: "SFMono-Regular", "Courier New", monospace;
   font-size: 0.9rem;

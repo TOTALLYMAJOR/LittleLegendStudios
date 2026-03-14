@@ -154,6 +154,7 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
 
 - [x] Admin + support tooling
   - render incident dashboard combining worker heartbeat health with render dead-letter visibility and queue retry actions
+  - render incident dashboard now includes auto-refresh controls, severity badges, and failed-job filter/paging controls for faster triage loops
   - dead-letter render queue visibility and retry
   - email notification failure dashboard
   - retry request history dashboard

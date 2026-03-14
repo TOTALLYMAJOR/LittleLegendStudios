@@ -1,8 +1,9 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000';
+type SnapshotSource = 'manual' | 'auto' | 'retry';
 
 interface WorkerHeartbeatRow {
   workerId: string;
@@ -98,33 +99,136 @@ function formatIsoTimestamp(value: string | null | undefined): string {
 export default function AdminRenderIncidentPage(): JSX.Element {
   const [adminToken, setAdminToken] = useState('');
   const [limit, setLimit] = useState('25');
+  const [autoRefreshIntervalSec, setAutoRefreshIntervalSec] = useState('off');
   const [loading, setLoading] = useState(false);
+  const [autoRefreshing, setAutoRefreshing] = useState(false);
   const [activeRetryJobId, setActiveRetryJobId] = useState('');
   const [message, setMessage] = useState('Enter admin token, then load render incident diagnostics.');
   const [workerHealth, setWorkerHealth] = useState<WorkerHealthResponse | null>(null);
   const [workerHealthError, setWorkerHealthError] = useState<string | null>(null);
   const [queueData, setQueueData] = useState<QueueDeadLetterResponse | null>(null);
+  const [lastSnapshotAtIso, setLastSnapshotAtIso] = useState<string | null>(null);
+  const [lastAutoRefreshAtIso, setLastAutoRefreshAtIso] = useState<string | null>(null);
+  const [failedJobOrderFilter, setFailedJobOrderFilter] = useState('');
+  const [failedJobReasonFilter, setFailedJobReasonFilter] = useState('');
+  const [failedJobPageSize, setFailedJobPageSize] = useState('10');
+  const [failedJobPage, setFailedJobPage] = useState(1);
 
-  const incidentStatusClass = useMemo(() => {
-    const hasWorkerRisk = workerHealth ? !workerHealth.ok : Boolean(workerHealthError);
+  const incidentSeverity = useMemo(() => {
     const failedCount = queueData?.queue.failedCount ?? 0;
-    if (hasWorkerRisk || failedCount > 0) {
-      return 'status-chip warning';
+    const waitingCount = queueData?.queue.waitingCount ?? 0;
+    const activeCount = queueData?.queue.activeCount ?? 0;
+
+    if (workerHealthError) {
+      return {
+        label: 'critical',
+        className: 'status-chip critical',
+        detail: 'Worker health check failed.'
+      };
     }
+
+    if (workerHealth && !workerHealth.ok) {
+      return {
+        label: 'critical',
+        className: 'status-chip critical',
+        detail: 'No fresh worker heartbeat detected.'
+      };
+    }
+
+    if (failedCount >= 25) {
+      return {
+        label: 'critical',
+        className: 'status-chip critical',
+        detail: `Render queue has ${String(failedCount)} failed jobs.`
+      };
+    }
+
+    if (failedCount > 0) {
+      return {
+        label: 'warning',
+        className: 'status-chip warning',
+        detail: `Render queue has ${String(failedCount)} failed jobs.`
+      };
+    }
+
+    if (queueData && waitingCount > 0 && activeCount === 0) {
+      return {
+        label: 'warning',
+        className: 'status-chip warning',
+        detail: 'Queue has waiting jobs but no active workers.'
+      };
+    }
+
     if (workerHealth?.ok && queueData) {
-      return 'status-chip success';
+      return {
+        label: 'healthy',
+        className: 'status-chip success',
+        detail: 'Worker heartbeat and queue health are both in a healthy range.'
+      };
     }
-    return 'status-chip';
+
+    return {
+      label: 'unknown',
+      className: 'status-chip',
+      detail: 'Load a snapshot to evaluate incident state.'
+    };
   }, [queueData, workerHealth, workerHealthError]);
 
-  async function loadIncidentSnapshot(): Promise<void> {
+  const failedJobsFiltered = useMemo(() => {
+    const jobs = queueData?.failedJobs ?? [];
+    const normalizedOrderFilter = failedJobOrderFilter.trim().toLowerCase();
+    const normalizedReasonFilter = failedJobReasonFilter.trim().toLowerCase();
+
+    return jobs.filter((job) => {
+      const orderId = typeof job.data?.orderId === 'string' ? job.data.orderId : '';
+      const failedReason = (job.failedReason ?? '').toLowerCase();
+      const orderMatch = normalizedOrderFilter.length === 0 || orderId.toLowerCase().includes(normalizedOrderFilter);
+      const reasonMatch = normalizedReasonFilter.length === 0 || failedReason.includes(normalizedReasonFilter);
+      return orderMatch && reasonMatch;
+    });
+  }, [failedJobOrderFilter, failedJobReasonFilter, queueData]);
+
+  const failedJobPageSizeNumber = Math.max(1, Number(failedJobPageSize));
+  const failedJobTotalPages = Math.max(1, Math.ceil(failedJobsFiltered.length / failedJobPageSizeNumber));
+  const boundedFailedJobPage = Math.min(failedJobPage, failedJobTotalPages);
+  const failedJobsPaged = useMemo(() => {
+    const start = (boundedFailedJobPage - 1) * failedJobPageSizeNumber;
+    return failedJobsFiltered.slice(start, start + failedJobPageSizeNumber);
+  }, [boundedFailedJobPage, failedJobPageSizeNumber, failedJobsFiltered]);
+
+  useEffect(() => {
+    setFailedJobPage(1);
+  }, [failedJobOrderFilter, failedJobReasonFilter, failedJobPageSize, queueData?.failedJobs.length]);
+
+  useEffect(() => {
+    if (failedJobPage !== boundedFailedJobPage) {
+      setFailedJobPage(boundedFailedJobPage);
+    }
+  }, [boundedFailedJobPage, failedJobPage]);
+
+  async function loadIncidentSnapshot(args?: {
+    source?: SnapshotSource;
+    quiet?: boolean;
+  }): Promise<void> {
+    const source = args?.source ?? 'manual';
+    const quiet = args?.quiet ?? false;
+
     if (!adminToken.trim()) {
-      setMessage('Admin token is required.');
+      if (!quiet) {
+        setMessage('Admin token is required.');
+      }
       return;
     }
 
-    setLoading(true);
-    setMessage('');
+    if (source === 'auto') {
+      setAutoRefreshing(true);
+    } else {
+      setLoading(true);
+    }
+
+    if (!quiet) {
+      setMessage('');
+    }
 
     try {
       const queueResponse = await fetch(`${apiBase}/admin/queue/render/dead-letter?limit=${encodeURIComponent(limit)}`, {
@@ -161,16 +265,53 @@ export default function AdminRenderIncidentPage(): JSX.Element {
         setWorkerHealthError((error as Error).message || 'Worker health request failed.');
       }
 
-      setMessage(
-        `Loaded render incident snapshot. Queue failed=${String((queuePayload as QueueDeadLetterResponse).queue.failedCount)}, waiting=${String((queuePayload as QueueDeadLetterResponse).queue.waitingCount)}.`
-      );
+      const nowIso = new Date().toISOString();
+      setLastSnapshotAtIso(nowIso);
+      if (source === 'auto') {
+        setLastAutoRefreshAtIso(nowIso);
+      }
+
+      if (!quiet) {
+        setMessage(
+          `Loaded render incident snapshot. Queue failed=${String((queuePayload as QueueDeadLetterResponse).queue.failedCount)}, waiting=${String((queuePayload as QueueDeadLetterResponse).queue.waitingCount)}.`
+        );
+      }
     } catch (error) {
-      setQueueData(null);
-      setMessage((error as Error).message);
+      if (source !== 'auto') {
+        setQueueData(null);
+      }
+      const errorMessage = (error as Error).message;
+      setMessage(source === 'auto' ? `Auto-refresh failed: ${errorMessage}` : errorMessage);
     } finally {
-      setLoading(false);
+      if (source === 'auto') {
+        setAutoRefreshing(false);
+      } else {
+        setLoading(false);
+      }
     }
   }
+
+  useEffect(() => {
+    if (autoRefreshIntervalSec === 'off') {
+      return;
+    }
+    if (!adminToken.trim()) {
+      return;
+    }
+
+    const intervalMs = Number(autoRefreshIntervalSec) * 1000;
+    if (!Number.isFinite(intervalMs) || intervalMs <= 0) {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      void loadIncidentSnapshot({ source: 'auto', quiet: true });
+    }, intervalMs);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [adminToken, autoRefreshIntervalSec, limit]);
 
   async function retryFailedJob(jobId: string): Promise<void> {
     if (!adminToken.trim()) {
@@ -192,7 +333,7 @@ export default function AdminRenderIncidentPage(): JSX.Element {
       }
 
       setMessage(`Retry queued for job ${jobId}. Refreshing snapshot...`);
-      await loadIncidentSnapshot();
+      await loadIncidentSnapshot({ source: 'retry' });
     } catch (error) {
       setMessage((error as Error).message);
     } finally {
@@ -230,23 +371,41 @@ export default function AdminRenderIncidentPage(): JSX.Element {
             <option value="100">100</option>
           </select>
 
-          <button disabled={loading} onClick={loadIncidentSnapshot}>
+          <label htmlFor="autoRefreshIntervalSec">Auto Refresh</label>
+          <select
+            id="autoRefreshIntervalSec"
+            value={autoRefreshIntervalSec}
+            onChange={(event) => setAutoRefreshIntervalSec(event.target.value)}
+          >
+            <option value="off">Off</option>
+            <option value="15">Every 15s</option>
+            <option value="30">Every 30s</option>
+            <option value="60">Every 60s</option>
+          </select>
+
+          <button disabled={loading} onClick={() => void loadIncidentSnapshot({ source: 'manual' })}>
             {loading ? 'Loading Snapshot...' : 'Load Incident Snapshot'}
           </button>
+          <p className={autoRefreshIntervalSec === 'off' ? 'status-chip' : 'status-chip success'}>
+            Auto-refresh: {autoRefreshIntervalSec === 'off' ? 'off' : `every ${autoRefreshIntervalSec}s`}
+            {autoRefreshing ? ' (refreshing...)' : ''}
+          </p>
+          <p>
+            Last snapshot: <strong>{formatIsoTimestamp(lastSnapshotAtIso)}</strong>
+          </p>
+          <p>
+            Last auto-refresh: <strong>{formatIsoTimestamp(lastAutoRefreshAtIso)}</strong>
+          </p>
         </article>
 
         <article className="card">
           <h2>Snapshot Summary</h2>
-          <p className={incidentStatusClass}>
-            Incident state:{' '}
-            {workerHealth && queueData
-              ? workerHealth.ok && queueData.queue.failedCount === 0
-                ? 'healthy'
-                : 'attention needed'
-              : 'unknown'}
-          </p>
+          <p className={incidentSeverity.className}>Incident state: {incidentSeverity.label}</p>
+          <p>{incidentSeverity.detail}</p>
           <ul>
-            <li>Worker health: {workerHealth ? (workerHealth.ok ? 'online' : 'offline/stale') : workerHealthError ? 'error' : 'unknown'}</li>
+            <li>
+              Worker health: {workerHealth ? (workerHealth.ok ? 'online' : 'offline/stale') : workerHealthError ? 'error' : 'unknown'}
+            </li>
             <li>Active workers: {workerHealth?.activeWorkers ?? 0}</li>
             <li>Processing workers: {workerHealth?.processingWorkers ?? 0}</li>
             <li>Queue failed jobs: {queueData?.queue.failedCount ?? 0}</li>
@@ -258,7 +417,7 @@ export default function AdminRenderIncidentPage(): JSX.Element {
       </section>
 
       <section className="card">
-        <span className={incidentStatusClass}>Status</span>
+        <span className={incidentSeverity.className}>Status</span>
         <p>{message}</p>
       </section>
 
@@ -325,7 +484,73 @@ export default function AdminRenderIncidentPage(): JSX.Element {
               waiting: <strong>{queueData.queue.waitingCount}</strong> | active: <strong>{queueData.queue.activeCount}</strong>{' '}
               | delayed: <strong>{queueData.queue.delayedCount}</strong>
             </p>
-            {queueData.failedJobs.length === 0 ? (
+            <div className="grid two">
+              <div>
+                <label htmlFor="failedJobOrderFilter">Filter by Order ID</label>
+                <input
+                  id="failedJobOrderFilter"
+                  placeholder="order uuid contains..."
+                  value={failedJobOrderFilter}
+                  onChange={(event) => setFailedJobOrderFilter(event.target.value)}
+                />
+              </div>
+              <div>
+                <label htmlFor="failedJobReasonFilter">Filter by Reason Text</label>
+                <input
+                  id="failedJobReasonFilter"
+                  placeholder="timeout / provider / validation..."
+                  value={failedJobReasonFilter}
+                  onChange={(event) => setFailedJobReasonFilter(event.target.value)}
+                />
+              </div>
+            </div>
+            <div className="grid two">
+              <div>
+                <label htmlFor="failedJobPageSize">Page Size</label>
+                <select
+                  id="failedJobPageSize"
+                  value={failedJobPageSize}
+                  onChange={(event) => setFailedJobPageSize(event.target.value)}
+                >
+                  <option value="10">10</option>
+                  <option value="25">25</option>
+                  <option value="50">50</option>
+                </select>
+              </div>
+              <div>
+                <label htmlFor="failedJobPage">Page</label>
+                <div>
+                  <button
+                    disabled={boundedFailedJobPage <= 1}
+                    onClick={() => setFailedJobPage((current) => Math.max(1, current - 1))}
+                  >
+                    Prev
+                  </button>{' '}
+                  <span className="mono">
+                    {boundedFailedJobPage}/{failedJobTotalPages}
+                  </span>{' '}
+                  <button
+                    disabled={boundedFailedJobPage >= failedJobTotalPages}
+                    onClick={() => setFailedJobPage((current) => Math.min(failedJobTotalPages, current + 1))}
+                  >
+                    Next
+                  </button>{' '}
+                  <button
+                    onClick={() => {
+                      setFailedJobOrderFilter('');
+                      setFailedJobReasonFilter('');
+                      setFailedJobPage(1);
+                    }}
+                  >
+                    Clear Filters
+                  </button>
+                </div>
+              </div>
+            </div>
+            <p>
+              Filtered jobs: <strong>{failedJobsFiltered.length}</strong> (showing {failedJobsPaged.length} on current page)
+            </p>
+            {failedJobsFiltered.length === 0 ? (
               <p>No failed queue jobs in the selected window.</p>
             ) : (
               <div className="table-wrap">
@@ -341,7 +566,7 @@ export default function AdminRenderIncidentPage(): JSX.Element {
                     </tr>
                   </thead>
                   <tbody>
-                    {queueData.failedJobs.map((job) => {
+                    {failedJobsPaged.map((job) => {
                       const orderId = typeof job.data?.orderId === 'string' ? job.data.orderId : null;
                       return (
                         <tr key={job.jobId}>

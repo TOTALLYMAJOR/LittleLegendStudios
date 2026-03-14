@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 
 const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000';
+
 type SnapshotSource = 'manual' | 'auto' | 'retry';
 
 interface WorkerHeartbeatRow {
@@ -31,6 +32,22 @@ interface WorkerHealthResponse {
 }
 
 interface QueueDeadLetterResponse {
+  filters?: {
+    orderId: string | null;
+    failedReason: string | null;
+  };
+  pagination?: {
+    page: number;
+    limit: number;
+    offset: number;
+    totalMatchedFailedJobs: number;
+    totalPages: number;
+    hasPrevPage: boolean;
+    hasNextPage: boolean;
+    mode: 'direct' | 'filtered_scan';
+    scanCount: number | null;
+    scanTruncated: boolean;
+  };
   queue: {
     name: string;
     failedCount: number;
@@ -57,6 +74,13 @@ interface QueueDeadLetterResponse {
     error_text: string | null;
     finished_at: string | null;
   }>;
+  recentFailedStepsPagination?: {
+    page: number;
+    limit: number;
+    offset: number;
+    total: number;
+    totalPages: number;
+  };
 }
 
 async function parseResponse(response: Response): Promise<any> {
@@ -111,7 +135,6 @@ export default function AdminRenderIncidentPage(): JSX.Element {
   const [lastAutoRefreshAtIso, setLastAutoRefreshAtIso] = useState<string | null>(null);
   const [failedJobOrderFilter, setFailedJobOrderFilter] = useState('');
   const [failedJobReasonFilter, setFailedJobReasonFilter] = useState('');
-  const [failedJobPageSize, setFailedJobPageSize] = useState('10');
   const [failedJobPage, setFailedJobPage] = useState(1);
 
   const incidentSeverity = useMemo(() => {
@@ -174,44 +197,22 @@ export default function AdminRenderIncidentPage(): JSX.Element {
     };
   }, [queueData, workerHealth, workerHealthError]);
 
-  const failedJobsFiltered = useMemo(() => {
-    const jobs = queueData?.failedJobs ?? [];
-    const normalizedOrderFilter = failedJobOrderFilter.trim().toLowerCase();
-    const normalizedReasonFilter = failedJobReasonFilter.trim().toLowerCase();
-
-    return jobs.filter((job) => {
-      const orderId = typeof job.data?.orderId === 'string' ? job.data.orderId : '';
-      const failedReason = (job.failedReason ?? '').toLowerCase();
-      const orderMatch = normalizedOrderFilter.length === 0 || orderId.toLowerCase().includes(normalizedOrderFilter);
-      const reasonMatch = normalizedReasonFilter.length === 0 || failedReason.includes(normalizedReasonFilter);
-      return orderMatch && reasonMatch;
-    });
-  }, [failedJobOrderFilter, failedJobReasonFilter, queueData]);
-
-  const failedJobPageSizeNumber = Math.max(1, Number(failedJobPageSize));
-  const failedJobTotalPages = Math.max(1, Math.ceil(failedJobsFiltered.length / failedJobPageSizeNumber));
-  const boundedFailedJobPage = Math.min(failedJobPage, failedJobTotalPages);
-  const failedJobsPaged = useMemo(() => {
-    const start = (boundedFailedJobPage - 1) * failedJobPageSizeNumber;
-    return failedJobsFiltered.slice(start, start + failedJobPageSizeNumber);
-  }, [boundedFailedJobPage, failedJobPageSizeNumber, failedJobsFiltered]);
-
-  useEffect(() => {
-    setFailedJobPage(1);
-  }, [failedJobOrderFilter, failedJobReasonFilter, failedJobPageSize, queueData?.failedJobs.length]);
-
-  useEffect(() => {
-    if (failedJobPage !== boundedFailedJobPage) {
-      setFailedJobPage(boundedFailedJobPage);
-    }
-  }, [boundedFailedJobPage, failedJobPage]);
+  const pagination = queueData?.pagination;
+  const totalMatchedFailedJobs = pagination?.totalMatchedFailedJobs ?? queueData?.failedJobs.length ?? 0;
+  const failedJobTotalPages = Math.max(1, pagination?.totalPages ?? 1);
 
   async function loadIncidentSnapshot(args?: {
     source?: SnapshotSource;
     quiet?: boolean;
+    pageOverride?: number;
+    orderIdOverride?: string;
+    failedReasonOverride?: string;
   }): Promise<void> {
     const source = args?.source ?? 'manual';
     const quiet = args?.quiet ?? false;
+    const effectivePage = Math.max(1, args?.pageOverride ?? failedJobPage);
+    const effectiveOrderFilter = (args?.orderIdOverride ?? failedJobOrderFilter).trim();
+    const effectiveReasonFilter = (args?.failedReasonOverride ?? failedJobReasonFilter).trim();
 
     if (!adminToken.trim()) {
       if (!quiet) {
@@ -231,7 +232,18 @@ export default function AdminRenderIncidentPage(): JSX.Element {
     }
 
     try {
-      const queueResponse = await fetch(`${apiBase}/admin/queue/render/dead-letter?limit=${encodeURIComponent(limit)}`, {
+      const deadLetterParams = new URLSearchParams({
+        limit,
+        page: String(effectivePage)
+      });
+      if (effectiveOrderFilter) {
+        deadLetterParams.set('orderId', effectiveOrderFilter);
+      }
+      if (effectiveReasonFilter) {
+        deadLetterParams.set('failedReason', effectiveReasonFilter);
+      }
+
+      const queueResponse = await fetch(`${apiBase}/admin/queue/render/dead-letter?${deadLetterParams.toString()}`, {
         headers: buildAdminHeaders(adminToken),
         cache: 'no-store'
       });
@@ -240,7 +252,10 @@ export default function AdminRenderIncidentPage(): JSX.Element {
         const errorMessage = 'message' in queuePayload ? queuePayload.message : undefined;
         throw new Error(errorMessage || `Dead-letter request failed (${queueResponse.status}).`);
       }
-      setQueueData(queuePayload as QueueDeadLetterResponse);
+
+      const normalizedQueuePayload = queuePayload as QueueDeadLetterResponse;
+      setQueueData(normalizedQueuePayload);
+      setFailedJobPage(normalizedQueuePayload.pagination?.page ?? effectivePage);
 
       try {
         const workerResponse = await fetch(`${apiBase}/health/worker`, {
@@ -272,8 +287,9 @@ export default function AdminRenderIncidentPage(): JSX.Element {
       }
 
       if (!quiet) {
+        const matchedCount = normalizedQueuePayload.pagination?.totalMatchedFailedJobs ?? normalizedQueuePayload.failedJobs.length;
         setMessage(
-          `Loaded render incident snapshot. Queue failed=${String((queuePayload as QueueDeadLetterResponse).queue.failedCount)}, waiting=${String((queuePayload as QueueDeadLetterResponse).queue.waitingCount)}.`
+          `Loaded render incident snapshot. Queue failed=${String(normalizedQueuePayload.queue.failedCount)}, matched=${String(matchedCount)}, waiting=${String(normalizedQueuePayload.queue.waitingCount)}.`
         );
       }
     } catch (error) {
@@ -311,7 +327,7 @@ export default function AdminRenderIncidentPage(): JSX.Element {
     return () => {
       window.clearInterval(timer);
     };
-  }, [adminToken, autoRefreshIntervalSec, limit]);
+  }, [adminToken, autoRefreshIntervalSec, limit, failedJobPage, failedJobOrderFilter, failedJobReasonFilter]);
 
   async function retryFailedJob(jobId: string): Promise<void> {
     if (!adminToken.trim()) {
@@ -341,6 +357,12 @@ export default function AdminRenderIncidentPage(): JSX.Element {
     }
   }
 
+  async function goToFailedJobPage(nextPage: number): Promise<void> {
+    const boundedPage = Math.max(1, Math.min(failedJobTotalPages, nextPage));
+    setFailedJobPage(boundedPage);
+    await loadIncidentSnapshot({ source: 'manual', pageOverride: boundedPage });
+  }
+
   return (
     <main>
       <section className="card">
@@ -363,8 +385,15 @@ export default function AdminRenderIncidentPage(): JSX.Element {
             onChange={(event) => setAdminToken(event.target.value)}
           />
 
-          <label htmlFor="limit">Rows</label>
-          <select id="limit" value={limit} onChange={(event) => setLimit(event.target.value)}>
+          <label htmlFor="limit">Rows Per Page</label>
+          <select
+            id="limit"
+            value={limit}
+            onChange={(event) => {
+              setLimit(event.target.value);
+              setFailedJobPage(1);
+            }}
+          >
             <option value="10">10</option>
             <option value="25">25</option>
             <option value="50">50</option>
@@ -383,7 +412,7 @@ export default function AdminRenderIncidentPage(): JSX.Element {
             <option value="60">Every 60s</option>
           </select>
 
-          <button disabled={loading} onClick={() => void loadIncidentSnapshot({ source: 'manual' })}>
+          <button disabled={loading} onClick={() => void loadIncidentSnapshot({ source: 'manual', pageOverride: 1 })}>
             {loading ? 'Loading Snapshot...' : 'Load Incident Snapshot'}
           </button>
           <p className={autoRefreshIntervalSec === 'off' ? 'status-chip' : 'status-chip success'}>
@@ -506,40 +535,40 @@ export default function AdminRenderIncidentPage(): JSX.Element {
             </div>
             <div className="grid two">
               <div>
-                <label htmlFor="failedJobPageSize">Page Size</label>
-                <select
-                  id="failedJobPageSize"
-                  value={failedJobPageSize}
-                  onChange={(event) => setFailedJobPageSize(event.target.value)}
-                >
-                  <option value="10">10</option>
-                  <option value="25">25</option>
-                  <option value="50">50</option>
-                </select>
-              </div>
-              <div>
                 <label htmlFor="failedJobPage">Page</label>
                 <div>
                   <button
-                    disabled={boundedFailedJobPage <= 1}
-                    onClick={() => setFailedJobPage((current) => Math.max(1, current - 1))}
+                    disabled={!(pagination?.hasPrevPage ?? false)}
+                    onClick={() => void goToFailedJobPage((pagination?.page ?? failedJobPage) - 1)}
                   >
                     Prev
                   </button>{' '}
                   <span className="mono">
-                    {boundedFailedJobPage}/{failedJobTotalPages}
+                    {pagination?.page ?? failedJobPage}/{failedJobTotalPages}
                   </span>{' '}
                   <button
-                    disabled={boundedFailedJobPage >= failedJobTotalPages}
-                    onClick={() => setFailedJobPage((current) => Math.min(failedJobTotalPages, current + 1))}
+                    disabled={!(pagination?.hasNextPage ?? false)}
+                    onClick={() => void goToFailedJobPage((pagination?.page ?? failedJobPage) + 1)}
                   >
                     Next
-                  </button>{' '}
+                  </button>
+                </div>
+              </div>
+              <div>
+                <label>Actions</label>
+                <div>
+                  <button onClick={() => void loadIncidentSnapshot({ source: 'manual', pageOverride: 1 })}>Apply Filters</button>{' '}
                   <button
                     onClick={() => {
                       setFailedJobOrderFilter('');
                       setFailedJobReasonFilter('');
                       setFailedJobPage(1);
+                      void loadIncidentSnapshot({
+                        source: 'manual',
+                        pageOverride: 1,
+                        orderIdOverride: '',
+                        failedReasonOverride: ''
+                      });
                     }}
                   >
                     Clear Filters
@@ -548,10 +577,16 @@ export default function AdminRenderIncidentPage(): JSX.Element {
               </div>
             </div>
             <p>
-              Filtered jobs: <strong>{failedJobsFiltered.length}</strong> (showing {failedJobsPaged.length} on current page)
+              Matched failed jobs: <strong>{totalMatchedFailedJobs}</strong> (showing {queueData.failedJobs.length} on this page)
             </p>
-            {failedJobsFiltered.length === 0 ? (
-              <p>No failed queue jobs in the selected window.</p>
+            {pagination?.mode === 'filtered_scan' && pagination.scanCount !== null ? (
+              <p className={pagination.scanTruncated ? 'status-chip warning' : 'status-chip'}>
+                Filter mode scans first {pagination.scanCount} failed jobs from queue
+                {pagination.scanTruncated ? ` (of ${queueData.queue.failedCount} total).` : '.'}
+              </p>
+            ) : null}
+            {queueData.failedJobs.length === 0 ? (
+              <p>No failed queue jobs in the selected page/filter window.</p>
             ) : (
               <div className="table-wrap">
                 <table className="data-table">
@@ -566,7 +601,7 @@ export default function AdminRenderIncidentPage(): JSX.Element {
                     </tr>
                   </thead>
                   <tbody>
-                    {failedJobsPaged.map((job) => {
+                    {queueData.failedJobs.map((job) => {
                       const orderId = typeof job.data?.orderId === 'string' ? job.data.orderId : null;
                       return (
                         <tr key={job.jobId}>
@@ -605,32 +640,40 @@ export default function AdminRenderIncidentPage(): JSX.Element {
         ) : queueData.recentFailedSteps.length === 0 ? (
           <p>No recent failed pipeline steps were found.</p>
         ) : (
-          <div className="table-wrap">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Finished</th>
-                  <th>Order</th>
-                  <th>Step</th>
-                  <th>Provider</th>
-                  <th>Attempt</th>
-                  <th>Error</th>
-                </tr>
-              </thead>
-              <tbody>
-                {queueData.recentFailedSteps.map((step, index) => (
-                  <tr key={`${step.order_id}-${step.type}-${step.attempt}-${index}`}>
-                    <td>{formatIsoTimestamp(step.finished_at)}</td>
-                    <td className="mono">{step.order_id}</td>
-                    <td>{step.type}</td>
-                    <td>{step.provider}</td>
-                    <td>{step.attempt}</td>
-                    <td>{step.error_text ?? 'No error text recorded.'}</td>
+          <>
+            {queueData.recentFailedStepsPagination ? (
+              <p>
+                Steps page {queueData.recentFailedStepsPagination.page}/{queueData.recentFailedStepsPagination.totalPages} (
+                total {queueData.recentFailedStepsPagination.total})
+              </p>
+            ) : null}
+            <div className="table-wrap">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Finished</th>
+                    <th>Order</th>
+                    <th>Step</th>
+                    <th>Provider</th>
+                    <th>Attempt</th>
+                    <th>Error</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {queueData.recentFailedSteps.map((step, index) => (
+                    <tr key={`${step.order_id}-${step.type}-${step.attempt}-${index}`}>
+                      <td>{formatIsoTimestamp(step.finished_at)}</td>
+                      <td className="mono">{step.order_id}</td>
+                      <td>{step.type}</td>
+                      <td>{step.provider}</td>
+                      <td>{step.attempt}</td>
+                      <td>{step.error_text ?? 'No error text recorded.'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </section>
     </main>

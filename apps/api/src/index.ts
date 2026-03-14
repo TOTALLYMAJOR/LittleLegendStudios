@@ -3690,11 +3690,19 @@ async function buildServer(): Promise<FastifyInstance> {
 
     const queryParams = z
       .object({
-        limit: z.coerce.number().int().min(1).max(100).default(25)
+        limit: z.coerce.number().int().min(1).max(100).default(25),
+        page: z.coerce.number().int().min(1).max(500).default(1),
+        orderId: z.string().trim().min(1).max(120).optional(),
+        failedReason: z.string().trim().min(1).max(200).optional()
       })
       .parse(request.query ?? {});
 
-    const failedJobs = await renderQueue.getFailed(0, queryParams.limit - 1);
+    const normalizedOrderIdFilter = queryParams.orderId?.trim().toLowerCase() || null;
+    const normalizedFailedReasonFilter = queryParams.failedReason?.trim().toLowerCase() || null;
+    const hasFailedJobFilters = Boolean(normalizedOrderIdFilter || normalizedFailedReasonFilter);
+    const pageOffset = (queryParams.page - 1) * queryParams.limit;
+    const filterScanLimit = 2000;
+
     const [failedCount, waitingCount, activeCount, delayedCount] = await Promise.all([
       renderQueue.getJobCountByTypes('failed'),
       renderQueue.getJobCountByTypes('waiting'),
@@ -3702,25 +3710,85 @@ async function buildServer(): Promise<FastifyInstance> {
       renderQueue.getJobCountByTypes('delayed')
     ]);
 
-    const recentFailedSteps = await query<{
-      order_id: string;
-      type: string;
-      attempt: number;
-      provider: string;
-      error_text: string | null;
-      finished_at: string | null;
-    }>(
-      `
-      SELECT order_id, type, attempt, provider, error_text, finished_at
-      FROM jobs
-      WHERE status = 'failed'
-      ORDER BY finished_at DESC NULLS LAST
-      LIMIT $1
-      `,
-      [queryParams.limit]
-    );
+    let failedJobs = await renderQueue.getFailed(pageOffset, pageOffset + queryParams.limit - 1);
+    let matchedFailedJobsCount = failedCount;
+    let failedJobScanCount = 0;
+    let failedJobScanTruncated = false;
+
+    if (hasFailedJobFilters) {
+      const scanCount = Math.min(failedCount, filterScanLimit);
+      failedJobScanCount = scanCount;
+      failedJobScanTruncated = scanCount < failedCount;
+      const scannedFailedJobs = scanCount > 0 ? await renderQueue.getFailed(0, scanCount - 1) : [];
+
+      const filteredJobs = scannedFailedJobs.filter((job) => {
+        const orderId = typeof job.data?.orderId === 'string' ? job.data.orderId.trim().toLowerCase() : '';
+        const failedReason = (job.failedReason ?? '').toLowerCase();
+        const orderMatch = !normalizedOrderIdFilter || orderId.includes(normalizedOrderIdFilter);
+        const reasonMatch = !normalizedFailedReasonFilter || failedReason.includes(normalizedFailedReasonFilter);
+        return orderMatch && reasonMatch;
+      });
+
+      matchedFailedJobsCount = filteredJobs.length;
+      failedJobs = filteredJobs.slice(pageOffset, pageOffset + queryParams.limit);
+    }
+
+    const failedJobTotalPages = Math.max(1, Math.ceil(matchedFailedJobsCount / queryParams.limit));
+    const failedJobsHasPrevPage = queryParams.page > 1;
+    const failedJobsHasNextPage = queryParams.page < failedJobTotalPages;
+
+    const orderIdLikeFilter = normalizedOrderIdFilter ? `%${normalizedOrderIdFilter}%` : null;
+    const failedReasonLikeFilter = normalizedFailedReasonFilter ? `%${normalizedFailedReasonFilter}%` : null;
+    const [recentFailedSteps, recentFailedStepsCountRows] = await Promise.all([
+      query<{
+        order_id: string;
+        type: string;
+        attempt: number;
+        provider: string;
+        error_text: string | null;
+        finished_at: string | null;
+      }>(
+        `
+        SELECT order_id, type, attempt, provider, error_text, finished_at
+        FROM jobs
+        WHERE status = 'failed'
+          AND ($1::text IS NULL OR order_id::text ILIKE $1)
+          AND ($2::text IS NULL OR COALESCE(error_text, '') ILIKE $2)
+        ORDER BY finished_at DESC NULLS LAST
+        LIMIT $3
+        OFFSET $4
+        `,
+        [orderIdLikeFilter, failedReasonLikeFilter, queryParams.limit, pageOffset]
+      ),
+      query<{ count: number }>(
+        `
+        SELECT COUNT(*)::int AS count
+        FROM jobs
+        WHERE status = 'failed'
+          AND ($1::text IS NULL OR order_id::text ILIKE $1)
+          AND ($2::text IS NULL OR COALESCE(error_text, '') ILIKE $2)
+        `,
+        [orderIdLikeFilter, failedReasonLikeFilter]
+      )
+    ]);
 
     return reply.send({
+      filters: {
+        orderId: normalizedOrderIdFilter,
+        failedReason: normalizedFailedReasonFilter
+      },
+      pagination: {
+        page: queryParams.page,
+        limit: queryParams.limit,
+        offset: pageOffset,
+        totalMatchedFailedJobs: matchedFailedJobsCount,
+        totalPages: failedJobTotalPages,
+        hasPrevPage: failedJobsHasPrevPage,
+        hasNextPage: failedJobsHasNextPage,
+        mode: hasFailedJobFilters ? 'filtered_scan' : 'direct',
+        scanCount: hasFailedJobFilters ? failedJobScanCount : null,
+        scanTruncated: hasFailedJobFilters ? failedJobScanTruncated : false
+      },
       queue: {
         name: 'render-orders',
         failedCount,
@@ -3739,7 +3807,14 @@ async function buildServer(): Promise<FastifyInstance> {
         processedOn: job.processedOn ?? null,
         finishedOn: job.finishedOn ?? null
       })),
-      recentFailedSteps
+      recentFailedSteps,
+      recentFailedStepsPagination: {
+        page: queryParams.page,
+        limit: queryParams.limit,
+        offset: pageOffset,
+        total: recentFailedStepsCountRows[0]?.count ?? 0,
+        totalPages: Math.max(1, Math.ceil((recentFailedStepsCountRows[0]?.count ?? 0) / queryParams.limit))
+      }
     });
   });
 

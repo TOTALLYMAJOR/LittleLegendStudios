@@ -153,6 +153,7 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
   - gift link create, inspect, redeem, resend, revoke, regenerate
 
 - [x] Admin + support tooling
+  - render incident dashboard combining worker heartbeat health with render dead-letter visibility and queue retry actions
   - dead-letter render queue visibility and retry
   - email notification failure dashboard
   - retry request history dashboard

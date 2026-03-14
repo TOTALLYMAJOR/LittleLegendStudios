@@ -246,12 +246,12 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
   - second pass shipped: API error payloads are parsed to show clear `message` text instead of raw JSON blobs
   - third pass shipped: browser draft persistence restores parent/order setup fields after refresh (uploaded files intentionally excluded)
   - fourth pass shipped: script generation now relies on server-side intake validation so resumed orders with existing uploads are not blocked by missing local file state
-- [ ] Upload UX and validation polish (`apps/web/app/create/page.tsx`)
+- [x] Upload UX and validation polish (`apps/web/app/create/page.tsx`)
   - first pass shipped: selected-file summaries and upload progress indicators
   - second pass shipped: drag/drop support for photo + voice inputs
   - second pass shipped: per-file validation feedback plus retry/remove controls
   - third pass shipped: thumbnail-style visual previews for selected photos
-  - keep backend constraints visible in UI copy (5-15 photos, one voice sample, accepted formats/duration)
+  - fourth pass shipped: persistent intake-requirement checklist + upload-readiness guidance now keeps backend constraints visible (5-15 photos, one voice sample, accepted formats/duration) before upload starts
 - [x] Parent status readability and focus (`apps/web/app/orders/[id]/page.tsx`, `apps/web/app/orders/[id]/OrderActions.tsx`)
   - first pass shipped: disabled retry/gift actions now show explicit reasons and no-script status includes a clear create-flow continuation CTA
   - second pass shipped: order page now includes a dedicated "What To Do Next" card with status-based guidance
@@ -264,8 +264,14 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
   - first pass shipped: gift-link recipient email now exposes field-level validation messaging with `aria-invalid` semantics
   - first pass shipped: Story Worlds auto-rotation now has an explicit pause/resume control and reduced live-region chatter while rotating
   - first pass shipped: manual world-card selection now pauses auto-rotation and reduced-motion mode shows explicit behavior copy
+  - second pass shipped: Story Worlds world selector now uses tab/tabpanel semantics with arrow/home/end keyboard navigation, and section guidance/copy contrast is strengthened for readability against motion/video backgrounds
   - keep contrast/readability verification in all key flows
 - [ ] Admin usability pass (`apps/web/app/admin/*`, `apps/web/app/globals.css`)
+  - first pass shipped: all admin routes now use a consistent page/status surface pattern (`admin-page`, intro card treatment, and standardized status card/message styling) for denser operational readability
+  - first pass shipped: admin data tables now have stronger scan affordances (sticky headers, row striping/hover contrast, and mobile sticky-first-column + horizontal-scroll guidance)
+  - second pass shipped: priority-column collapse now hides lower-priority columns on tablet/mobile in the densest admin tables (`render-incident`, `moderation-reviews`, `retention-history`) while keeping primary action/status columns visible
+  - third pass shipped: priority-column collapse coverage now extends to all remaining admin tables (`email-notifications`, `retry-history`, `provider-task-triage`) for consistent small-screen behavior across the admin suite
+  - fourth pass shipped: true mobile card fallbacks now replace dense tables at `<=640px` for `render-incident` and `moderation-reviews`, preserving key actions/status without horizontal-table dependency
   - improve wide-table behavior for smaller screens (mobile card fallback or priority-column collapse)
   - standardize status/feedback surfaces and spacing for dense operational pages
   - preserve high-information admin workflows while improving scannability

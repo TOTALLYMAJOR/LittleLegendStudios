@@ -165,8 +165,8 @@ export default function AdminRetentionHistoryPage(): JSX.Element {
   }
 
   return (
-    <main>
-      <section className="card">
+    <main className="admin-page">
+      <section className="card admin-intro-card">
         <h1>Retention + Purge History</h1>
         <p>
           Admin visibility for manual order-data deletions and automated retention sweeps recorded in{' '}
@@ -282,9 +282,9 @@ export default function AdminRetentionHistoryPage(): JSX.Element {
         </article>
       </section>
 
-      <section className="card">
+      <section className="card admin-status-card">
         <span className="status-chip">Status</span>
-        <p>{message}</p>
+        <p className="admin-status-message">{message}</p>
       </section>
 
       <section className="card">
@@ -296,19 +296,19 @@ export default function AdminRetentionHistoryPage(): JSX.Element {
             <table className="data-table">
               <thead>
                 <tr>
-                  <th>Created</th>
+                  <th className="col-hide-mobile">Created</th>
                   <th>Order</th>
                   <th>Trigger</th>
                   <th>Outcome</th>
                   <th>Deleted Assets</th>
-                  <th>Provider Cleanup</th>
+                  <th className="col-hide-tablet">Provider Cleanup</th>
                   <th>Notes</th>
                 </tr>
               </thead>
               <tbody>
                 {data.purgeEvents.map((event) => (
                   <tr key={event.id}>
-                    <td>{new Date(event.createdAt).toLocaleString()}</td>
+                    <td className="col-hide-mobile">{new Date(event.createdAt).toLocaleString()}</td>
                     <td>
                       <div className="mono">{event.orderId}</div>
                       <div>{event.parentEmail}</div>
@@ -327,7 +327,7 @@ export default function AdminRetentionHistoryPage(): JSX.Element {
                       </span>
                     </td>
                     <td>{event.deletedAssetCount}</td>
-                    <td>
+                    <td className="col-hide-tablet">
                       <div>Discovered: {event.providerDeletion.discoveredTargetCount ?? 0}</div>
                       <div>Attempted: {event.providerDeletion.attempted ?? 0}</div>
                       <div>Deleted: {event.providerDeletion.deleted ?? 0}</div>

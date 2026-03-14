@@ -169,8 +169,8 @@ export default function AdminProviderTaskTriagePage(): JSX.Element {
   }
 
   return (
-    <main>
-      <section className="card">
+    <main className="admin-page">
+      <section className="card admin-intro-card">
         <h1>Provider Task Failure Triage</h1>
         <p>
           Operational view for failed rows from <span className="mono">provider_tasks</span>. Filter by order/provider,
@@ -257,9 +257,9 @@ export default function AdminProviderTaskTriagePage(): JSX.Element {
         </article>
       </section>
 
-      <section className="card">
+      <section className="card admin-status-card">
         <span className="status-chip">Status</span>
-        <p>{message}</p>
+        <p className="admin-status-message">{message}</p>
       </section>
 
       <section className="card">
@@ -271,10 +271,10 @@ export default function AdminProviderTaskTriagePage(): JSX.Element {
             <table className="data-table">
               <thead>
                 <tr>
-                  <th>Updated</th>
+                  <th className="col-hide-mobile">Updated</th>
                   <th>Provider Task</th>
                   <th>Order</th>
-                  <th>Provider</th>
+                  <th className="col-hide-tablet">Provider</th>
                   <th>Error</th>
                   <th>Actions</th>
                 </tr>
@@ -282,7 +282,7 @@ export default function AdminProviderTaskTriagePage(): JSX.Element {
               <tbody>
                 {tasks.map((task) => (
                   <tr key={task.providerTaskId}>
-                    <td>
+                    <td className="col-hide-mobile">
                       <div>{new Date(task.updatedAt).toLocaleString()}</div>
                       {task.lastPolledAt ? <div>Polled: {new Date(task.lastPolledAt).toLocaleString()}</div> : null}
                     </td>
@@ -292,7 +292,7 @@ export default function AdminProviderTaskTriagePage(): JSX.Element {
                       {task.artifactKey ? <div className="mono">{task.artifactKey}</div> : null}
                     </td>
                     <td>{task.orderId ? <span className="mono">{task.orderId}</span> : 'None'}</td>
-                    <td>{task.provider}</td>
+                    <td className="col-hide-tablet">{task.provider}</td>
                     <td>
                       <p>{task.errorText ?? 'No provider error text recorded.'}</p>
                       <details>
@@ -301,12 +301,14 @@ export default function AdminProviderTaskTriagePage(): JSX.Element {
                       </details>
                     </td>
                     <td>
-                      <button disabled={Boolean(activeTaskId)} onClick={() => refreshTask(task.providerTaskId)}>
-                        {activeTaskId === task.providerTaskId ? 'Working...' : 'Refresh'}
-                      </button>
-                      <button disabled={Boolean(activeTaskId)} onClick={() => retryTask(task.providerTaskId)}>
-                        {activeTaskId === task.providerTaskId ? 'Working...' : 'Retry'}
-                      </button>
+                      <div className="admin-inline-actions">
+                        <button disabled={Boolean(activeTaskId)} onClick={() => refreshTask(task.providerTaskId)}>
+                          {activeTaskId === task.providerTaskId ? 'Working...' : 'Refresh'}
+                        </button>
+                        <button disabled={Boolean(activeTaskId)} onClick={() => retryTask(task.providerTaskId)}>
+                          {activeTaskId === task.providerTaskId ? 'Working...' : 'Retry'}
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}

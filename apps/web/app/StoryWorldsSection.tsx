@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useId, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react';
 
 import { THEME_PREVIEW_DURATION_SEC, resolveThemePreviewClip } from './lib/theme-preview-clips';
 
@@ -23,12 +23,14 @@ const AUTO_ROTATE_MS = 5600;
 export function StoryWorldsSection({ worlds }: StoryWorldsSectionProps): JSX.Element {
   const sectionRef = useRef<HTMLElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const worldButtonRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const [activeWorldIndex, setActiveWorldIndex] = useState(0);
   const [isInView, setIsInView] = useState(false);
   const [isImmersed, setIsImmersed] = useState(false);
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
   const [isAutoRotatePaused, setIsAutoRotatePaused] = useState(false);
   const [videoUnavailable, setVideoUnavailable] = useState(false);
+  const sectionId = useId().replace(/:/g, '');
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -152,6 +154,47 @@ export function StoryWorldsSection({ worlds }: StoryWorldsSectionProps): JSX.Ele
   const progressStyle = {
     gridTemplateColumns: `repeat(${worlds.length}, minmax(0, 1fr))`
   } as CSSProperties;
+  const stagePanelId = `${sectionId}-world-panel`;
+  const rotationNoteId = `${sectionId}-rotation-note`;
+  const activeWorldTabId = `${sectionId}-world-tab-${activeWorldIndex}`;
+
+  function setWorldSelection(index: number, pauseAutoRotate: boolean): void {
+    if (worlds.length === 0) {
+      return;
+    }
+
+    const normalizedIndex = ((index % worlds.length) + worlds.length) % worlds.length;
+    setActiveWorldIndex(normalizedIndex);
+    setIsImmersed(true);
+    if (pauseAutoRotate && worlds.length > 1 && !prefersReducedMotion) {
+      setIsAutoRotatePaused(true);
+    }
+  }
+
+  function handleWorldCardKeyDown(event: KeyboardEvent<HTMLButtonElement>, index: number): void {
+    if (worlds.length < 2) {
+      return;
+    }
+
+    let nextIndex: number | null = null;
+    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+      nextIndex = (index + 1) % worlds.length;
+    } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+      nextIndex = (index - 1 + worlds.length) % worlds.length;
+    } else if (event.key === 'Home') {
+      nextIndex = 0;
+    } else if (event.key === 'End') {
+      nextIndex = worlds.length - 1;
+    }
+
+    if (nextIndex === null) {
+      return;
+    }
+
+    event.preventDefault();
+    setWorldSelection(nextIndex, true);
+    worldButtonRefs.current[nextIndex]?.focus();
+  }
 
   function handleVideoTimeUpdate(): void {
     const video = videoRef.current;
@@ -211,7 +254,7 @@ export function StoryWorldsSection({ worlds }: StoryWorldsSectionProps): JSX.Ele
                 ? 'Resume Auto-Rotation'
                 : 'Pause Auto-Rotation'}
           </button>
-          <p className="worlds-rotation-note" aria-live="polite">
+          <p className="worlds-rotation-note" id={rotationNoteId} aria-live="polite">
             {prefersReducedMotion
               ? 'Reduced-motion preference is active. World previews stay paused unless you manually switch cards.'
               : autoRotateActive
@@ -222,7 +265,14 @@ export function StoryWorldsSection({ worlds }: StoryWorldsSectionProps): JSX.Ele
       </div>
 
       <div className="worlds-immersive-grid">
-        <article className={`world-stage ${isInView ? 'world-stage-awake' : ''}`} style={stageStyle} aria-live={autoRotateActive ? 'off' : 'polite'}>
+        <article
+          className={`world-stage ${isInView ? 'world-stage-awake' : ''}`}
+          style={stageStyle}
+          id={stagePanelId}
+          role="tabpanel"
+          aria-labelledby={activeWorldTabId}
+          aria-live={autoRotateActive ? 'off' : 'polite'}
+        >
           <div className="world-stage-video-shell">
             <video
               ref={videoRef}
@@ -273,35 +323,50 @@ export function StoryWorldsSection({ worlds }: StoryWorldsSectionProps): JSX.Ele
         </article>
 
         <div className="world-nav-rail">
-          {worlds.map((world, index) => {
-            const cardStyle = {
-              '--card-primary': world.palette[0],
-              '--card-secondary': world.palette[1]
-            } as CSSProperties;
+          <p className="world-nav-instructions">Use arrow keys to move between worlds. Selecting a card pauses auto-rotation.</p>
+          <div
+            className="world-nav-tabs"
+            role="tablist"
+            aria-label="Story world previews"
+            aria-orientation="vertical"
+            aria-describedby={rotationNoteId}
+          >
+            {worlds.map((world, index) => {
+              const cardStyle = {
+                '--card-primary': world.palette[0],
+                '--card-secondary': world.palette[1]
+              } as CSSProperties;
+              const isActive = index === activeWorldIndex;
+              const worldTabId = `${sectionId}-world-tab-${index}`;
 
-            return (
-              <button
-                key={world.name}
-                type="button"
-                className={`world-nav-card ${index === activeWorldIndex ? 'is-active' : ''}`}
-                onMouseEnter={() => setActiveWorldIndex(index)}
-                onFocus={() => setActiveWorldIndex(index)}
-                onClick={() => {
-                  setActiveWorldIndex(index);
-                  setIsImmersed(true);
-                  setIsAutoRotatePaused(true);
-                }}
-                style={cardStyle}
-                aria-pressed={index === activeWorldIndex}
-                aria-label={`Preview ${world.name}`}
-              >
-                <span className="world-card-chip world-card-chip-soft">{world.tone}</span>
-                <h3>{world.name}</h3>
-                <p>{world.description}</p>
-                <span className="world-nav-note">{world.accent}</span>
-              </button>
-            );
-          })}
+              return (
+                <button
+                  key={world.name}
+                  type="button"
+                  className={`world-nav-card ${index === activeWorldIndex ? 'is-active' : ''}`}
+                  onMouseEnter={() => setWorldSelection(index, true)}
+                  onFocus={() => setWorldSelection(index, true)}
+                  onClick={() => setWorldSelection(index, true)}
+                  onKeyDown={(event) => handleWorldCardKeyDown(event, index)}
+                  ref={(node) => {
+                    worldButtonRefs.current[index] = node;
+                  }}
+                  style={cardStyle}
+                  id={worldTabId}
+                  role="tab"
+                  tabIndex={isActive ? 0 : -1}
+                  aria-selected={isActive}
+                  aria-controls={stagePanelId}
+                  aria-label={`Preview ${world.name}`}
+                >
+                  <span className="world-card-chip world-card-chip-soft">{world.tone}</span>
+                  <h3>{world.name}</h3>
+                  <p>{world.description}</p>
+                  <span className="world-nav-note">{world.accent}</span>
+                </button>
+              );
+            })}
+          </div>
         </div>
       </div>
     </section>

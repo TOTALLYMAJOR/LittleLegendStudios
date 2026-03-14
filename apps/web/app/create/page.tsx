@@ -63,6 +63,7 @@ const childDirectorFlags = resolveChildDirectorFlags();
 type StepKey = 'identity' | 'order' | 'upload' | 'scriptPayment';
 type StepState = 'locked' | 'active' | 'complete';
 type UploadStatus = 'selected' | 'uploading' | 'uploaded' | 'failed';
+type UploadRequirementState = 'met' | 'pending' | 'warning';
 
 interface MediaUploadItem {
   id: string;
@@ -423,7 +424,7 @@ function CreateOrderPageContent(): JSX.Element {
   const [stepMessages, setStepMessages] = useState<StepMessages>({
     identity: 'Enter parent email to load or create account context.',
     order: 'Load themes, select one, confirm consent, and create an order.',
-    upload: 'Select 5-15 photos and one voice sample.',
+    upload: 'Select 5-15 JPG/PNG photos and one 30-60 second WAV/M4A voice sample.',
     scriptPayment: 'Generate, approve, then pay to queue rendering.'
   });
   const [actionLoading, setActionLoading] = useState<ActionLoadingState>({
@@ -485,6 +486,74 @@ function CreateOrderPageContent(): JSX.Element {
     }
     return photoUploads.every((item) => item.status === 'uploaded');
   }, [photoUploads, voiceUpload]);
+  const isPhotoCountInRange = useMemo(() => photoCount >= 5 && photoCount <= 15, [photoCount]);
+  const hasVoiceSelected = useMemo(() => Boolean(voiceUpload), [voiceUpload]);
+  const canStartUpload = useMemo(
+    () => orderId.length > 0 && isPhotoCountInRange && hasVoiceSelected,
+    [orderId, isPhotoCountInRange, hasVoiceSelected]
+  );
+  const uploadReadinessMessage = useMemo(() => {
+    if (!orderId) {
+      return 'Create order in Step 2 before signing upload intents.';
+    }
+    if (photoCount < 5) {
+      const remaining = 5 - photoCount;
+      return `Add ${String(remaining)} more photo${remaining === 1 ? '' : 's'} before uploading.`;
+    }
+    if (photoCount > 15) {
+      const excess = photoCount - 15;
+      return `Remove ${String(excess)} photo${excess === 1 ? '' : 's'} to stay within the 15-photo limit.`;
+    }
+    if (!voiceUpload) {
+      return 'Select one voice sample before uploading.';
+    }
+    return 'Ready to sign upload intents and upload selected files.';
+  }, [orderId, photoCount, voiceUpload]);
+  const uploadRequirements = useMemo(
+    () =>
+      [
+        photoCount < 5
+          ? {
+              id: 'photo-count',
+              state: 'pending' as UploadRequirementState,
+              label: `Photo count: add ${String(5 - photoCount)} more to reach the minimum of 5.`
+            }
+          : photoCount > 15
+            ? {
+                id: 'photo-count',
+                state: 'warning' as UploadRequirementState,
+                label: `Photo count: remove ${String(photoCount - 15)} to stay at 15 max.`
+              }
+            : {
+                id: 'photo-count',
+                state: 'met' as UploadRequirementState,
+                label: `Photo count ready (${String(photoCount)} selected).`
+              },
+        !voiceUpload
+          ? {
+              id: 'voice',
+              state: 'pending' as UploadRequirementState,
+              label: 'Voice sample: select exactly one WAV or M4A file.'
+            }
+          : voiceUpload.status === 'failed'
+            ? {
+                id: 'voice',
+                state: 'warning' as UploadRequirementState,
+                label: 'Voice sample failed upload. Use Retry or choose a new file.'
+              }
+            : {
+                id: 'voice',
+                state: 'met' as UploadRequirementState,
+                label: `Voice sample ready: ${voiceUpload.file.name}.`
+              },
+        {
+          id: 'format-duration',
+          state: 'met' as UploadRequirementState,
+          label: 'Accepted intake media: JPG/PNG photos and one 30-60 second WAV/M4A voice sample.'
+        }
+      ] as Array<{ id: string; state: UploadRequirementState; label: string }>,
+    [photoCount, voiceUpload]
+  );
 
   const canCreateUser = useMemo(() => email.length > 3, [email]);
   const canCreateOrder = useMemo(
@@ -1565,6 +1634,14 @@ function CreateOrderPageContent(): JSX.Element {
             </span>
           </header>
           <p>Photos: 5-15 JPG/PNG. Voice: one 30-60 second WAV/M4A sample.</p>
+          <ul className="upload-requirements" aria-live="polite">
+            {uploadRequirements.map((requirement) => (
+              <li key={requirement.id} className={`upload-requirement is-${requirement.state}`}>
+                <span className="upload-requirement-dot" aria-hidden="true" />
+                <span>{requirement.label}</span>
+              </li>
+            ))}
+          </ul>
 
           <label htmlFor="photos">Child Photos</label>
           <div
@@ -1714,7 +1791,8 @@ function CreateOrderPageContent(): JSX.Element {
             </div>
           ) : null}
 
-          <button disabled={!orderId || actionLoading.signUploads || isAnyActionLoading} onClick={signUploads}>
+          <p className={`flow-step-readiness ${canStartUpload ? 'is-ready' : 'is-warning'}`}>{uploadReadinessMessage}</p>
+          <button disabled={!canStartUpload || actionLoading.signUploads || isAnyActionLoading} onClick={signUploads}>
             {actionLoading.signUploads ? 'Uploading Files...' : 'Sign Upload Intents + Upload Files'}
           </button>
           {uploadProgress.totalFiles > 0 ? (

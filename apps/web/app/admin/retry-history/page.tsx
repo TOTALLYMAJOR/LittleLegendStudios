@@ -112,8 +112,8 @@ export default function AdminRetryHistoryPage(): JSX.Element {
   }
 
   return (
-    <main>
-      <section className="card">
+    <main className="admin-page">
+      <section className="card admin-intro-card">
         <h1>Retry Request History</h1>
         <p>
           Admin visibility for rows in <span className="mono">order_retry_requests</span>, including accepted and rejected
@@ -217,9 +217,9 @@ export default function AdminRetryHistoryPage(): JSX.Element {
         </article>
       </section>
 
-      <section className="card">
+      <section className="card admin-status-card">
         <span className="status-chip">Status</span>
-        <p>{message}</p>
+        <p className="admin-status-message">{message}</p>
       </section>
 
       <section className="card">
@@ -231,10 +231,10 @@ export default function AdminRetryHistoryPage(): JSX.Element {
             <table className="data-table">
               <thead>
                 <tr>
-                  <th>Created</th>
+                  <th className="col-hide-mobile">Created</th>
                   <th>Order</th>
-                  <th>Actor</th>
-                  <th>Requested Status</th>
+                  <th className="col-hide-tablet">Actor</th>
+                  <th className="col-hide-mobile">Requested Status</th>
                   <th>Outcome</th>
                   <th>Reason</th>
                 </tr>
@@ -242,14 +242,14 @@ export default function AdminRetryHistoryPage(): JSX.Element {
               <tbody>
                 {data.retryRequests.map((retry) => (
                   <tr key={retry.id}>
-                    <td>{new Date(retry.createdAt).toLocaleString()}</td>
+                    <td className="col-hide-mobile">{new Date(retry.createdAt).toLocaleString()}</td>
                     <td>
                       <div className="mono">{retry.orderId}</div>
                       <div>Current: {retry.currentOrderStatus}</div>
                       <div>{retry.parentEmail}</div>
                     </td>
-                    <td>{formatActorLabel(retry.actor)}</td>
-                    <td>{retry.requestedStatus}</td>
+                    <td className="col-hide-tablet">{formatActorLabel(retry.actor)}</td>
+                    <td className="col-hide-mobile">{retry.requestedStatus}</td>
                     <td>
                       <span className={`status-chip ${retry.accepted ? 'success' : 'warning'}`}>
                         {retry.accepted ? 'Accepted' : 'Rejected'}

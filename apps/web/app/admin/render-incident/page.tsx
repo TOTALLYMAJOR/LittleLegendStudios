@@ -136,6 +136,20 @@ export default function AdminRenderIncidentPage(): JSX.Element {
   const [failedJobOrderFilter, setFailedJobOrderFilter] = useState('');
   const [failedJobReasonFilter, setFailedJobReasonFilter] = useState('');
   const [failedJobPage, setFailedJobPage] = useState(1);
+  const [isCompactViewport, setIsCompactViewport] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const mediaQuery = window.matchMedia('(max-width: 640px)');
+    const updateViewport = (): void => setIsCompactViewport(mediaQuery.matches);
+    updateViewport();
+
+    mediaQuery.addEventListener('change', updateViewport);
+    return () => mediaQuery.removeEventListener('change', updateViewport);
+  }, []);
 
   const incidentSeverity = useMemo(() => {
     const failedCount = queueData?.queue.failedCount ?? 0;
@@ -364,8 +378,8 @@ export default function AdminRenderIncidentPage(): JSX.Element {
   }
 
   return (
-    <main>
-      <section className="card">
+    <main className="admin-page">
+      <section className="card admin-intro-card">
         <h1>Render Incident Dashboard</h1>
         <p>
           Combines worker heartbeat health and render queue dead-letter visibility so operators can quickly confirm whether
@@ -445,9 +459,9 @@ export default function AdminRenderIncidentPage(): JSX.Element {
         </article>
       </section>
 
-      <section className="card">
+      <section className="card admin-status-card">
         <span className={incidentSeverity.className}>Status</span>
-        <p>{message}</p>
+        <p className="admin-status-message">{message}</p>
       </section>
 
       <section className="card">
@@ -463,40 +477,64 @@ export default function AdminRenderIncidentPage(): JSX.Element {
             {!workerHealth.workers || workerHealth.workers.length === 0 ? (
               <p>No worker heartbeat rows found.</p>
             ) : (
-              <div className="table-wrap">
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>Worker</th>
-                      <th>Status</th>
-                      <th>Active Jobs</th>
-                      <th>Latest Order</th>
-                      <th>Age (sec)</th>
-                      <th>Heartbeat</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {workerHealth.workers.map((worker) => (
-                      <tr key={worker.workerId}>
-                        <td>
-                          <div className="mono">{worker.workerId}</div>
-                          <div>{worker.serviceName}</div>
-                        </td>
-                        <td>
-                          <span className={`status-chip ${worker.stale || worker.status === 'error' ? 'warning' : 'success'}`}>
-                            {worker.status}
-                            {worker.stale ? ' (stale)' : ''}
-                          </span>
-                        </td>
-                        <td>{worker.activeJobs}</td>
-                        <td className="mono">{worker.latestOrderId ?? 'n/a'}</td>
-                        <td>{worker.ageSec ?? 'n/a'}</td>
-                        <td>{formatIsoTimestamp(worker.lastHeartbeatAt)}</td>
+              isCompactViewport ? (
+                <div className="mobile-data-list">
+                  {workerHealth.workers.map((worker) => (
+                    <article key={worker.workerId} className="mobile-data-card">
+                      <div className="mobile-data-card-header">
+                        <div>
+                          <p className="mobile-data-kicker">Worker</p>
+                          <p className="mono mobile-data-value">{worker.workerId}</p>
+                        </div>
+                        <span className={`status-chip ${worker.stale || worker.status === 'error' ? 'warning' : 'success'}`}>
+                          {worker.status}
+                          {worker.stale ? ' (stale)' : ''}
+                        </span>
+                      </div>
+                      <p className="mobile-data-value">{worker.serviceName}</p>
+                      <p className="mobile-data-value">Active jobs: {worker.activeJobs}</p>
+                      <p className="mobile-data-value">Latest order: {worker.latestOrderId ?? 'n/a'}</p>
+                      <p className="mobile-data-value">Age (sec): {worker.ageSec ?? 'n/a'}</p>
+                      <p className="mobile-data-value">Heartbeat: {formatIsoTimestamp(worker.lastHeartbeatAt)}</p>
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <div className="table-wrap">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>Worker</th>
+                        <th>Status</th>
+                        <th>Active Jobs</th>
+                        <th className="col-hide-tablet">Latest Order</th>
+                        <th className="col-hide-mobile">Age (sec)</th>
+                        <th className="col-hide-tablet">Heartbeat</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                    </thead>
+                    <tbody>
+                      {workerHealth.workers.map((worker) => (
+                        <tr key={worker.workerId}>
+                          <td>
+                            <div className="mono">{worker.workerId}</div>
+                            <div>{worker.serviceName}</div>
+                          </td>
+                          <td>
+                            <span className={`status-chip ${worker.stale || worker.status === 'error' ? 'warning' : 'success'}`}>
+                              {worker.status}
+                              {worker.stale ? ' (stale)' : ''}
+                            </span>
+                          </td>
+                          <td>{worker.activeJobs}</td>
+                          <td className="mono col-hide-tablet">{worker.latestOrderId ?? 'n/a'}</td>
+                          <td className="col-hide-mobile">{worker.ageSec ?? 'n/a'}</td>
+                          <td className="col-hide-tablet">{formatIsoTimestamp(worker.lastHeartbeatAt)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )
             )}
           </>
         ) : null}
@@ -536,16 +574,16 @@ export default function AdminRenderIncidentPage(): JSX.Element {
             <div className="grid two">
               <div>
                 <label htmlFor="failedJobPage">Page</label>
-                <div>
+                <div className="admin-inline-actions">
                   <button
                     disabled={!(pagination?.hasPrevPage ?? false)}
                     onClick={() => void goToFailedJobPage((pagination?.page ?? failedJobPage) - 1)}
                   >
                     Prev
-                  </button>{' '}
+                  </button>
                   <span className="mono">
                     {pagination?.page ?? failedJobPage}/{failedJobTotalPages}
-                  </span>{' '}
+                  </span>
                   <button
                     disabled={!(pagination?.hasNextPage ?? false)}
                     onClick={() => void goToFailedJobPage((pagination?.page ?? failedJobPage) + 1)}
@@ -556,8 +594,8 @@ export default function AdminRenderIncidentPage(): JSX.Element {
               </div>
               <div>
                 <label>Actions</label>
-                <div>
-                  <button onClick={() => void loadIncidentSnapshot({ source: 'manual', pageOverride: 1 })}>Apply Filters</button>{' '}
+                <div className="admin-inline-actions">
+                  <button onClick={() => void loadIncidentSnapshot({ source: 'manual', pageOverride: 1 })}>Apply Filters</button>
                   <button
                     onClick={() => {
                       setFailedJobOrderFilter('');
@@ -588,46 +626,76 @@ export default function AdminRenderIncidentPage(): JSX.Element {
             {queueData.failedJobs.length === 0 ? (
               <p>No failed queue jobs in the selected page/filter window.</p>
             ) : (
-              <div className="table-wrap">
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>Queue Job</th>
-                      <th>Order</th>
-                      <th>Reason</th>
-                      <th>Attempts</th>
-                      <th>Finished</th>
-                      <th>Action</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {queueData.failedJobs.map((job) => {
-                      const orderId = typeof job.data?.orderId === 'string' ? job.data.orderId : null;
-                      return (
-                        <tr key={job.jobId}>
-                          <td>
-                            <div className="mono">{job.jobId}</div>
-                            <div>{job.name}</div>
-                          </td>
-                          <td className="mono">{orderId ?? 'n/a'}</td>
-                          <td>
-                            <p>{job.failedReason ?? 'No failure reason recorded.'}</p>
-                          </td>
-                          <td>
-                            {job.attemptsMade}/{job.maxAttempts}
-                          </td>
-                          <td>{formatMillisTimestamp(job.finishedOn)}</td>
-                          <td>
-                            <button disabled={Boolean(activeRetryJobId) || loading} onClick={() => retryFailedJob(job.jobId)}>
-                              {activeRetryJobId === job.jobId ? 'Retrying...' : 'Retry'}
-                            </button>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+              isCompactViewport ? (
+                <div className="mobile-data-list">
+                  {queueData.failedJobs.map((job) => {
+                    const orderId = typeof job.data?.orderId === 'string' ? job.data.orderId : null;
+                    return (
+                      <article key={job.jobId} className="mobile-data-card">
+                        <div className="mobile-data-card-header">
+                          <div>
+                            <p className="mobile-data-kicker">Queue Job</p>
+                            <p className="mono mobile-data-value">{job.jobId}</p>
+                          </div>
+                          <p className="mobile-data-value">{job.name}</p>
+                        </div>
+                        <p className="mobile-data-value">Order: {orderId ?? 'n/a'}</p>
+                        <p className="mobile-data-value">Reason: {job.failedReason ?? 'No failure reason recorded.'}</p>
+                        <p className="mobile-data-value">
+                          Attempts: {job.attemptsMade}/{job.maxAttempts}
+                        </p>
+                        <p className="mobile-data-value">Finished: {formatMillisTimestamp(job.finishedOn)}</p>
+                        <div className="admin-inline-actions">
+                          <button disabled={Boolean(activeRetryJobId) || loading} onClick={() => retryFailedJob(job.jobId)}>
+                            {activeRetryJobId === job.jobId ? 'Retrying...' : 'Retry'}
+                          </button>
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="table-wrap">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>Queue Job</th>
+                        <th>Order</th>
+                        <th>Reason</th>
+                        <th className="col-hide-mobile">Attempts</th>
+                        <th className="col-hide-tablet">Finished</th>
+                        <th>Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {queueData.failedJobs.map((job) => {
+                        const orderId = typeof job.data?.orderId === 'string' ? job.data.orderId : null;
+                        return (
+                          <tr key={job.jobId}>
+                            <td>
+                              <div className="mono">{job.jobId}</div>
+                              <div>{job.name}</div>
+                            </td>
+                            <td className="mono">{orderId ?? 'n/a'}</td>
+                            <td>
+                              <p>{job.failedReason ?? 'No failure reason recorded.'}</p>
+                            </td>
+                            <td className="col-hide-mobile">
+                              {job.attemptsMade}/{job.maxAttempts}
+                            </td>
+                            <td className="col-hide-tablet">{formatMillisTimestamp(job.finishedOn)}</td>
+                            <td>
+                              <button disabled={Boolean(activeRetryJobId) || loading} onClick={() => retryFailedJob(job.jobId)}>
+                                {activeRetryJobId === job.jobId ? 'Retrying...' : 'Retry'}
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )
             )}
           </>
         )}
@@ -647,32 +715,52 @@ export default function AdminRenderIncidentPage(): JSX.Element {
                 total {queueData.recentFailedStepsPagination.total})
               </p>
             ) : null}
-            <div className="table-wrap">
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Finished</th>
-                    <th>Order</th>
-                    <th>Step</th>
-                    <th>Provider</th>
-                    <th>Attempt</th>
-                    <th>Error</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {queueData.recentFailedSteps.map((step, index) => (
-                    <tr key={`${step.order_id}-${step.type}-${step.attempt}-${index}`}>
-                      <td>{formatIsoTimestamp(step.finished_at)}</td>
-                      <td className="mono">{step.order_id}</td>
-                      <td>{step.type}</td>
-                      <td>{step.provider}</td>
-                      <td>{step.attempt}</td>
-                      <td>{step.error_text ?? 'No error text recorded.'}</td>
+            {isCompactViewport ? (
+              <div className="mobile-data-list">
+                {queueData.recentFailedSteps.map((step, index) => (
+                  <article key={`${step.order_id}-${step.type}-${step.attempt}-${index}`} className="mobile-data-card">
+                    <div className="mobile-data-card-header">
+                      <div>
+                        <p className="mobile-data-kicker">Order</p>
+                        <p className="mono mobile-data-value">{step.order_id}</p>
+                      </div>
+                      <p className="mobile-data-value">{step.type}</p>
+                    </div>
+                    <p className="mobile-data-value">Finished: {formatIsoTimestamp(step.finished_at)}</p>
+                    <p className="mobile-data-value">Provider: {step.provider}</p>
+                    <p className="mobile-data-value">Attempt: {step.attempt}</p>
+                    <p className="mobile-data-value">Error: {step.error_text ?? 'No error text recorded.'}</p>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <div className="table-wrap">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Finished</th>
+                      <th>Order</th>
+                      <th>Step</th>
+                      <th className="col-hide-tablet">Provider</th>
+                      <th className="col-hide-mobile">Attempt</th>
+                      <th>Error</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {queueData.recentFailedSteps.map((step, index) => (
+                      <tr key={`${step.order_id}-${step.type}-${step.attempt}-${index}`}>
+                        <td>{formatIsoTimestamp(step.finished_at)}</td>
+                        <td className="mono">{step.order_id}</td>
+                        <td>{step.type}</td>
+                        <td className="col-hide-tablet">{step.provider}</td>
+                        <td className="col-hide-mobile">{step.attempt}</td>
+                        <td>{step.error_text ?? 'No error text recorded.'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </>
         )}
       </section>

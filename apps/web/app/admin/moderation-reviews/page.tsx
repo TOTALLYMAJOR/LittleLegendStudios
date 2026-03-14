@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000';
 
@@ -121,6 +121,20 @@ export default function AdminModerationReviewsPage(): JSX.Element {
   const [queueRetryOnApprove, setQueueRetryOnApprove] = useState(true);
   const [actionNotes, setActionNotes] = useState<Record<string, string>>({});
   const [activeActionReviewId, setActiveActionReviewId] = useState<string | null>(null);
+  const [isCompactViewport, setIsCompactViewport] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const mediaQuery = window.matchMedia('(max-width: 640px)');
+    const updateViewport = (): void => setIsCompactViewport(mediaQuery.matches);
+    updateViewport();
+
+    mediaQuery.addEventListener('change', updateViewport);
+    return () => mediaQuery.removeEventListener('change', updateViewport);
+  }, []);
 
   const scoreAverages = useMemo(() => {
     if (!data || data.reviews.length === 0) {
@@ -247,8 +261,8 @@ export default function AdminModerationReviewsPage(): JSX.Element {
   }
 
   return (
-    <main>
-      <section className="card">
+    <main className="admin-page">
+      <section className="card admin-intro-card">
         <h1>Moderation Reviews</h1>
         <p>
           Admin workflow for moderation outcomes pulled from <span className="mono">jobs</span> type{' '}
@@ -389,9 +403,9 @@ export default function AdminModerationReviewsPage(): JSX.Element {
         </article>
       </section>
 
-      <section className="card">
+      <section className="card admin-status-card">
         <span className="status-chip">Status</span>
-        <p>{message}</p>
+        <p className="admin-status-message">{message}</p>
       </section>
 
       <section className="card">
@@ -399,159 +413,304 @@ export default function AdminModerationReviewsPage(): JSX.Element {
         {!data ? <p>No data loaded yet.</p> : null}
         {data && data.reviews.length === 0 ? <p>No moderation reviews matched the current filters.</p> : null}
         {data && data.reviews.length > 0 ? (
-          <div className="table-wrap">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Created</th>
-                  <th>Order</th>
-                  <th>Decision</th>
-                  <th>Checks + Scores</th>
-                  <th>Reasons</th>
-                  <th>Case Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.reviews.map((review) => (
-                  <tr key={review.id}>
-                    <td>
-                      <div>{new Date(review.createdAt).toLocaleString()}</div>
-                      {review.startedAt ? <div>Started: {new Date(review.startedAt).toLocaleString()}</div> : null}
-                      {review.finishedAt ? <div>Finished: {new Date(review.finishedAt).toLocaleString()}</div> : null}
-                    </td>
-                    <td>
-                      <div className="mono">{review.orderId}</div>
-                      <div>Status: {review.orderStatus}</div>
-                      <div>Step: {review.stepStatus}</div>
-                      <div>Provider: {review.provider}</div>
-                      <div>Attempt: {review.attempt}</div>
-                      <div>{review.parentEmail}</div>
-                    </td>
-                    <td>
-                      <span className={getDecisionChipClass(review.decision)}>{review.decision}</span>
-                      {review.summary.length > 0 ? (
-                        <ul>
-                          {review.summary.slice(0, 3).map((line) => (
-                            <li key={line}>{line}</li>
-                          ))}
-                        </ul>
-                      ) : (
-                        <p>No summary lines.</p>
-                      )}
-                    </td>
-                    <td>
-                      {Object.keys(review.checks).length > 0 ? (
-                        <ul>
-                          {Object.entries(review.checks).map(([key, value]) => (
-                            <li key={key}>
-                              {key}: {value}
-                            </li>
-                          ))}
-                        </ul>
-                      ) : (
-                        <p>No checks.</p>
-                      )}
-                      {Object.keys(review.aggregateScores).length > 0 ? (
-                        <ul>
-                          {Object.entries(review.aggregateScores).map(([key, value]) => (
-                            <li key={key}>
-                              {key}: {typeof value === 'number' ? value.toFixed(3) : JSON.stringify(value)}
-                            </li>
-                          ))}
-                        </ul>
-                      ) : null}
-                    </td>
-                    <td>
-                      {review.rejectReasons.length > 0 ? (
-                        <>
-                          <p>Reject:</p>
-                          <ul>
-                            {review.rejectReasons.map((reason) => (
-                              <li key={reason}>{reason}</li>
-                            ))}
-                          </ul>
-                        </>
-                      ) : null}
-                      {review.reviewReasons.length > 0 ? (
-                        <>
-                          <p>Review:</p>
-                          <ul>
-                            {review.reviewReasons.map((reason) => (
-                              <li key={reason}>{reason}</li>
-                            ))}
-                          </ul>
-                        </>
-                      ) : null}
-                      <details>
-                        <summary>Evidence</summary>
-                        <pre>
-                          {JSON.stringify(
-                            {
-                              modelProfile: review.modelProfile,
-                              thresholdProfile: review.thresholdProfile,
-                              localChecks: review.localChecks,
-                              evidence: review.evidence,
-                              details: review.details,
-                              errorText: review.errorText
-                            },
-                            null,
-                            2
-                          )}
-                        </pre>
-                      </details>
-                    </td>
-                    <td>
-                      <label htmlFor={`note-${review.id}`}>Audit Note</label>
-                      <textarea
-                        id={`note-${review.id}`}
-                        rows={4}
-                        placeholder="Explain why this override is being made."
-                        value={actionNotes[review.id] ?? ''}
-                        onChange={(event) =>
-                          setActionNotes((current) => ({
-                            ...current,
-                            [review.id]: event.target.value
-                          }))
-                        }
-                      />
-                      <div className="grid two">
-                        <button
-                          type="button"
-                          disabled={Boolean(activeActionReviewId)}
-                          onClick={() => submitCaseAction({ review, action: 'approve' })}
-                        >
-                          {activeActionReviewId === review.id ? 'Submitting...' : 'Approve Override'}
-                        </button>
-                        <button
-                          type="button"
-                          disabled={Boolean(activeActionReviewId)}
-                          onClick={() => submitCaseAction({ review, action: 'reject' })}
-                        >
-                          {activeActionReviewId === review.id ? 'Submitting...' : 'Reject Override'}
-                        </button>
-                      </div>
+          isCompactViewport ? (
+            <div className="mobile-data-list">
+              {data.reviews.map((review) => (
+                <article key={review.id} className="mobile-data-card">
+                  <div className="mobile-data-card-header">
+                    <div>
+                      <p className="mobile-data-kicker">Order</p>
+                      <p className="mono mobile-data-value">{review.orderId}</p>
+                    </div>
+                    <span className={getDecisionChipClass(review.decision)}>{review.decision}</span>
+                  </div>
+                  <p className="mobile-data-value">
+                    Status: {review.orderStatus} | Step: {review.stepStatus} | Provider: {review.provider}
+                  </p>
+                  <p className="mobile-data-value">
+                    Attempt: {review.attempt} | Parent: {review.parentEmail}
+                  </p>
+                  <p className="mobile-data-value">
+                    Created: {new Date(review.createdAt).toLocaleString()}
+                    {review.startedAt ? ` | Started: ${new Date(review.startedAt).toLocaleString()}` : ''}
+                    {review.finishedAt ? ` | Finished: ${new Date(review.finishedAt).toLocaleString()}` : ''}
+                  </p>
 
-                      {review.caseActions.length > 0 ? (
-                        <>
-                          <p>Audit Trail:</p>
+                  {review.summary.length > 0 ? (
+                    <ul>
+                      {review.summary.slice(0, 3).map((line) => (
+                        <li key={line}>{line}</li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p>No summary lines.</p>
+                  )}
+
+                  <details>
+                    <summary>Checks + Scores</summary>
+                    {Object.keys(review.checks).length > 0 ? (
+                      <ul>
+                        {Object.entries(review.checks).map(([key, value]) => (
+                          <li key={key}>
+                            {key}: {value}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p>No checks.</p>
+                    )}
+                    {Object.keys(review.aggregateScores).length > 0 ? (
+                      <ul>
+                        {Object.entries(review.aggregateScores).map(([key, value]) => (
+                          <li key={key}>
+                            {key}: {typeof value === 'number' ? value.toFixed(3) : JSON.stringify(value)}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
+                  </details>
+
+                  <details>
+                    <summary>Reasons + Evidence</summary>
+                    {review.rejectReasons.length > 0 ? (
+                      <>
+                        <p>Reject:</p>
+                        <ul>
+                          {review.rejectReasons.map((reason) => (
+                            <li key={reason}>{reason}</li>
+                          ))}
+                        </ul>
+                      </>
+                    ) : null}
+                    {review.reviewReasons.length > 0 ? (
+                      <>
+                        <p>Review:</p>
+                        <ul>
+                          {review.reviewReasons.map((reason) => (
+                            <li key={reason}>{reason}</li>
+                          ))}
+                        </ul>
+                      </>
+                    ) : null}
+                    <pre>
+                      {JSON.stringify(
+                        {
+                          modelProfile: review.modelProfile,
+                          thresholdProfile: review.thresholdProfile,
+                          localChecks: review.localChecks,
+                          evidence: review.evidence,
+                          details: review.details,
+                          errorText: review.errorText
+                        },
+                        null,
+                        2
+                      )}
+                    </pre>
+                  </details>
+
+                  <label htmlFor={`note-mobile-${review.id}`}>Audit Note</label>
+                  <textarea
+                    id={`note-mobile-${review.id}`}
+                    rows={4}
+                    placeholder="Explain why this override is being made."
+                    value={actionNotes[review.id] ?? ''}
+                    onChange={(event) =>
+                      setActionNotes((current) => ({
+                        ...current,
+                        [review.id]: event.target.value
+                      }))
+                    }
+                  />
+                  <div className="admin-inline-actions">
+                    <button
+                      type="button"
+                      disabled={Boolean(activeActionReviewId)}
+                      onClick={() => submitCaseAction({ review, action: 'approve' })}
+                    >
+                      {activeActionReviewId === review.id ? 'Submitting...' : 'Approve Override'}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={Boolean(activeActionReviewId)}
+                      onClick={() => submitCaseAction({ review, action: 'reject' })}
+                    >
+                      {activeActionReviewId === review.id ? 'Submitting...' : 'Reject Override'}
+                    </button>
+                  </div>
+
+                  {review.caseActions.length > 0 ? (
+                    <>
+                      <p>Audit Trail:</p>
+                      <ul>
+                        {review.caseActions.map((action) => (
+                          <li key={action.id}>
+                            {new Date(action.createdAt).toLocaleString()} | {formatCaseActionLabel(action.action)} by {action.actor} |{' '}
+                            {action.previousOrderStatus} -&gt; {action.resultingOrderStatus}
+                          </li>
+                        ))}
+                      </ul>
+                    </>
+                  ) : (
+                    <p>No actions yet.</p>
+                  )}
+                </article>
+              ))}
+            </div>
+          ) : (
+            <div className="table-wrap">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th className="col-hide-mobile">Created</th>
+                    <th>Order</th>
+                    <th>Decision</th>
+                    <th className="col-hide-tablet">Checks + Scores</th>
+                    <th>Reasons</th>
+                    <th>Case Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.reviews.map((review) => (
+                    <tr key={review.id}>
+                      <td className="col-hide-mobile">
+                        <div>{new Date(review.createdAt).toLocaleString()}</div>
+                        {review.startedAt ? <div>Started: {new Date(review.startedAt).toLocaleString()}</div> : null}
+                        {review.finishedAt ? <div>Finished: {new Date(review.finishedAt).toLocaleString()}</div> : null}
+                      </td>
+                      <td>
+                        <div className="mono">{review.orderId}</div>
+                        <div>Status: {review.orderStatus}</div>
+                        <div>Step: {review.stepStatus}</div>
+                        <div>Provider: {review.provider}</div>
+                        <div>Attempt: {review.attempt}</div>
+                        <div>{review.parentEmail}</div>
+                      </td>
+                      <td>
+                        <span className={getDecisionChipClass(review.decision)}>{review.decision}</span>
+                        {review.summary.length > 0 ? (
                           <ul>
-                            {review.caseActions.map((action) => (
-                              <li key={action.id}>
-                                {new Date(action.createdAt).toLocaleString()} | {formatCaseActionLabel(action.action)} by {action.actor} |{' '}
-                                {action.previousOrderStatus} -&gt; {action.resultingOrderStatus}
+                            {review.summary.slice(0, 3).map((line) => (
+                              <li key={line}>{line}</li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <p>No summary lines.</p>
+                        )}
+                      </td>
+                      <td className="col-hide-tablet">
+                        {Object.keys(review.checks).length > 0 ? (
+                          <ul>
+                            {Object.entries(review.checks).map(([key, value]) => (
+                              <li key={key}>
+                                {key}: {value}
                               </li>
                             ))}
                           </ul>
-                        </>
-                      ) : (
-                        <p>No actions yet.</p>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                        ) : (
+                          <p>No checks.</p>
+                        )}
+                        {Object.keys(review.aggregateScores).length > 0 ? (
+                          <ul>
+                            {Object.entries(review.aggregateScores).map(([key, value]) => (
+                              <li key={key}>
+                                {key}: {typeof value === 'number' ? value.toFixed(3) : JSON.stringify(value)}
+                              </li>
+                            ))}
+                          </ul>
+                        ) : null}
+                      </td>
+                      <td>
+                        {review.rejectReasons.length > 0 ? (
+                          <>
+                            <p>Reject:</p>
+                            <ul>
+                              {review.rejectReasons.map((reason) => (
+                                <li key={reason}>{reason}</li>
+                              ))}
+                            </ul>
+                          </>
+                        ) : null}
+                        {review.reviewReasons.length > 0 ? (
+                          <>
+                            <p>Review:</p>
+                            <ul>
+                              {review.reviewReasons.map((reason) => (
+                                <li key={reason}>{reason}</li>
+                              ))}
+                            </ul>
+                          </>
+                        ) : null}
+                        <details>
+                          <summary>Evidence</summary>
+                          <pre>
+                            {JSON.stringify(
+                              {
+                                modelProfile: review.modelProfile,
+                                thresholdProfile: review.thresholdProfile,
+                                localChecks: review.localChecks,
+                                evidence: review.evidence,
+                                details: review.details,
+                                errorText: review.errorText
+                              },
+                              null,
+                              2
+                            )}
+                          </pre>
+                        </details>
+                      </td>
+                      <td>
+                        <label htmlFor={`note-${review.id}`}>Audit Note</label>
+                        <textarea
+                          id={`note-${review.id}`}
+                          rows={4}
+                          placeholder="Explain why this override is being made."
+                          value={actionNotes[review.id] ?? ''}
+                          onChange={(event) =>
+                            setActionNotes((current) => ({
+                              ...current,
+                              [review.id]: event.target.value
+                            }))
+                          }
+                        />
+                        <div className="grid two">
+                          <button
+                            type="button"
+                            disabled={Boolean(activeActionReviewId)}
+                            onClick={() => submitCaseAction({ review, action: 'approve' })}
+                          >
+                            {activeActionReviewId === review.id ? 'Submitting...' : 'Approve Override'}
+                          </button>
+                          <button
+                            type="button"
+                            disabled={Boolean(activeActionReviewId)}
+                            onClick={() => submitCaseAction({ review, action: 'reject' })}
+                          >
+                            {activeActionReviewId === review.id ? 'Submitting...' : 'Reject Override'}
+                          </button>
+                        </div>
+
+                        {review.caseActions.length > 0 ? (
+                          <>
+                            <p>Audit Trail:</p>
+                            <ul>
+                              {review.caseActions.map((action) => (
+                                <li key={action.id}>
+                                  {new Date(action.createdAt).toLocaleString()} | {formatCaseActionLabel(action.action)} by {action.actor}{' '}
+                                  | {action.previousOrderStatus} -&gt; {action.resultingOrderStatus}
+                                </li>
+                              ))}
+                            </ul>
+                          </>
+                        ) : (
+                          <p>No actions yet.</p>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )
         ) : null}
       </section>
     </main>

@@ -115,8 +115,8 @@ export default function AdminEmailFailuresPage(): JSX.Element {
   }
 
   return (
-    <main>
-      <section className="card">
+    <main className="admin-page">
+      <section className="card admin-intro-card">
         <h1>Email Notification Failures</h1>
         <p>
           Admin visibility for rows in <span className="mono">email_notifications</span> with status{' '}
@@ -214,9 +214,9 @@ export default function AdminEmailFailuresPage(): JSX.Element {
         </article>
       </section>
 
-      <section className="card">
+      <section className="card admin-status-card">
         <span className="status-chip">Status</span>
-        <p>{message}</p>
+        <p className="admin-status-message">{message}</p>
       </section>
 
       <section className="card">
@@ -228,31 +228,31 @@ export default function AdminEmailFailuresPage(): JSX.Element {
             <table className="data-table">
               <thead>
                 <tr>
-                  <th>Created</th>
+                  <th className="col-hide-mobile">Created</th>
                   <th>Order</th>
                   <th>Type</th>
-                  <th>Recipient</th>
-                  <th>Provider</th>
-                  <th>Subject</th>
+                  <th className="col-hide-tablet">Recipient</th>
+                  <th className="col-hide-mobile">Provider</th>
+                  <th className="col-hide-tablet">Subject</th>
                   <th>Error</th>
                 </tr>
               </thead>
               <tbody>
                 {data.failures.map((failure) => (
                   <tr key={failure.id}>
-                    <td>{new Date(failure.createdAt).toLocaleString()}</td>
+                    <td className="col-hide-mobile">{new Date(failure.createdAt).toLocaleString()}</td>
                     <td>
                       <div className="mono">{failure.orderId}</div>
                       <div>{failure.orderStatus}</div>
                       <div>{failure.parentEmail}</div>
                     </td>
                     <td>{formatTypeLabel(failure.notificationType)}</td>
-                    <td>{failure.recipientEmail}</td>
-                    <td>
+                    <td className="col-hide-tablet">{failure.recipientEmail}</td>
+                    <td className="col-hide-mobile">
                       <div>{failure.provider}</div>
                       {failure.providerMessageId ? <div className="mono">{failure.providerMessageId}</div> : null}
                     </td>
-                    <td>{failure.subject}</td>
+                    <td className="col-hide-tablet">{failure.subject}</td>
                     <td>
                       <p>{failure.errorText ?? 'No provider error text recorded.'}</p>
                       <details>

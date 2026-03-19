@@ -76,6 +76,7 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
   - upload selection summaries plus in-flow upload progress feedback
   - drag/drop upload zones and per-file remove/retry controls for intake media
   - thumbnail-style photo previews for selected intake files
+  - create-flow API helper only sets `Content-Type` on body-bearing JSON requests so simple cross-origin GETs avoid unnecessary preflight failures
 
 - [x] Script generation + review
   - template-based script generation

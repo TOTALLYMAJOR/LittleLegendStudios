@@ -13,7 +13,7 @@ import {
   type ParentApprovalRequest,
   type StoryChoiceCard
 } from '@little/shared/child-director';
-import { useEffect, useMemo, useState, type DragEvent } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties, type DragEvent } from 'react';
 
 import styles from './child-director.module.css';
 import {
@@ -378,12 +378,14 @@ export function ChildDirectorExplorerBoard({ release2Enabled = false }: ChildDir
           const isDragging = draggingChoiceId === choice.id;
           const scenePuzzlePieces = resolveScenePuzzlePieces(choice);
           const toneClass = styles[`scenePreviewTone${String((index % 4) + 1)}` as keyof typeof styles] ?? '';
+          const sceneMotionStyle = { '--scene-order': index } as CSSProperties;
 
           return (
             <article
               key={choice.id}
               role="listitem"
-              className={`${styles.card} ${styles.sceneCard} ${isDragging ? styles.cardDragging : ''}`}
+              className={`${styles.card} ${styles.sceneCard} ${styles.sceneCardAssembling} ${isDragging ? styles.cardDragging : ''}`}
+              style={sceneMotionStyle}
               draggable
               onDragStart={(event) => onDragStart(event, choice.id)}
               onDragOver={(event) => event.preventDefault()}
@@ -391,19 +393,26 @@ export function ChildDirectorExplorerBoard({ release2Enabled = false }: ChildDir
               onDragEnd={() => setDraggingChoiceId(null)}
             >
               <div className={`${styles.scenePreview} ${toneClass}`} aria-hidden="true">
-                {scenePuzzlePieces.map((piece, pieceIndex) => (
-                  <span key={`${choice.id}-piece-${String(pieceIndex + 1)}`} className={styles.scenePuzzlePiece}>
-                    <img
-                      className={styles.scenePuzzleImage}
-                      src={createScenePuzzleImageDataUri(piece, index, pieceIndex)}
-                      alt={`${piece.title} puzzle frame`}
-                      loading="lazy"
-                    />
-                    <span className={styles.scenePuzzleLabel}>
-                      {piece.title} - {piece.subtitle}
+                {scenePuzzlePieces.map((piece, pieceIndex) => {
+                  const pieceMotionStyle = { '--piece-order': pieceIndex } as CSSProperties;
+                  return (
+                    <span
+                      key={`${choice.id}-piece-${String(pieceIndex + 1)}`}
+                      className={`${styles.scenePuzzlePiece} ${styles.scenePuzzlePieceAssembling}`}
+                      style={pieceMotionStyle}
+                    >
+                      <img
+                        className={styles.scenePuzzleImage}
+                        src={createScenePuzzleImageDataUri(piece, index, pieceIndex)}
+                        alt={`${piece.title} puzzle frame`}
+                        loading="lazy"
+                      />
+                      <span className={styles.scenePuzzleLabel}>
+                        {piece.title} - {piece.subtitle}
+                      </span>
                     </span>
-                  </span>
-                ))}
+                  );
+                })}
               </div>
               <span className={styles.cardSticker}>Scene {String(index + 1)}</span>
               <div className={styles.cardMeta}>

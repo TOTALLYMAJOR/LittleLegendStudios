@@ -376,6 +376,7 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
   - preview-session payload now includes a structured robust prompt bundle (system/story/audio/parent summary) and the explorer board supports one-click prompt JSON copy for prompt-testing loops
   - explorer board visual pass now includes child-friendly presentation cues (playful hero panel, energy meter, and film-strip puzzle scene cards with multi-scene ordering) while preserving existing gate + session logic
   - film-strip puzzle pieces now render as generated scene-image thumbnails (inline SVG frames) so kids are arranging visual scene images instead of text-only chips
+  - film-strip board now plays staggered scene/puzzle-piece assembly animations (with reduced-motion fallback) so the strip feels like a movie reel being built in sequence
   - shared tests now validate preview-session normalization and branch-choice constraint behavior
   - `/create` now always shows child-director callout + flag status so the interactive path is discoverable even when the route flag is off
 - [x] Added Vercel preview fallback defaults for child-director flags (2026-03-13)

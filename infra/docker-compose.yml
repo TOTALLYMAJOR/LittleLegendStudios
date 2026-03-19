@@ -8,6 +8,12 @@ services:
       POSTGRES_PASSWORD: postgres
     ports:
       - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d little_legend"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+      start_period: 5s
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
@@ -16,6 +22,12 @@ services:
     container_name: little-legend-redis
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 2s
 
 volumes:
   postgres_data:

@@ -6,7 +6,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 
 import { resolveChildDirectorFlags } from '../lib/child-director-flags';
-import { persistParentSessionToken, readParentSessionTokenFromBrowser } from '../lib/parent-session';
+import { persistParentSessionToken } from '../lib/parent-session';
 import { resolveThemePreviewClip } from '../lib/theme-preview-clips';
 
 type Theme = {
@@ -346,14 +346,11 @@ function clearCreateOrderDraftSnapshot(): void {
 }
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const parentAccessToken = typeof window === 'undefined' ? null : readParentSessionTokenFromBrowser();
-
   const response = await fetch(`${apiBase}${path}`, {
     ...init,
     credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
-      ...(parentAccessToken ? { 'x-parent-access-token': parentAccessToken } : {}),
       ...(init?.headers ?? {})
     }
   });
@@ -1042,13 +1039,15 @@ function CreateOrderPageContent(): JSX.Element {
     setActionBusy('upsertUser', true);
     setStepMessage('identity', 'Saving parent identity...');
     try {
-      const user = await apiFetch<{ id: string; parentAccessToken: string }>('/users/upsert', {
+      const user = await apiFetch<{ id: string; parentAccessToken?: string }>('/users/upsert', {
         method: 'POST',
         body: JSON.stringify({ email })
       });
 
       setUserId(user.id);
-      persistParentSessionToken(user.parentAccessToken);
+      if (typeof user.parentAccessToken === 'string' && user.parentAccessToken.trim().length > 0) {
+        persistParentSessionToken(user.parentAccessToken);
+      }
       if (returnTo) {
         const message = `Parent session restored. Returning to ${recoveringOrderId ?? 'your order'}...`;
         setStepMessage('identity', message);

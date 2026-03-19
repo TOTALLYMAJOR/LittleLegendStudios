@@ -66,6 +66,13 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Fetch base ref for docs sync
+        if: github.event_name == 'pull_request'
+        run: git fetch --no-tags --prune --depth=1 origin ${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}
+
+      - name: Docs sync guard
+        run: npm run docs:check
+
       - name: Agent orchestration tests
         run: npm run test:agents
 

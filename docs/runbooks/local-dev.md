@@ -7,6 +7,7 @@ npm run dev:boot
 
 ## Core checks
 ```bash
+npm run docs:check
 npm run typecheck
 npm run build
 bash ./scripts/smoke-local.sh

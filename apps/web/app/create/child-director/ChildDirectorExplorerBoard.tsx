@@ -25,6 +25,14 @@ import {
 
 const dragDataKey = 'application/x-little-story-choice-id';
 
+const scenePuzzlePiecesByChoiceId: Record<string, readonly string[]> = {
+  'opening-scene': ['Launch Pad', 'Spark Sky', 'Hero Wave'],
+  'helper-character': ['Guide Friend', 'Signal Star', 'Map Light'],
+  'twist-moment': ['Storm Cloud', 'Lost Key', 'Fast Choice'],
+  'team-choice': ['Puzzle Door', 'Team Stack', 'Bridge Jump'],
+  'ending-beat': ['Confetti', 'Victory Hug', 'Final Frame']
+};
+
 function readDraggedChoiceId(event: DragEvent<HTMLElement>): string | null {
   const explicitValue = event.dataTransfer.getData(dragDataKey);
   if (explicitValue) {
@@ -35,6 +43,15 @@ function readDraggedChoiceId(event: DragEvent<HTMLElement>): string | null {
   return fallbackValue || null;
 }
 
+function resolveScenePuzzlePieces(choice: StoryChoiceCard): string[] {
+  const pieces = scenePuzzlePiecesByChoiceId[choice.id];
+  if (pieces && pieces.length > 0) {
+    return [...pieces];
+  }
+
+  return [choice.title, 'Camera Move', 'Final Cut'];
+}
+
 interface ChildDirectorExplorerBoardProps {
   release2Enabled?: boolean;
 }
@@ -43,7 +60,7 @@ export function ChildDirectorExplorerBoard({ release2Enabled = false }: ChildDir
   const explorerConfig = useMemo(() => resolveChildInterfaceConfig('explorer'), []);
   const [choices, setChoices] = useState<StoryChoiceCard[]>(() => createExplorerStoryLane().choices);
   const [draggingChoiceId, setDraggingChoiceId] = useState<string | null>(null);
-  const [statusMessage, setStatusMessage] = useState('Drag cards to reorder the story beats.');
+  const [statusMessage, setStatusMessage] = useState('Drag scene frames to puzzle together your movie strip.');
   const [runtimeTargetSec, setRuntimeTargetSec] = useState(() => choices.length * 18);
   const [majorDecisionCount, setMajorDecisionCount] = useState(1);
   const [contentRiskPct, setContentRiskPct] = useState(20);
@@ -142,11 +159,11 @@ export function ChildDirectorExplorerBoard({ release2Enabled = false }: ChildDir
       return;
     }
 
-    const sourceTitle = choices[sourceIndex]?.title ?? 'Story beat';
+    const sourceTitle = choices[sourceIndex]?.title ?? 'Scene';
     const nextChoices = reorderExplorerStoryChoices(choices, sourceIndex, boundedTargetIndex);
     setChoices(nextChoices);
     setStatusMessage(
-      `Moved ${sourceTitle} from position ${String(sourceIndex + 1)} to ${String(boundedTargetIndex + 1)}.`
+      `Moved ${sourceTitle} from scene ${String(sourceIndex + 1)} to scene ${String(boundedTargetIndex + 1)}.`
     );
   }
 
@@ -264,36 +281,45 @@ export function ChildDirectorExplorerBoard({ release2Enabled = false }: ChildDir
     <section className={`card ${styles.explorerShell}`}>
       <header className={styles.kidHero}>
         <p className={styles.kidHeroEyebrow}>Explorer Playground</p>
-        <h2>Build Your Adventure</h2>
+        <h2>Puzzle a Movie Strip</h2>
         <p>
-          Drag story beats into your favorite order, then save a release-2 preview. Arrow controls are included as a touch and keyboard fallback.
+          Arrange multiple scene frames like puzzle images on a film strip, then save a release-2 preview. Arrow controls are included as a touch and keyboard fallback.
         </p>
         <div className={styles.heroBadges}>
           <span>Energy: {adventureEnergy}%</span>
           <span>Safety tone: {safetyTone}</span>
-          <span>Choices: {choices.length}</span>
+          <span>Scenes: {choices.length}</span>
         </div>
         <div className={styles.energyRail} aria-label="Adventure energy meter">
           <span style={{ width: `${String(adventureEnergy)}%` }} />
         </div>
       </header>
 
-      <div className={styles.lane} role="list" aria-label="Explorer story beats">
+      <div className={styles.filmStrip} role="list" aria-label="Explorer movie strip scenes">
         {choices.map((choice, index) => {
           const isDragging = draggingChoiceId === choice.id;
+          const scenePuzzlePieces = resolveScenePuzzlePieces(choice);
+          const toneClass = styles[`scenePreviewTone${String((index % 4) + 1)}` as keyof typeof styles] ?? '';
 
           return (
             <article
               key={choice.id}
               role="listitem"
-              className={`${styles.card} ${isDragging ? styles.cardDragging : ''}`}
+              className={`${styles.card} ${styles.sceneCard} ${isDragging ? styles.cardDragging : ''}`}
               draggable
               onDragStart={(event) => onDragStart(event, choice.id)}
               onDragOver={(event) => event.preventDefault()}
               onDrop={(event) => onDropAtIndex(event, index)}
               onDragEnd={() => setDraggingChoiceId(null)}
             >
-              <span className={styles.cardSticker}>Beat {String(index + 1)}</span>
+              <div className={`${styles.scenePreview} ${toneClass}`} aria-hidden="true">
+                {scenePuzzlePieces.map((piece, pieceIndex) => (
+                  <span key={`${choice.id}-piece-${String(pieceIndex + 1)}`} className={styles.scenePuzzlePiece}>
+                    <span>{piece}</span>
+                  </span>
+                ))}
+              </div>
+              <span className={styles.cardSticker}>Scene {String(index + 1)}</span>
               <div className={styles.cardMeta}>
                 <span className={styles.cardIndex}>{String(index + 1).padStart(2, '0')}</span>
                 <h3>{choice.title}</h3>
@@ -301,14 +327,14 @@ export function ChildDirectorExplorerBoard({ release2Enabled = false }: ChildDir
               <p>{choice.detail}</p>
               <div className={styles.actions}>
                 <button type="button" disabled={index === 0} onClick={() => moveChoiceByDelta(index, -1)}>
-                  Move Earlier
+                  Move Scene Earlier
                 </button>
                 <button
                   type="button"
                   disabled={index === choices.length - 1}
                   onClick={() => moveChoiceByDelta(index, 1)}
                 >
-                  Move Later
+                  Move Scene Later
                 </button>
               </div>
             </article>
@@ -317,7 +343,7 @@ export function ChildDirectorExplorerBoard({ release2Enabled = false }: ChildDir
       </div>
 
       <div className={styles.dropTail} onDragOver={(event) => event.preventDefault()} onDrop={onDropAtEnd}>
-        Drop here to place this beat at the finale.
+        Drop here to place this scene at the finale.
       </div>
 
       <section className={styles.gateControls}>
@@ -421,6 +447,7 @@ export function ChildDirectorExplorerBoard({ release2Enabled = false }: ChildDir
           <li>Age group: {explorerConfig.ageGroup}</li>
           <li>Input methods: {explorerConfig.inputMethods.join(', ')}</li>
           <li>Complexity level: {explorerConfig.complexityLevel}</li>
+          <li>Scene strip order: {choices.map((choice) => choice.title).join(' -> ')}</li>
           <li>Runtime target: {runtimeTargetSec}s</li>
           <li>Major decisions: {majorDecisionCount}</li>
           <li>Content risk: {contentRiskPct}%</li>

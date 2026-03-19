@@ -89,7 +89,10 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
   - signed parent access token issuance
   - order status, retry, and gift-link actions gated by ownership
   - unauthorized/session-expired recovery path in the web flow
-  - browser-session token bridge: create/gift flows persist token to both localStorage + cookie, and order status performs one-time browser-token auto-restore when cookie is missing
+  - cookie-first browser auth flow: create/gift issuance relies on `Set-Cookie` + `credentials: include`; API JSON still includes `parentAccessToken` bootstrap fields for split-host order-status session bridging
+  - API no longer accepts legacy `x-parent-access-token` header on parent routes
+  - cookie-authenticated parent mutation routes now enforce allowed `Origin` checks to reduce CSRF risk
+  - order status still includes a one-time browser-token auto-restore fallback for legacy sessions when cookie is missing
   - order status error-state fallback for API/network failures with explicit recovery guidance
 
 - [x] Payment + checkout path
@@ -305,6 +308,39 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
   - new helper scripts: `scripts/agents/implementer.sh` and `scripts/agents/run.sh`
   - local agent npm scripts now auto-load `.env` via `scripts/agents/run.sh`, so `AGENT_IMPLEMENTER_CMD` in `.env` is picked up without manual export
   - `.env.example` now documents `AGENT_IMPLEMENTER_CMD=bash ./scripts/agents/implementer.sh` as the default local command
+- [x] Hardened optional URL env parsing for local boot reliability (2026-03-15)
+  - API + worker env schemas now treat blank optional URL vars as unset instead of failing validation
+  - `npm --workspace @little/api run migrate` now succeeds with `.env` entries that leave optional URL vars blank
+- [x] Switched auto-refund to explicit opt-in by env (2026-03-15)
+  - `AUTO_REFUND_ON_FAILURE` now defaults to disabled when unset in API + worker env parsing
+  - `.env.example` now sets `AUTO_REFUND_ON_FAILURE=false` so failed renders remain triageable/retryable unless explicit auto-refund behavior is required
+- [x] Hardened local Docker boot resilience after infra restarts/rebuilds (2026-03-16)
+  - `scripts/dev-up.sh` now runs compose startup with `--remove-orphans` and waits for local Postgres/Redis reachability before migrations
+  - `infra/docker-compose.yml` now includes Postgres/Redis healthchecks for faster post-rebuild diagnostics
+- [x] Added docs governance + docs-sync enforcement controls (2026-03-16)
+  - new canonical runbook: `docs/runbooks/docs-governance.md` (ownership matrix, anti-redundancy policy, update triggers, and agent quality gates)
+  - new automated guard: `npm run docs:check` (`scripts/check-docs-sync.mjs`) with unit coverage in `scripts/agents/tests/docs-sync.unit.test.mjs`
+  - CI now runs `docs:check`, and agent reviewer default now enforces `npm run docs:check && npm run changed-files`
+  - `README.md` Built Features section is now summary-level and points to `TASKS.md` for detailed status to reduce duplicate ledgers
+  - `AGENTS.md` startup workflow now includes `docs-governance.md` and explicit `docs:check` usage for doc-critical changes
+- [x] Added PR-template docs-impact gate and agent contract parity (2026-03-16)
+  - new repo-level PR template at `.github/pull_request_template.md` now requires a `Docs impact` section with canonical-doc checklist + explanation
+  - new workflow gate `.github/workflows/pr-body-contract.yml` now rejects pull requests whose body omits `## Docs impact`
+  - agent PR body generation (`scripts/agents/runbook.mjs`) now includes `## Docs impact` by default
+  - agent release validators in both `scripts/agents/orchestrate.mjs` and `.github/workflows/agent-automerge.yml` now enforce `## Docs impact`
+  - agent runbook docs updated so required headings list remains in sync (`docs/runbooks/agent-autopilot.md`, `docs/runbooks/docs-governance.md`)
+- [x] Hardened API credentialed CORS origin allowlist (2026-03-18)
+  - API CORS no longer reflects arbitrary request origins when credentials are enabled; allowlist now includes `WEB_APP_BASE_URL` origin by default
+  - new optional env `CORS_ALLOWED_ORIGINS` supports comma-separated additional browser origins for credentialed CORS (preview/staging or multi-domain setups)
+  - `.env.example`, `README.md`, and `docs/runbooks/deploy-railway.md` now document the new env contract
+- [x] Shifted parent browser auth to cookie-first token handling (2026-03-18)
+  - `/users/upsert` and `/gift/redeem/:token` issue `Set-Cookie` and also return `parentAccessToken` bootstrap fields so split-host web SSR can rehydrate order-status auth
+  - create flow, gift redemption, and parent action requests rely on `credentials: include`; browser token persistence remains a compatibility bridge for split-host session recovery
+  - smoke automation supports cookie-jar auth fallback even when parent tokens are absent in API payloads
+- [x] Removed legacy parent-header auth and added cookie-CSRF origin guard (2026-03-18)
+  - API parent auth extractor now supports `Authorization: Bearer` and `parent_access_token` cookie only (`x-parent-access-token` removed)
+  - parent-owned mutation routes (`orders`, uploads/sign, script generate/approve, pay/retry, gift-link create/resend/revoke, consent, delete-data) now reject cookie-authenticated requests with missing or non-allowlisted `Origin`
+  - smoke automation now auto-attaches a browser-style `Origin` header when replaying cookie-authenticated mutations
 
 ## Child-Director Foundation Slice (2026-03-09)
 
@@ -336,7 +372,7 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
   - API now supports `POST`/`GET` child-director preview sessions with optional parent token linkage and persisted parent-approval request metadata
   - preview-session payload now includes constrained branch-choice summary (max 3) and short-audio prompt metadata
   - preview-session payload now includes a structured robust prompt bundle (system/story/audio/parent summary) and the explorer board supports one-click prompt JSON copy for prompt-testing loops
-  - explorer board visual pass now includes child-friendly presentation cues (playful hero panel, energy meter, sticker-style beat cards, and friendlier action copy) while preserving existing gate + session logic
+  - explorer board visual pass now includes child-friendly presentation cues (playful hero panel, energy meter, and film-strip puzzle scene cards with multi-scene ordering) while preserving existing gate + session logic
   - shared tests now validate preview-session normalization and branch-choice constraint behavior
   - `/create` now always shows child-director callout + flag status so the interactive path is discoverable even when the route flag is off
 - [x] Added Vercel preview fallback defaults for child-director flags (2026-03-13)

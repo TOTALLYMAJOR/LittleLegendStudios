@@ -10,6 +10,15 @@ dotenv.config({
   path: process.env.ENV_FILE ?? rootEnvPath
 });
 
+const optionalUrl = z.preprocess((value) => {
+  if (typeof value !== 'string') {
+    return value;
+  }
+
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}, z.string().url().optional());
+
 const schema = z.object({
   DATABASE_URL: z.string().url(),
   REDIS_URL: z.string().url(),
@@ -17,6 +26,10 @@ const schema = z.object({
   API_PORT: z.coerce.number().int().positive().default(4000),
   NEXT_PUBLIC_API_BASE_URL: z.string().url().default('http://localhost:4000'),
   WEB_APP_BASE_URL: z.string().url().default('http://localhost:3000'),
+  CORS_ALLOWED_ORIGINS: z
+    .string()
+    .optional()
+    .transform((value) => (value && value.trim().length > 0 ? value : undefined)),
   PUBLIC_ASSET_BASE_URL: z.string().url().default('http://localhost:4000/assets'),
   ASSET_SIGNING_SECRET: z.string().min(16).default('dev_asset_signing_secret_change_me'),
   ASSET_UPLOAD_URL_TTL_SEC: z.coerce.number().int().positive().default(900),
@@ -25,21 +38,13 @@ const schema = z.object({
   ASSET_LOCAL_ROOT: z.string().min(1).default('/tmp/little-legend-assets'),
   PROVIDER_INTEGRATION_MODE: z.enum(['stub', 'hybrid', 'strict']).default('stub'),
   PROVIDER_HTTP_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
-  PROVIDER_SOURCE_ASSET_BASE_URL: z
-    .string()
-    .url()
-    .optional()
-    .transform((value) => (value && value.trim().length > 0 ? value : undefined)),
+  PROVIDER_SOURCE_ASSET_BASE_URL: optionalUrl,
   PROVIDER_SOURCE_ASSET_BEARER_TOKEN: z
     .string()
     .optional()
     .transform((value) => (value && value.trim().length > 0 ? value : undefined)),
   MODERATION_EXTERNAL_MODEL_MODE: z.enum(['off', 'hybrid', 'strict']).default('off'),
-  MODERATION_EXTERNAL_MODEL_BASE_URL: z
-    .string()
-    .url()
-    .optional()
-    .transform((value) => (value && value.trim().length > 0 ? value : undefined)),
+  MODERATION_EXTERNAL_MODEL_BASE_URL: optionalUrl,
   MODERATION_EXTERNAL_MODEL_PATH: z.string().min(1).default('/v1/moderation/photo-scores'),
   MODERATION_EXTERNAL_MODEL_API_KEY: z
     .string()
@@ -114,7 +119,7 @@ const schema = z.object({
   AUTO_REFUND_ON_FAILURE: z
     .string()
     .optional()
-    .transform((value) => value === undefined || value.toLowerCase() === 'true')
+    .transform((value) => value?.toLowerCase() === 'true')
 });
 
 const parsedEnv = schema.parse(process.env);

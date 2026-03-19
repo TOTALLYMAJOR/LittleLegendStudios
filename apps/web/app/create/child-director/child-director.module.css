@@ -73,10 +73,15 @@
   background: linear-gradient(90deg, #ffd05f, #8fd4ff);
 }
 
-.lane {
+.filmStrip {
   display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(240px, 1fr);
   gap: 0.85rem;
   margin-top: 1rem;
+  overflow-x: auto;
+  padding-bottom: 0.2rem;
+  scrollbar-width: thin;
 }
 
 .card {
@@ -87,6 +92,10 @@
   padding: 0.9rem;
   background: linear-gradient(140deg, rgba(255, 219, 154, 0.08), rgba(127, 212, 251, 0.07) 48%, rgba(255, 255, 255, 0.03));
   transition: border-color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.sceneCard {
+  min-height: 290px;
 }
 
 .card:hover {
@@ -109,6 +118,64 @@
   font-size: 0.75rem;
   background: rgba(255, 198, 102, 0.12);
   color: #ffd28f;
+}
+
+.scenePreview {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.34rem;
+  margin-bottom: 0.58rem;
+  padding: 0.42rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 11px;
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.26), rgba(0, 0, 0, 0.15));
+}
+
+.scenePreviewTone1 {
+  border-color: rgba(255, 204, 126, 0.52);
+  background: linear-gradient(140deg, rgba(255, 179, 80, 0.38), rgba(46, 57, 104, 0.36));
+}
+
+.scenePreviewTone2 {
+  border-color: rgba(136, 223, 202, 0.54);
+  background: linear-gradient(140deg, rgba(53, 143, 136, 0.42), rgba(40, 88, 129, 0.36));
+}
+
+.scenePreviewTone3 {
+  border-color: rgba(176, 210, 255, 0.56);
+  background: linear-gradient(140deg, rgba(71, 116, 188, 0.42), rgba(88, 67, 129, 0.35));
+}
+
+.scenePreviewTone4 {
+  border-color: rgba(255, 166, 186, 0.54);
+  background: linear-gradient(140deg, rgba(188, 92, 126, 0.44), rgba(96, 58, 121, 0.35));
+}
+
+.scenePuzzlePiece {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  min-height: 56px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 9px;
+  padding: 0.28rem 0.22rem;
+  background:
+    radial-gradient(circle at 22% 26%, rgba(255, 255, 255, 0.3), transparent 45%),
+    linear-gradient(170deg, rgba(17, 24, 32, 0.72), rgba(14, 19, 31, 0.9));
+}
+
+.scenePuzzlePiece span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  border-radius: 7px;
+  padding: 0.18rem 0.25rem;
+  background: rgba(4, 8, 12, 0.5);
+  text-align: center;
+  font-size: 0.66rem;
+  line-height: 1.25;
+  color: rgba(248, 251, 255, 0.92);
 }
 
 .cardMeta {
@@ -227,6 +294,11 @@
 }
 
 @media (max-width: 700px) {
+  .filmStrip {
+    grid-auto-flow: row;
+    grid-auto-columns: minmax(0, 1fr);
+  }
+
   .card {
     padding: 0.75rem;
   }

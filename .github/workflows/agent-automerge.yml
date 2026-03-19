@@ -20,6 +20,7 @@ jobs:
             const requiredHeadings = [
               '## Summary',
               '## Files changed',
+              '## Docs impact',
               '## Risks / follow-ups',
               '## Commands run',
               '## Tests/lint/build results'

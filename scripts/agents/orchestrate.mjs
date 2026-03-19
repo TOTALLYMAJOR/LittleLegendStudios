@@ -18,6 +18,7 @@ const ACTIVE_STATUSES = new Set([
 const DEFAULT_REQUIRED_PR_HEADINGS = [
   '## Summary',
   '## Files changed',
+  '## Docs impact',
   '## Risks / follow-ups',
   '## Commands run',
   '## Tests/lint/build results'
@@ -426,7 +427,7 @@ async function runPipelineForTask(task, options) {
 
   const plannerCommand = env.AGENT_PLANNER_CMD;
   const implementerCommand = env.AGENT_IMPLEMENTER_CMD;
-  const reviewerCommand = env.AGENT_REVIEWER_CMD ?? 'npm run changed-files';
+  const reviewerCommand = env.AGENT_REVIEWER_CMD ?? 'npm run docs:check && npm run changed-files';
 
   await runWithRetry(
     () => runShell(`git checkout -B "${task.branchName}"`, { env: taskEnv, logFile: runLogPath }),

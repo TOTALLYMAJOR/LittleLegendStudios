@@ -58,6 +58,65 @@ function bytesForLabel(label, size) {
 }
 
 function createSmokeClient(baseUrl) {
+  const cookieJar = new Map();
+
+  function parseSetCookiePair(setCookieValue) {
+    const [cookiePair] = setCookieValue.split(';', 1);
+    const separatorIndex = cookiePair.indexOf('=');
+    if (separatorIndex <= 0) {
+      return null;
+    }
+
+    const name = cookiePair.slice(0, separatorIndex).trim();
+    const value = cookiePair.slice(separatorIndex + 1).trim();
+    if (!name || !value) {
+      return null;
+    }
+
+    return { name, value };
+  }
+
+  function getSetCookieHeaders(headers) {
+    if (typeof headers.getSetCookie === 'function') {
+      return headers.getSetCookie();
+    }
+
+    const singleHeader = headers.get('set-cookie');
+    return singleHeader ? [singleHeader] : [];
+  }
+
+  function attachCookies(headers, method) {
+    if (cookieJar.size === 0) {
+      return;
+    }
+
+    const hasCookieHeader = Object.keys(headers).some((key) => key.toLowerCase() === 'cookie');
+    if (hasCookieHeader) {
+      return;
+    }
+
+    headers.Cookie = Array.from(cookieJar.entries())
+      .map(([name, value]) => `${name}=${value}`)
+      .join('; ');
+
+    if (method !== 'GET' && method !== 'HEAD') {
+      const hasOriginHeader = Object.keys(headers).some((key) => key.toLowerCase() === 'origin');
+      if (!hasOriginHeader) {
+        headers.Origin = process.env.WEB_APP_BASE_URL ?? 'http://localhost:3000';
+      }
+    }
+  }
+
+  function persistCookies(headers) {
+    for (const setCookieValue of getSetCookieHeaders(headers)) {
+      const parsed = parseSetCookiePair(setCookieValue);
+      if (!parsed) {
+        continue;
+      }
+      cookieJar.set(parsed.name, parsed.value);
+    }
+  }
+
   async function request(path, options = {}) {
     const method = options.method ?? 'GET';
     const headers = {
@@ -70,12 +129,14 @@ function createSmokeClient(baseUrl) {
     } else if (options.body !== undefined) {
       body = options.body;
     }
+    attachCookies(headers, method);
 
     const response = await fetch(`${baseUrl}${path}`, {
       method,
       headers,
       body
     });
+    persistCookies(response.headers);
 
     const text = await response.text();
     let data = null;
@@ -199,7 +260,7 @@ async function main() {
     });
     const parentAccessToken = String(user.parentAccessToken ?? '');
     if (!parentAccessToken) {
-      throw new Error('/users/upsert did not return parentAccessToken.');
+      process.stdout.write('[smoke] /users/upsert returned no parentAccessToken; continuing with cookie auth\n');
     }
     process.stdout.write(`[smoke] user ready: ${user.id}\n`);
 

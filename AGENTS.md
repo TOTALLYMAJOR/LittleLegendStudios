@@ -12,14 +12,16 @@ Before implementing, reviewing, or proposing changes:
 2. Read the `New Session Handoff` section in [TASKS.md](/home/totallymajor/projects/LittleLegendStudios/TASKS.md) in full.
 3. Read [README.md](/home/totallymajor/projects/LittleLegendStudios/README.md) for setup, boot, smoke, and deployment context.
 4. Read [docs/runbooks/tech-stack.md](/home/totallymajor/projects/LittleLegendStudios/docs/runbooks/tech-stack.md) for the canonical technology inventory and update policy.
-5. Run `git status --short` before editing so you know whether the tree already contains user or generated changes.
-6. Treat this repo as an already-substantial implementation, not a blank scaffold.
+5. Read [docs/runbooks/docs-governance.md](/home/totallymajor/projects/LittleLegendStudios/docs/runbooks/docs-governance.md) for canonical docs ownership, anti-redundancy rules, and required update triggers.
+6. Run `git status --short` before editing so you know whether the tree already contains user or generated changes.
+7. Treat this repo as an already-substantial implementation, not a blank scaffold.
 
 ## Source Of Truth
 
 - [TASKS.md](/home/totallymajor/projects/LittleLegendStudios/TASKS.md) is the canonical build ledger and the main session-handoff document.
 - [README.md](/home/totallymajor/projects/LittleLegendStudios/README.md) stays high-level and operational.
 - [docs/runbooks/tech-stack.md](/home/totallymajor/projects/LittleLegendStudios/docs/runbooks/tech-stack.md) is the canonical technology inventory and documentation-maintenance contract for new stack introductions.
+- [docs/runbooks/docs-governance.md](/home/totallymajor/projects/LittleLegendStudios/docs/runbooks/docs-governance.md) defines documentation ownership and anti-duplication policy.
 - If they appear to conflict, prefer [TASKS.md](/home/totallymajor/projects/LittleLegendStudios/TASKS.md) for current build status and implementation scope.
 
 ## Working Rules
@@ -27,6 +29,7 @@ Before implementing, reviewing, or proposing changes:
 - Do not start feature work until you have read the handoff context in [TASKS.md](/home/totallymajor/projects/LittleLegendStudios/TASKS.md).
 - When changing meaningful product behavior or shipping new implementation, update [TASKS.md](/home/totallymajor/projects/LittleLegendStudios/TASKS.md) so the next session inherits accurate context.
 - When introducing, replacing, or removing meaningful technology (framework, runtime, core dependency, infra service, provider integration, deployment target), update [docs/runbooks/tech-stack.md](/home/totallymajor/projects/LittleLegendStudios/docs/runbooks/tech-stack.md) and the `README.md` `Stack` section in the same change.
+- Run `npm run docs:check` before handoff when behavior, stack, env-schema, agent-control, or docs-governance content changes.
 - Prefer extending existing flows in `apps/api`, `apps/worker`, and `apps/web` over rewriting patterns from scratch.
 - Use `npm run dev:boot` for the normal local startup path and `npm run smoke` for the main happy-path verification flow.
 

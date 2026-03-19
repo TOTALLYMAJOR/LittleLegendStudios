@@ -29,7 +29,7 @@ Run a VS Code-first, CI-enforced multi-agent loop that claims tasks from `TASKS.
 1. Planner
 2. Implementer
 3. Verifier (`typecheck`, `build`, and smoke when API/worker paths change)
-4. Reviewer
+4. Reviewer (`npm run docs:check && npm run changed-files` by default)
 5. Release (open PR + optional auto-merge)
 
 Run artifacts are written to `.codex/runs/<task-id>/`.
@@ -62,16 +62,22 @@ GitHub CLI helper:
   - Enforces PR body contract and enables auto-merge for `agent:auto`
 - `agent-failsafe.yml`
   - Opens incident issues when agent PR checks fail repeatedly
+- `pr-body-contract.yml`
+  - Enforces `## Docs impact` in all pull request bodies
 
 Existing required checks remain:
 - `CI`
 - `codex-review`
 - `codex-docs`
 
+Additional governance check:
+- `docs:check` (runs in CI and default reviewer command path)
+
 ## PR Contract (Enforced)
 Agent PR bodies must include:
 - `Summary`
 - `Files changed`
+- `Docs impact`
 - `Risks / follow-ups`
 - `Commands run`
 - `Tests/lint/build results`
@@ -80,3 +86,4 @@ Agent PR bodies must include:
 - Recommended branch format: `agent/<track>/<slug>-<yyyymmdd>`.
 - Maximum parallel active claims: `2`.
 - If auto-resolution fails, orchestrator marks task as `failed` or `blocked`; use `Agents: Resume Failed` after remediation.
+- Keep docs ownership and anti-redundancy policy aligned with [docs/runbooks/docs-governance.md](/home/totallymajor/projects/LittleLegendStudios/docs/runbooks/docs-governance.md).

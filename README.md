@@ -8,6 +8,8 @@ If you are opening this repo in a new Codex 5.3 session, start with [TASKS.md](/
 
 For architecture flow and child-director workflow context, use [docs/architecture/workflows.md](/home/totallymajor/projects/LittleLegendStudios/docs/architecture/workflows.md) and [docs/decisions/adr-003-preview-pipeline.md](/home/totallymajor/projects/LittleLegendStudios/docs/decisions/adr-003-preview-pipeline.md).
 
+For ownership rules and anti-duplication policy across docs, use [docs/runbooks/docs-governance.md](/home/totallymajor/projects/LittleLegendStudios/docs/runbooks/docs-governance.md).
+
 ## Stack
 
 - Canonical stack register (required maintenance target when new tech is introduced): [docs/runbooks/tech-stack.md](/home/totallymajor/projects/LittleLegendStudios/docs/runbooks/tech-stack.md)
@@ -28,6 +30,8 @@ npm run dev:boot
 This command will:
 - create `.env` from `.env.example` if missing
 - start Postgres + Redis via `infra/docker-compose.yml`
+- run Docker startup with `--remove-orphans` to clear stale local infra containers
+- wait for local Postgres + Redis readiness before running migration
 - run `npm install`
 - run API DB migration
 - start all services (`shared`, `api`, `worker`, `web`)
@@ -54,7 +58,7 @@ cp .env.example .env
 2. Start local infra:
 
 ```bash
-docker compose -f infra/docker-compose.yml up -d
+docker compose -f infra/docker-compose.yml up -d --remove-orphans
 ```
 
 3. Install dependencies:
@@ -113,7 +117,9 @@ Common commands:
 - `npm run agents:dispatch`
 - `npm run agents:dispatch:batch`
 - `npm run agents:resume`
+- `npm run docs:check`
 - set `AGENT_IMPLEMENTER_CMD=bash ./scripts/agents/implementer.sh` (repo variable for CI, env var for local)
+- PR template + workflow gate (`pr-body-contract`) require `Docs impact` so documentation deltas are explicit.
 
 ## Vercel UI Preview
 
@@ -174,6 +180,7 @@ Required Railway envs:
   - `REDIS_URL`
   - `WEB_APP_BASE_URL`
   - `NEXT_PUBLIC_API_BASE_URL`
+  - optional: `CORS_ALLOWED_ORIGINS` (comma-separated browser origins allowed for credentialed CORS; `WEB_APP_BASE_URL` origin is always allowed)
   - `PUBLIC_ASSET_BASE_URL`
   - `ASSET_SIGNING_SECRET`
   - `PARENT_AUTH_SECRET`
@@ -200,78 +207,19 @@ Operational notes:
 
 ## Built Features
 
-This repo is no longer just a thin scaffold. The current build includes:
+This README intentionally keeps feature status high-level to avoid drift and duplicated ledgers.
 
-- Parent intake + order creation
-  - create user + order
-  - selected-theme 3-second fast-cut preview in the create flow
-  - signed upload/download URL flow with local binary asset store (`/assets/upload/*`, `/assets/download/*`)
-  - parental consent gating
-  - 5-15 photo uploads and exactly 1 voice upload
-  - guided 4-step create-flow UI with per-step status messaging and upload progress feedback
-  - drag/drop upload zones plus per-file remove/retry controls during intake
-  - thumbnail-style previews for selected photos in the intake flow
-  - persistent intake-requirement checklist + upload-readiness guidance so backend constraints stay visible before upload starts (5-15 photos, one voice sample, accepted formats/duration)
+Current shipped shape (summary):
+- parent intake, script review, payment, and async render/delivery flow
+- provider-assisted pipeline (moderation, voice, scene render, compose) with retry/triage tooling
+- parent status + gift flows and admin operational dashboards
+- retention/deletion lifecycle controls and reliability guardrails
 
-- Script generation + review
-  - manifest-driven script planning
-  - premium seeded 64-84 second outputs with 8-beat theme packs
-  - max 3 script versions per order
-  - signed watermarked preview artifact (`preview_video`)
+For the full implementation ledger and historical execution updates, use [TASKS.md](/home/totallymajor/projects/LittleLegendStudios/TASKS.md).
 
-- Render pipeline
-  - moderation step with structured media checks, explicit pass/manual-review/reject decisions, and evidence summaries
-  - moderation provider contract via `/moderation/check`
-  - voice clone + voice render
-  - aggregate narration/dialogue tracks plus per-shot audio artifacts
-  - character profile generation plus reusable identity persistence/reuse across matching later orders
-  - shot render orchestration with per-shot `sceneRenderSpec`
-  - real Shotstack final timeline assembly from persisted shot assets
-  - per-shot voice tracks preferred with aggregate fallback
-  - seeded theme music bed layering + music ducking
-  - richer branded subtitle layouts with style-aware timing and wrapping in final compose
+## Documentation Governance
 
-- Theme system
-  - seeded launch themes with 10-scene manifests each
-  - premium 8-shot theme packs with explicit story-beat scene assignments
-  - richer scene metadata: anchors, palette, global FX, audio cues, grade, camera motion
-  - seeded placeholder audio assets for ambience, music beds, and SFX
-  - landing Explore section includes per-theme 3-second video-cut previews on selection
-
-- Provider integrations
-  - internal provider routes: `/voice/clone`, `/voice/render`, `/scene/*`
-  - ElevenLabs integration path for voice clone + render
-  - HeyGen integration path for shot generation
-  - Shotstack integration path for final compose
-  - provider task persistence, polling, webhook ingestion, and retry tooling
-
-- Parent + admin experience
-  - parent order status page with provider-task visibility
-  - parent retry endpoint with limits (including queued `paid` orders when render start needs requeue)
-  - parent auth + ownership enforcement
-  - gift link create / inspect / redeem / resend / revoke / regenerate
-  - admin render incident dashboard for worker heartbeat + queue dead-letter monitoring/retry, including auto-refresh + server-side dead-letter page/filter views
-  - responsive admin table hardening with priority-column collapse on dense operational views
-  - phone-sized admin card fallbacks across high-frequency operational list views (`render-incident`, `moderation-reviews`, `email-notifications`, `retry-history`, `provider-task-triage`)
-  - admin dead-letter retry view
-  - email notification failure view
-  - retry request history view
-  - provider task failure triage view
-  - retention and purge history view
-
-- Reliability + lifecycle controls
-  - Stripe stub + optional real checkout/webhook flow
-  - payment idempotency
-  - webhook replay protection
-  - render enqueue dedupe persistence
-  - delivery-ready and render-failure email logging
-  - manual order data deletion
-  - best-effort provider-side cleanup hooks
-  - provider cleanup coverage + verification reporting across discovered provider-owned targets
-  - optional retention automation for aged delivered/refunded/expired orders
-  - persisted purge event history for manual cleanup and automated sweeps
-
-For the full build ledger, use [TASKS.md](/home/totallymajor/projects/LittleLegendStudios/TASKS.md).
+Documentation ownership, anti-redundancy rules, and required update triggers are in [docs/runbooks/docs-governance.md](/home/totallymajor/projects/LittleLegendStudios/docs/runbooks/docs-governance.md).
 
 ## Remaining Work
 
@@ -293,6 +241,11 @@ Use `TASKS.md` `Next Up`, `Architecture And Scale Hardening Backlog (2026-03-14)
 - Parent auth token controls:
   - `PARENT_AUTH_SECRET` (HMAC secret for signed parent access tokens)
   - `PARENT_AUTH_TTL_SEC` (token lifetime)
+  - browser flows rely on cookie issuance (`Set-Cookie`) and `credentials: include`; create/gift auth payloads still include `parentAccessToken` bootstrap fields for split-host order-status session bridging
+  - cookie-authenticated parent mutation requests now require an allowed browser `Origin` (same allowlist used by credentialed CORS)
+- Refund policy control:
+  - `AUTO_REFUND_ON_FAILURE=false` keeps failed renders in recoverable statuses (`failed_hard`/`manual_review`) for triage + retry
+  - set `AUTO_REFUND_ON_FAILURE=true` only when automatic charge reversal on hard-failure is explicitly desired
 - To run model + scene generation through local API provider routes, set worker envs:
   - `MODERATION_PROVIDER_MODE=http`
   - `MODERATION_PROVIDER_BASE_URL=http://localhost:4000`

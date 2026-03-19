@@ -10,6 +10,15 @@ dotenv.config({
   path: process.env.ENV_FILE ?? rootEnvPath
 });
 
+const optionalUrl = z.preprocess((value) => {
+  if (typeof value !== 'string') {
+    return value;
+  }
+
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}, z.string().url().optional());
+
 const schema = z.object({
   DATABASE_URL: z.string().url(),
   REDIS_URL: z.string().url(),
@@ -18,23 +27,11 @@ const schema = z.object({
   ASSET_UPLOAD_URL_TTL_SEC: z.coerce.number().int().positive().default(900),
   ASSET_DOWNLOAD_URL_TTL_SEC: z.coerce.number().int().positive().default(3600),
   MODERATION_PROVIDER_MODE: z.enum(['stub', 'http']).default('stub'),
-  MODERATION_PROVIDER_BASE_URL: z
-    .string()
-    .url()
-    .optional()
-    .transform((value) => (value && value.trim().length > 0 ? value : undefined)),
+  MODERATION_PROVIDER_BASE_URL: optionalUrl,
   VOICE_PROVIDER_MODE: z.enum(['stub', 'http']).default('stub'),
-  VOICE_PROVIDER_BASE_URL: z
-    .string()
-    .url()
-    .optional()
-    .transform((value) => (value && value.trim().length > 0 ? value : undefined)),
+  VOICE_PROVIDER_BASE_URL: optionalUrl,
   SCENE_PROVIDER_MODE: z.enum(['stub', 'http']).default('stub'),
-  SCENE_PROVIDER_BASE_URL: z
-    .string()
-    .url()
-    .optional()
-    .transform((value) => (value && value.trim().length > 0 ? value : undefined)),
+  SCENE_PROVIDER_BASE_URL: optionalUrl,
   PROVIDER_TASK_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(5000),
   PROVIDER_TASK_POLL_TIMEOUT_MS: z.coerce.number().int().positive().default(120000),
   WORKER_HEARTBEAT_INTERVAL_MS: z.coerce.number().int().positive().default(15000),
@@ -58,7 +55,7 @@ const schema = z.object({
   AUTO_REFUND_ON_FAILURE: z
     .string()
     .optional()
-    .transform((value) => value === undefined || value.toLowerCase() === 'true')
+    .transform((value) => value?.toLowerCase() === 'true')
 });
 
 export const env = schema.parse(process.env);

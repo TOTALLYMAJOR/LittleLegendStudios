@@ -46,7 +46,6 @@ interface OrderActionsProps {
   orderStatus: OrderStatus;
   parentRetryPolicy: ParentRetryPolicy;
   latestGiftLink: LatestGiftLink | null;
-  parentAccessToken: string | null;
   recoveryHref: string;
 }
 
@@ -85,7 +84,6 @@ export function OrderActions({
   orderStatus,
   parentRetryPolicy: initialRetryPolicy,
   latestGiftLink,
-  parentAccessToken,
   recoveryHref
 }: OrderActionsProps): JSX.Element {
   const [retryPolicy, setRetryPolicy] = useState<ParentRetryPolicy>(initialRetryPolicy);
@@ -103,17 +101,15 @@ export function OrderActions({
   const [giftActiveAction, setGiftActiveAction] = useState<'create' | 'resend' | 'revoke' | null>(null);
   const [giftFeedback, setGiftFeedback] = useState<ActionFeedback | null>(null);
   const [redemptionUrl, setRedemptionUrl] = useState('');
-  const [sessionRecoveryMessage, setSessionRecoveryMessage] = useState(
-    parentAccessToken ? '' : 'Parent session missing. Restore it before retrying order actions.'
-  );
+  const [sessionRecoveryMessage, setSessionRecoveryMessage] = useState('');
   const giftBlockedByStatus = orderStatus === 'refunded' || orderStatus === 'expired';
   const giftBlockedStatusReason = giftBlockedByStatus
     ? `Order status ${orderStatus} is closed; gift actions are unavailable.`
     : null;
 
   const retryDisabled = useMemo(
-    () => retryLoading || !retryPolicy.canRetry || !parentAccessToken || Boolean(sessionRecoveryMessage),
-    [parentAccessToken, retryLoading, retryPolicy.canRetry, sessionRecoveryMessage]
+    () => retryLoading || !retryPolicy.canRetry || Boolean(sessionRecoveryMessage),
+    [retryLoading, retryPolicy.canRetry, sessionRecoveryMessage]
   );
   const retryDisabledReason = useMemo(() => {
     if (sessionRecoveryMessage) {
@@ -129,10 +125,8 @@ export function OrderActions({
   }, [retryLoading, retryPolicy.canRetry, retryPolicy.reason, sessionRecoveryMessage]);
 
   const hasPendingGiftLink = giftLinkState?.status === 'pending';
-  const resendGiftDisabled =
-    giftLoading || !parentAccessToken || !hasPendingGiftLink || Boolean(sessionRecoveryMessage) || giftBlockedByStatus;
-  const revokeGiftDisabled =
-    giftLoading || !parentAccessToken || !hasPendingGiftLink || Boolean(sessionRecoveryMessage) || giftBlockedByStatus;
+  const resendGiftDisabled = giftLoading || !hasPendingGiftLink || Boolean(sessionRecoveryMessage) || giftBlockedByStatus;
+  const revokeGiftDisabled = giftLoading || !hasPendingGiftLink || Boolean(sessionRecoveryMessage) || giftBlockedByStatus;
   const resendGiftDisabledReason = useMemo(() => {
     if (sessionRecoveryMessage) {
       return sessionRecoveryMessage;
@@ -148,7 +142,7 @@ export function OrderActions({
     }
     return null;
   }, [giftBlockedStatusReason, giftLoading, hasPendingGiftLink, sessionRecoveryMessage]);
-  const createGiftDisabled = giftLoading || !parentAccessToken || Boolean(sessionRecoveryMessage) || giftBlockedByStatus;
+  const createGiftDisabled = giftLoading || Boolean(sessionRecoveryMessage) || giftBlockedByStatus;
   const createGiftDisabledReason = useMemo(() => {
     if (sessionRecoveryMessage) {
       return sessionRecoveryMessage;
@@ -159,11 +153,8 @@ export function OrderActions({
     if (giftLoading) {
       return 'Gift action in progress.';
     }
-    if (!parentAccessToken) {
-      return 'Parent session missing. Restore it before creating a gift link.';
-    }
     return null;
-  }, [giftBlockedStatusReason, giftLoading, parentAccessToken, sessionRecoveryMessage]);
+  }, [giftBlockedStatusReason, giftLoading, sessionRecoveryMessage]);
   const giftPendingLabel = useMemo(() => {
     if (!giftLoading) {
       return null;
@@ -201,13 +192,9 @@ export function OrderActions({
     try {
       const response = await fetch(`${apiBase}/orders/${orderId}/retry`, {
         method: 'POST',
+        credentials: 'include',
         headers: {
-          'Content-Type': 'application/json',
-          ...(parentAccessToken
-            ? {
-                Authorization: `Bearer ${parentAccessToken}`
-              }
-            : {})
+          'Content-Type': 'application/json'
         },
         body: JSON.stringify({
           reason: retryReason.trim().length > 0 ? retryReason.trim() : undefined
@@ -268,13 +255,9 @@ export function OrderActions({
     try {
       const response = await fetch(`${apiBase}/orders/${orderId}/gift-link`, {
         method: 'POST',
+        credentials: 'include',
         headers: {
-          'Content-Type': 'application/json',
-          ...(parentAccessToken
-            ? {
-                Authorization: `Bearer ${parentAccessToken}`
-              }
-            : {})
+          'Content-Type': 'application/json'
         },
         body: JSON.stringify({
           recipientEmail: recipientEmail.trim(),
@@ -327,11 +310,7 @@ export function OrderActions({
     try {
       const response = await fetch(`${apiBase}/orders/${orderId}/gift-link/revoke`, {
         method: 'POST',
-        headers: parentAccessToken
-          ? {
-              Authorization: `Bearer ${parentAccessToken}`
-            }
-          : undefined
+        credentials: 'include'
       });
       const data = await parseResponse(response);
       if (response.status === 401) {
@@ -367,11 +346,7 @@ export function OrderActions({
     try {
       const response = await fetch(`${apiBase}/orders/${orderId}/gift-link/resend`, {
         method: 'POST',
-        headers: parentAccessToken
-          ? {
-              Authorization: `Bearer ${parentAccessToken}`
-            }
-          : undefined
+        credentials: 'include'
       });
       const data = await parseResponse(response);
       if (response.status === 401) {

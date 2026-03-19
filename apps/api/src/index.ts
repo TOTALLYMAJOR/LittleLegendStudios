@@ -4,7 +4,7 @@ import cors from '@fastify/cors';
 import { assertOrderTransition, type OrderStatus, type SceneRenderSpec, type ScriptPayload, type ThemeManifest } from '@little/shared';
 import { AGE_GROUPS, PARENT_APPROVAL_REASONS, PARENT_APPROVAL_STATUSES } from '@little/shared/child-director';
 import fastifyRawBody from 'fastify-raw-body';
-import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import type Stripe from 'stripe';
 import { z } from 'zod';
 
@@ -607,18 +607,36 @@ function readCookieToken(cookieHeader: string | string[] | undefined, cookieName
   return null;
 }
 
-function extractParentAccessToken(request: FastifyRequest): string | null {
+type ParentAccessTokenSource = 'bearer' | 'cookie' | 'none';
+
+function extractParentAccessTokenWithSource(request: FastifyRequest): {
+  token: string | null;
+  source: ParentAccessTokenSource;
+} {
   const bearerToken = parseBearerToken(request.headers.authorization);
   if (bearerToken) {
-    return bearerToken;
+    return {
+      token: bearerToken,
+      source: 'bearer'
+    };
   }
 
-  const headerToken = request.headers['x-parent-access-token'];
-  if (typeof headerToken === 'string' && headerToken.trim().length > 0) {
-    return headerToken.trim();
+  const cookieToken = readCookieToken(request.headers.cookie, 'parent_access_token');
+  if (cookieToken) {
+    return {
+      token: cookieToken,
+      source: 'cookie'
+    };
   }
 
-  return readCookieToken(request.headers.cookie, 'parent_access_token');
+  return {
+    token: null,
+    source: 'none'
+  };
+}
+
+function extractParentAccessToken(request: FastifyRequest): string | null {
+  return extractParentAccessTokenWithSource(request).token;
 }
 
 function extractIdempotencyKey(request: FastifyRequest, fallbackKey: string): string {
@@ -2176,11 +2194,60 @@ function heartbeatAgeSec(lastHeartbeatAt: string): number | null {
   return Math.max(0, Math.round((Date.now() - timestamp) / 1000));
 }
 
+function toOrigin(value: string): string {
+  return new URL(value).origin;
+}
+
+function resolveCorsAllowedOrigins(): Set<string> {
+  const allowedOrigins = new Set<string>([toOrigin(env.WEB_APP_BASE_URL)]);
+  const configuredOrigins = env.CORS_ALLOWED_ORIGINS;
+  if (!configuredOrigins) {
+    return allowedOrigins;
+  }
+
+  for (const rawOrigin of configuredOrigins.split(',')) {
+    const candidate = rawOrigin.trim();
+    if (!candidate) {
+      continue;
+    }
+
+    try {
+      allowedOrigins.add(toOrigin(candidate));
+    } catch {
+      throw new Error(`Invalid CORS_ALLOWED_ORIGINS entry: ${candidate}`);
+    }
+  }
+
+  return allowedOrigins;
+}
+
+function isCorsOriginAllowed(origin: string | undefined, allowedOrigins: ReadonlySet<string>): boolean {
+  if (!origin) {
+    return true;
+  }
+
+  try {
+    return allowedOrigins.has(toOrigin(origin));
+  } catch {
+    return false;
+  }
+}
+
 async function buildServer(): Promise<FastifyInstance> {
   const app = Fastify({ logger: true });
+  const corsAllowedOrigins = resolveCorsAllowedOrigins();
+
+  app.log.info(
+    {
+      corsAllowedOrigins: Array.from(corsAllowedOrigins)
+    },
+    'Configured CORS origin allowlist for credentialed browser requests.'
+  );
 
   await app.register(cors, {
-    origin: true,
+    origin: (origin, callback) => {
+      callback(null, isCorsOriginAllowed(origin, corsAllowedOrigins));
+    },
     credentials: true
   });
   await app.register(fastifyRawBody, {
@@ -2190,6 +2257,30 @@ async function buildServer(): Promise<FastifyInstance> {
     runFirst: true,
     routes: ['/payments/stripe/webhook']
   });
+
+  function requireParentMutationCsrf(request: FastifyRequest, reply: FastifyReply): boolean {
+    if (request.method.toUpperCase() === 'GET') {
+      return true;
+    }
+
+    const tokenContext = extractParentAccessTokenWithSource(request);
+    if (tokenContext.source !== 'cookie') {
+      return true;
+    }
+
+    const origin = readHeaderToken(request.headers.origin);
+    if (!origin) {
+      reply.status(403).send({ message: 'Missing Origin header for cookie-authenticated parent mutation request.' });
+      return false;
+    }
+
+    if (!isCorsOriginAllowed(origin, corsAllowedOrigins)) {
+      reply.status(403).send({ message: 'Origin is not allowed for cookie-authenticated parent mutation request.' });
+      return false;
+    }
+
+    return true;
+  }
 
   await seedThemes();
   await runOrderDataRetentionSweep(app.log);
@@ -2384,6 +2475,10 @@ async function buildServer(): Promise<FastifyInstance> {
   });
 
   app.post('/orders/:orderId/consent', async (request, reply) => {
+    if (!requireParentMutationCsrf(request, reply)) {
+      return;
+    }
+
     const params = z.object({ orderId: z.string().uuid() }).parse(request.params);
     const payload = consentSchema.parse(request.body);
 
@@ -2522,6 +2617,10 @@ async function buildServer(): Promise<FastifyInstance> {
   });
 
   app.post('/orders', async (request, reply) => {
+    if (!requireParentMutationCsrf(request, reply)) {
+      return;
+    }
+
     const payload = createOrderSchema.parse(request.body);
 
     const hasUserAccess = await assertParentOwnsUserId(request, payload.userId);
@@ -2551,6 +2650,10 @@ async function buildServer(): Promise<FastifyInstance> {
   });
 
   app.post('/orders/:orderId/uploads/sign', async (request, reply) => {
+    if (!requireParentMutationCsrf(request, reply)) {
+      return;
+    }
+
     const params = z.object({ orderId: z.string().uuid() }).parse(request.params);
     const payload = uploadSignSchema.parse(request.body);
 
@@ -2619,6 +2722,10 @@ async function buildServer(): Promise<FastifyInstance> {
   });
 
   app.post('/orders/:orderId/script/generate', async (request, reply) => {
+    if (!requireParentMutationCsrf(request, reply)) {
+      return;
+    }
+
     const params = z.object({ orderId: z.string().uuid() }).parse(request.params);
     const payload = generateScriptSchema.parse(request.body);
 
@@ -2708,6 +2815,10 @@ async function buildServer(): Promise<FastifyInstance> {
   });
 
   app.post('/orders/:orderId/script/approve', async (request, reply) => {
+    if (!requireParentMutationCsrf(request, reply)) {
+      return;
+    }
+
     const params = z.object({ orderId: z.string().uuid() }).parse(request.params);
     const payload = approveScriptSchema.parse(request.body);
 
@@ -2755,6 +2866,10 @@ async function buildServer(): Promise<FastifyInstance> {
   });
 
   app.post('/orders/:orderId/pay', async (request, reply) => {
+    if (!requireParentMutationCsrf(request, reply)) {
+      return;
+    }
+
     const params = z.object({ orderId: z.string().uuid() }).parse(request.params);
 
     const order = await getOrder(params.orderId);
@@ -2879,6 +2994,10 @@ async function buildServer(): Promise<FastifyInstance> {
   });
 
   app.post('/orders/:orderId/retry', async (request, reply) => {
+    if (!requireParentMutationCsrf(request, reply)) {
+      return;
+    }
+
     const params = z.object({ orderId: z.string().uuid() }).parse(request.params);
     const payload = parentRetrySchema.parse(request.body ?? {});
 
@@ -3843,6 +3962,10 @@ async function buildServer(): Promise<FastifyInstance> {
   });
 
   app.post('/orders/:orderId/gift-link', async (request, reply) => {
+    if (!requireParentMutationCsrf(request, reply)) {
+      return;
+    }
+
     const params = z.object({ orderId: z.string().uuid() }).parse(request.params);
     const payload = giftLinkCreateSchema.parse(request.body ?? {});
 
@@ -3947,6 +4070,10 @@ async function buildServer(): Promise<FastifyInstance> {
   });
 
   app.post('/orders/:orderId/gift-link/resend', async (request, reply) => {
+    if (!requireParentMutationCsrf(request, reply)) {
+      return;
+    }
+
     const params = z.object({ orderId: z.string().uuid() }).parse(request.params);
 
     const order = await getOrder(params.orderId);
@@ -4002,6 +4129,10 @@ async function buildServer(): Promise<FastifyInstance> {
   });
 
   app.post('/orders/:orderId/gift-link/revoke', async (request, reply) => {
+    if (!requireParentMutationCsrf(request, reply)) {
+      return;
+    }
+
     const params = z.object({ orderId: z.string().uuid() }).parse(request.params);
 
     const order = await getOrder(params.orderId);
@@ -4373,6 +4504,10 @@ async function buildServer(): Promise<FastifyInstance> {
   });
 
   app.post('/orders/:orderId/delete-data', async (request, reply) => {
+    if (!requireParentMutationCsrf(request, reply)) {
+      return;
+    }
+
     const params = z.object({ orderId: z.string().uuid() }).parse(request.params);
 
     const order = await getOrder(params.orderId);

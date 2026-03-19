@@ -696,7 +696,6 @@ export default async function OrderStatusPage({ params }: StatusPageProps): Prom
         orderStatus={data.order.status}
         parentRetryPolicy={data.parentRetryPolicy}
         latestGiftLink={data.latestGiftLink}
-        parentAccessToken={parentAccessToken}
         recoveryHref={recoveryHref}
       />
 

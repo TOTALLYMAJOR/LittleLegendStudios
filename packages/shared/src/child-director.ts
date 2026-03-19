@@ -139,27 +139,27 @@ const explorerStoryChoiceSeed: StoryChoiceCard[] = [
   {
     id: 'opening-scene',
     title: 'Opening Scene',
-    detail: 'Pick how the adventure starts: launch pad, forest gate, or coral tunnel.'
+    detail: 'Pick the first image-puzzle frame: launch pad, forest gate, or coral tunnel.'
   },
   {
     id: 'helper-character',
     title: 'Helpful Friend',
-    detail: 'Choose a guide character to join the journey for one big moment.'
+    detail: 'Choose a guide character scene so the movie has a trusted teammate.'
   },
   {
     id: 'twist-moment',
     title: 'Twist Moment',
-    detail: 'Insert one surprise challenge that changes the plan.'
+    detail: 'Insert a surprise challenge scene that changes the mission plan.'
   },
   {
     id: 'team-choice',
     title: 'Team Choice',
-    detail: 'Decide what the team does together to solve the challenge.'
+    detail: 'Decide what the team does together in the next puzzle frame.'
   },
   {
     id: 'ending-beat',
     title: 'Ending Beat',
-    detail: 'Choose the final celebration scene for the story ending.'
+    detail: 'Choose the final celebration scene for the movie ending.'
   }
 ];
 

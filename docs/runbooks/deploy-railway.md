@@ -19,6 +19,7 @@ Use Railway for API and worker surfaces.
   - `REDIS_URL`
   - `WEB_APP_BASE_URL`
   - `NEXT_PUBLIC_API_BASE_URL`
+  - optional: `CORS_ALLOWED_ORIGINS` (comma-separated browser origins allowed for credentialed CORS; `WEB_APP_BASE_URL` origin is always allowed)
   - `PUBLIC_ASSET_BASE_URL`
   - `ASSET_SIGNING_SECRET`
   - `PARENT_AUTH_SECRET`
@@ -30,6 +31,7 @@ Use Railway for API and worker surfaces.
   - `PUBLIC_ASSET_BASE_URL`
   - `ASSET_SIGNING_SECRET`
   - optional: `WORKER_HEARTBEAT_INTERVAL_MS` (default `15000`)
+  - optional: `AUTO_REFUND_ON_FAILURE` (`false` keeps failed renders triageable/retryable; set `true` for automatic refund on hard failure)
   - provider-mode + provider-secret envs for the active integration mode
 
 ## Post-deploy checks

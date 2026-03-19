@@ -21,8 +21,8 @@ export default function ChildDirectorCreatePage(): JSX.Element {
       <section className="card">
         <h1>Child Director Prototype</h1>
         <p>
-          Explorer mode vertical slice for ages 6-8. This route is feature-gated and additive so the parent create flow stays
-          unchanged.
+          Explorer mode vertical slice for ages 6-8. Kids can puzzle together multiple movie scenes on a film-strip board while
+          this route stays feature-gated and additive to the parent create flow.
         </p>
         <p>
           Active mode: <strong>{explorerConfig.ageGroup}</strong> | complexity <strong>{explorerConfig.complexityLevel}</strong>

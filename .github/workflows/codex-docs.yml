@@ -7,6 +7,13 @@ on:
       - "apps/**"
       - "packages/**"
       - "docs/**"
+      - "README.md"
+      - "TASKS.md"
+      - "AGENTS.md"
+      - "scripts/check-docs-sync.mjs"
+      - ".github/workflows/agent-*.yml"
+      - ".github/workflows/pr-body-contract.yml"
+      - ".github/workflows/ci.yml"
   workflow_dispatch:
 
 jobs:
@@ -28,6 +35,7 @@ jobs:
             Focus on:
             - missing docs updates for behavior changes
             - missing runbook or env var updates
+            - duplication that violates docs source-of-truth ownership
             - rollout and rollback clarity
             Output actionable file-level recommendations with severity.
         env:

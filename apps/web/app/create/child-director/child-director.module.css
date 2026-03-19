@@ -152,26 +152,31 @@
 }
 
 .scenePuzzlePiece {
-  display: flex;
-  align-items: flex-end;
-  justify-content: center;
-  min-height: 56px;
+  display: grid;
+  gap: 0.2rem;
+  min-height: 84px;
   border: 1px solid rgba(255, 255, 255, 0.16);
   border-radius: 9px;
-  padding: 0.28rem 0.22rem;
+  padding: 0.24rem;
   background:
     radial-gradient(circle at 22% 26%, rgba(255, 255, 255, 0.3), transparent 45%),
     linear-gradient(170deg, rgba(17, 24, 32, 0.72), rgba(14, 19, 31, 0.9));
 }
 
-.scenePuzzlePiece span {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+.scenePuzzleImage {
+  display: block;
   width: 100%;
+  min-height: 56px;
   border-radius: 7px;
-  padding: 0.18rem 0.25rem;
-  background: rgba(4, 8, 12, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  object-fit: cover;
+}
+
+.scenePuzzleLabel {
+  display: block;
+  border-radius: 7px;
+  padding: 0.15rem 0.23rem;
+  background: rgba(4, 8, 12, 0.62);
   text-align: center;
   font-size: 0.66rem;
   line-height: 1.25;

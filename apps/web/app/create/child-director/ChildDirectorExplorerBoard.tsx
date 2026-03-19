@@ -25,12 +25,39 @@ import {
 
 const dragDataKey = 'application/x-little-story-choice-id';
 
-const scenePuzzlePiecesByChoiceId: Record<string, readonly string[]> = {
-  'opening-scene': ['Launch Pad', 'Spark Sky', 'Hero Wave'],
-  'helper-character': ['Guide Friend', 'Signal Star', 'Map Light'],
-  'twist-moment': ['Storm Cloud', 'Lost Key', 'Fast Choice'],
-  'team-choice': ['Puzzle Door', 'Team Stack', 'Bridge Jump'],
-  'ending-beat': ['Confetti', 'Victory Hug', 'Final Frame']
+interface ScenePuzzlePiece {
+  title: string;
+  subtitle: string;
+  gradientStart: string;
+  gradientEnd: string;
+}
+
+const scenePuzzlePiecesByChoiceId: Record<string, readonly ScenePuzzlePiece[]> = {
+  'opening-scene': [
+    { title: 'Launch Pad', subtitle: 'Countdown Spark', gradientStart: '#f5b04a', gradientEnd: '#2b4f87' },
+    { title: 'Spark Sky', subtitle: 'Cloud Trail', gradientStart: '#79c4ff', gradientEnd: '#4b3f88' },
+    { title: 'Hero Wave', subtitle: 'Crowd Cheer', gradientStart: '#ff907f', gradientEnd: '#5a3e80' }
+  ],
+  'helper-character': [
+    { title: 'Guide Friend', subtitle: 'Meetup Moment', gradientStart: '#6ec1a9', gradientEnd: '#2f5d85' },
+    { title: 'Signal Star', subtitle: 'Sky Clue', gradientStart: '#8fd7ff', gradientEnd: '#4361a8' },
+    { title: 'Map Light', subtitle: 'Path Reveal', gradientStart: '#ffd57d', gradientEnd: '#4d5e92' }
+  ],
+  'twist-moment': [
+    { title: 'Storm Cloud', subtitle: 'Fast Shift', gradientStart: '#8fa8db', gradientEnd: '#3f436f' },
+    { title: 'Lost Key', subtitle: 'Puzzle Alert', gradientStart: '#f2a2a8', gradientEnd: '#563f79' },
+    { title: 'Fast Choice', subtitle: 'Quick Plan', gradientStart: '#82d8c6', gradientEnd: '#305b8c' }
+  ],
+  'team-choice': [
+    { title: 'Puzzle Door', subtitle: 'Group Move', gradientStart: '#9bc8ff', gradientEnd: '#3b4b9a' },
+    { title: 'Team Stack', subtitle: 'Build Bridge', gradientStart: '#ffd27a', gradientEnd: '#4a5b93' },
+    { title: 'Bridge Jump', subtitle: 'Safe Landing', gradientStart: '#ff9a9a', gradientEnd: '#654290' }
+  ],
+  'ending-beat': [
+    { title: 'Confetti', subtitle: 'Finale Burst', gradientStart: '#ffd57e', gradientEnd: '#6d4fa0' },
+    { title: 'Victory Hug', subtitle: 'Happy Close', gradientStart: '#8fdbd1', gradientEnd: '#356093' },
+    { title: 'Final Frame', subtitle: 'Movie Wrap', gradientStart: '#9fc3ff', gradientEnd: '#4f4c95' }
+  ]
 };
 
 function readDraggedChoiceId(event: DragEvent<HTMLElement>): string | null {
@@ -43,13 +70,64 @@ function readDraggedChoiceId(event: DragEvent<HTMLElement>): string | null {
   return fallbackValue || null;
 }
 
-function resolveScenePuzzlePieces(choice: StoryChoiceCard): string[] {
+function escapeSvgText(value: string): string {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function createScenePuzzleImageDataUri(piece: ScenePuzzlePiece, sceneIndex: number, pieceIndex: number): string {
+  const sceneLabel = `Scene ${String(sceneIndex + 1)}`;
+  const frameLabel = `Frame ${String(pieceIndex + 1)}`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 280 180">
+<defs>
+<linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+<stop offset="0%" stop-color="${piece.gradientStart}"/>
+<stop offset="100%" stop-color="${piece.gradientEnd}"/>
+</linearGradient>
+</defs>
+<rect width="280" height="180" rx="12" fill="url(#bg)"/>
+<rect x="10" y="10" width="260" height="160" rx="9" fill="rgba(6,12,22,0.26)" stroke="rgba(255,255,255,0.38)"/>
+<circle cx="228" cy="45" r="24" fill="rgba(255,255,255,0.2)"/>
+<path d="M30 135 C85 92, 146 150, 234 102 L250 156 L30 156 Z" fill="rgba(16,24,35,0.45)"/>
+<text x="22" y="34" fill="rgba(255,255,255,0.9)" font-size="16" font-family="Arial, sans-serif">${escapeSvgText(sceneLabel)}</text>
+<text x="22" y="58" fill="rgba(255,255,255,0.9)" font-size="14" font-family="Arial, sans-serif">${escapeSvgText(frameLabel)}</text>
+<text x="22" y="134" fill="rgba(255,255,255,0.96)" font-size="20" font-family="Arial, sans-serif">${escapeSvgText(piece.title)}</text>
+<text x="22" y="156" fill="rgba(235,244,255,0.95)" font-size="13" font-family="Arial, sans-serif">${escapeSvgText(piece.subtitle)}</text>
+</svg>`;
+
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+}
+
+function resolveScenePuzzlePieces(choice: StoryChoiceCard): ScenePuzzlePiece[] {
   const pieces = scenePuzzlePiecesByChoiceId[choice.id];
   if (pieces && pieces.length > 0) {
     return [...pieces];
   }
 
-  return [choice.title, 'Camera Move', 'Final Cut'];
+  return [
+    {
+      title: choice.title,
+      subtitle: 'Camera Move',
+      gradientStart: '#9fc1ff',
+      gradientEnd: '#4d4f8f'
+    },
+    {
+      title: 'Action Beat',
+      subtitle: 'Hero Motion',
+      gradientStart: '#ffd488',
+      gradientEnd: '#4f6397'
+    },
+    {
+      title: 'Final Cut',
+      subtitle: 'Story Wrap',
+      gradientStart: '#8fdccc',
+      gradientEnd: '#3d5d95'
+    }
+  ];
 }
 
 interface ChildDirectorExplorerBoardProps {
@@ -315,7 +393,15 @@ export function ChildDirectorExplorerBoard({ release2Enabled = false }: ChildDir
               <div className={`${styles.scenePreview} ${toneClass}`} aria-hidden="true">
                 {scenePuzzlePieces.map((piece, pieceIndex) => (
                   <span key={`${choice.id}-piece-${String(pieceIndex + 1)}`} className={styles.scenePuzzlePiece}>
-                    <span>{piece}</span>
+                    <img
+                      className={styles.scenePuzzleImage}
+                      src={createScenePuzzleImageDataUri(piece, index, pieceIndex)}
+                      alt={`${piece.title} puzzle frame`}
+                      loading="lazy"
+                    />
+                    <span className={styles.scenePuzzleLabel}>
+                      {piece.title} - {piece.subtitle}
+                    </span>
                   </span>
                 ))}
               </div>

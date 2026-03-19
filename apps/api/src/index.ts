@@ -377,7 +377,7 @@ const MIN_PHOTO_UPLOADS = 5;
 const MAX_PHOTO_UPLOADS = 15;
 const REQUIRED_VOICE_UPLOADS = 1;
 const MAX_SCRIPT_VERSIONS_PER_ORDER = 3;
-const parentRetryableStatuses: OrderStatus[] = ['paid', 'failed_soft', 'failed_hard', 'manual_review'];
+const parentRetryableStatuses: OrderStatus[] = ['paid', 'running', 'failed_soft', 'failed_hard', 'manual_review'];
 const postPaymentStatuses = new Set<OrderStatus>([
   'paid',
   'running',
@@ -2166,6 +2166,19 @@ async function buildParentRetryPolicy(order: OrderRow): Promise<{
     };
   }
 
+  if (order.status === 'running') {
+    const hasFreshWorker = await hasFreshWorkerHeartbeat();
+    if (hasFreshWorker) {
+      return {
+        limit: env.PARENT_MAX_RETRY_REQUESTS,
+        used,
+        remaining,
+        canRetry: false,
+        reason: 'Render appears actively processing. Retry unlocks only when worker heartbeat is stale/offline.'
+      };
+    }
+  }
+
   if (remaining <= 0) {
     return {
       limit: env.PARENT_MAX_RETRY_REQUESTS,
@@ -2192,6 +2205,26 @@ function heartbeatAgeSec(lastHeartbeatAt: string): number | null {
   }
 
   return Math.max(0, Math.round((Date.now() - timestamp) / 1000));
+}
+
+async function hasFreshWorkerHeartbeat(): Promise<boolean> {
+  const rows = await query<Pick<WorkerHeartbeatRow, 'status' | 'last_heartbeat_at'>>(
+    `
+    SELECT status, last_heartbeat_at
+    FROM worker_heartbeats
+    ORDER BY last_heartbeat_at DESC
+    LIMIT 20
+    `
+  );
+
+  return rows.some((row) => {
+    const ageSec = heartbeatAgeSec(row.last_heartbeat_at);
+    if (ageSec === null || ageSec > env.WORKER_HEARTBEAT_STALE_SEC) {
+      return false;
+    }
+
+    return row.status === 'processing' || row.status === 'idle';
+  });
 }
 
 function toOrigin(value: string): string {
@@ -3039,6 +3072,20 @@ async function buildServer(): Promise<FastifyInstance> {
       });
     }
 
+    if (order.status === 'running' && (await hasFreshWorkerHeartbeat())) {
+      await recordRetryRequest({
+        orderId: params.orderId,
+        actor: 'parent',
+        requestedStatus: order.status,
+        accepted: false,
+        reason: payload.reason
+      });
+
+      return reply.status(409).send({
+        message: 'Order is actively rendering. Retry is available when worker heartbeat is stale/offline.'
+      });
+    }
+
     const parentRetryUsed = await getParentRetryUsage(params.orderId);
     if (parentRetryUsed >= env.PARENT_MAX_RETRY_REQUESTS) {
       await recordRetryRequest({
@@ -3057,7 +3104,7 @@ async function buildServer(): Promise<FastifyInstance> {
     }
 
     let updatedOrder = order;
-    if (order.status === 'failed_hard' || order.status === 'manual_review') {
+    if (order.status === 'running' || order.status === 'failed_hard' || order.status === 'manual_review') {
       updatedOrder = await setOrderStatus(params.orderId, 'failed_soft');
     }
 
@@ -3134,8 +3181,22 @@ async function buildServer(): Promise<FastifyInstance> {
       });
     }
 
+    if (order.status === 'running' && (await hasFreshWorkerHeartbeat())) {
+      await recordRetryRequest({
+        orderId: params.orderId,
+        actor: 'admin',
+        requestedStatus: order.status,
+        accepted: false,
+        reason: payload.reason
+      });
+
+      return reply.status(409).send({
+        message: 'Order is actively rendering. Retry is available when worker heartbeat is stale/offline.'
+      });
+    }
+
     let updatedOrder = order;
-    if (order.status === 'failed_hard' || order.status === 'manual_review') {
+    if (order.status === 'running' || order.status === 'failed_hard' || order.status === 'manual_review') {
       updatedOrder = await setOrderStatus(params.orderId, 'failed_soft');
     }
 

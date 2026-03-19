@@ -268,7 +268,7 @@ function resolveNextAction(args: {
 
     return {
       title: 'Worker Service Needs Attention',
-      detail: `${workerHealth.message ?? 'No fresh worker heartbeat detected.'} Rendering will not progress until the worker service is running with DATABASE_URL and REDIS_URL configured.${timingHint ? ` ${timingHint}` : ''}`,
+      detail: `${workerHealth.message ?? 'No fresh worker heartbeat detected.'} Rendering will not progress until the worker service is running with DATABASE_URL and REDIS_URL configured.${timingHint ? ` ${timingHint}` : ''} If this order remains stuck, use Parent Retry below to requeue it.`,
       ctaHref: null,
       ctaLabel: null
     };

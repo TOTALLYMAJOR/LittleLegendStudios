@@ -156,7 +156,7 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
   - structured moderation report visibility (decision, checks, score bands, reasons)
   - parent-facing retry endpoint with limits
   - parent retry now also supports `paid` orders so queued-but-not-started renders can be requeued without admin intervention
-  - parent/admin retry now also supports stale `running` orders (blocked when worker heartbeat is still fresh) so genuinely stuck renders have a supported requeue path
+  - parent/admin retry now also supports stale `running` orders (blocked only when a fresh `processing` worker heartbeat is present) so genuinely stuck renders have a supported requeue path
   - gift link create, inspect, redeem, resend, revoke, regenerate
 
 - [x] Admin + support tooling

@@ -2167,14 +2167,14 @@ async function buildParentRetryPolicy(order: OrderRow): Promise<{
   }
 
   if (order.status === 'running') {
-    const hasFreshWorker = await hasFreshWorkerHeartbeat();
+    const hasFreshWorker = await hasFreshProcessingWorkerHeartbeat();
     if (hasFreshWorker) {
       return {
         limit: env.PARENT_MAX_RETRY_REQUESTS,
         used,
         remaining,
         canRetry: false,
-        reason: 'Render appears actively processing. Retry unlocks only when worker heartbeat is stale/offline.'
+        reason: 'Render appears actively processing. Retry unlocks when no fresh processing worker heartbeat is detected.'
       };
     }
   }
@@ -2207,7 +2207,7 @@ function heartbeatAgeSec(lastHeartbeatAt: string): number | null {
   return Math.max(0, Math.round((Date.now() - timestamp) / 1000));
 }
 
-async function hasFreshWorkerHeartbeat(): Promise<boolean> {
+async function hasFreshProcessingWorkerHeartbeat(): Promise<boolean> {
   const rows = await query<Pick<WorkerHeartbeatRow, 'status' | 'last_heartbeat_at'>>(
     `
     SELECT status, last_heartbeat_at
@@ -2223,7 +2223,7 @@ async function hasFreshWorkerHeartbeat(): Promise<boolean> {
       return false;
     }
 
-    return row.status === 'processing' || row.status === 'idle';
+    return row.status === 'processing';
   });
 }
 
@@ -3072,7 +3072,7 @@ async function buildServer(): Promise<FastifyInstance> {
       });
     }
 
-    if (order.status === 'running' && (await hasFreshWorkerHeartbeat())) {
+    if (order.status === 'running' && (await hasFreshProcessingWorkerHeartbeat())) {
       await recordRetryRequest({
         orderId: params.orderId,
         actor: 'parent',
@@ -3082,7 +3082,7 @@ async function buildServer(): Promise<FastifyInstance> {
       });
 
       return reply.status(409).send({
-        message: 'Order is actively rendering. Retry is available when worker heartbeat is stale/offline.'
+        message: 'Order is actively rendering. Retry is available when no fresh processing worker heartbeat is detected.'
       });
     }
 
@@ -3181,7 +3181,7 @@ async function buildServer(): Promise<FastifyInstance> {
       });
     }
 
-    if (order.status === 'running' && (await hasFreshWorkerHeartbeat())) {
+    if (order.status === 'running' && (await hasFreshProcessingWorkerHeartbeat())) {
       await recordRetryRequest({
         orderId: params.orderId,
         actor: 'admin',
@@ -3191,7 +3191,7 @@ async function buildServer(): Promise<FastifyInstance> {
       });
 
       return reply.status(409).send({
-        message: 'Order is actively rendering. Retry is available when worker heartbeat is stale/offline.'
+        message: 'Order is actively rendering. Retry is available when no fresh processing worker heartbeat is detected.'
       });
     }
 

@@ -164,7 +164,7 @@ Recommended Railway service setup:
   - start command: `npm run start:api`
   - pre-deploy command: `npm run migrate:api`
 - Worker service
-  - r   epo root: `/`
+  - repo root: `/`
   - build command: `npm run build:worker`
   - start command: `npm run start:worker`
   - no pre-deploy command
@@ -200,7 +200,8 @@ Port behavior:
 
 Operational notes:
 - `GET /health` is available for API health checks
-- `GET /health/worker` returns worker heartbeat readiness (returns `503` when no fresh worker heartbeat exists)
+- `GET /health/worker` returns worker heartbeat readiness (returns `503` when no fresh worker heartbeat exists) and includes `processingWorkers` for live render activity visibility
+- parent/admin retry for `running` orders stays blocked only while a fresh `processing` worker heartbeat is present
 - Railway pre-deploy commands run in a separate container, so use them for migrations only
 - keep `PROVIDER_INTEGRATION_MODE=stub` (and worker provider modes `stub`) for initial UI/staging deploys unless real providers are configured
 - if the web app is already live, run one deployed full order (`create -> upload -> approve -> pay -> render -> deliver`) to confirm finished-video output before calling deployment production-ready

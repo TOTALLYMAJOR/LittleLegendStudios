@@ -164,7 +164,7 @@ Recommended Railway service setup:
   - start command: `npm run start:api`
   - pre-deploy command: `npm run migrate:api`
 - Worker service
-  - repo root: `/`
+  - r   epo root: `/`
   - build command: `npm run build:worker`
   - start command: `npm run start:worker`
   - no pre-deploy command

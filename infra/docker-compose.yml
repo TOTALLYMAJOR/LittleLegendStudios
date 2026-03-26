@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:16
+    image: ${POSTGRES_IMAGE:-postgres:16}
     container_name: little-legend-postgres
     environment:
       POSTGRES_DB: little_legend
@@ -18,7 +18,7 @@ services:
       - postgres_data:/var/lib/postgresql/data
 
   redis:
-    image: redis:7
+    image: ${REDIS_IMAGE:-redis:7}
     container_name: little-legend-redis
     ports:
       - "6379:6379"

@@ -31,7 +31,8 @@
     "agents:dry-run": "bash ./scripts/agents/run.sh --mode=dry-run --section=\"Architecture And Scale Hardening Backlog (2026-03-14)\" --batch-size=2 --write-runbook=true",
     "agents:resume": "bash ./scripts/agents/run.sh --mode=resume --profile=reliability --max-parallel=2 --automerge=true",
     "changed-files": "bash ./scripts/changed-files.sh",
-    "deploy:summary": "bash ./scripts/deploy-summary.sh"
+    "deploy:summary": "bash ./scripts/deploy-summary.sh",
+    "docker:push:apps": "bash ./scripts/docker/push-images.sh"
   },
   "devDependencies": {
     "concurrently": "^9.2.1",

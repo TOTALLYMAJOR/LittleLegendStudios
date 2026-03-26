@@ -4,7 +4,7 @@ This file is the canonical technology inventory for the repo.
 
 If a session introduces, replaces, or removes meaningful technology, update this file in the same change.
 
-Last reviewed: 2026-03-10
+Last reviewed: 2026-03-26
 
 ## Core Platform
 
@@ -37,6 +37,7 @@ Last reviewed: 2026-03-10
 
 - Web deployment target: Vercel
 - API deployment target: Railway
+- Optional container packaging + registry publish: Dockerfiles (`apps/web`, `apps/api`, `apps/worker`) with `npm run docker:push:apps`
 - CI: GitHub Actions
 - Local happy-path verification: `npm run smoke`
 

@@ -343,6 +343,14 @@ This section is the fastest way for a new Codex 5.3 session to get oriented with
   - API parent auth extractor now supports `Authorization: Bearer` and `parent_access_token` cookie only (`x-parent-access-token` removed)
   - parent-owned mutation routes (`orders`, uploads/sign, script generate/approve, pay/retry, gift-link create/resend/revoke, consent, delete-data) now reject cookie-authenticated requests with missing or non-allowlisted `Origin`
   - smoke automation now auto-attaches a browser-style `Origin` header when replaying cookie-authenticated mutations
+- [x] Added configurable local infra Docker image refs (2026-03-26)
+  - `infra/docker-compose.yml` now supports `POSTGRES_IMAGE` and `REDIS_IMAGE` overrides with default images `postgres:16` and `redis:7`
+  - `.env.example` and `README.md` now document optional custom namespace overrides (for example `dockermajor/postgres:16`)
+- [x] Added app container build/publish workflow (2026-03-26)
+  - added multi-stage Dockerfiles for `apps/api`, `apps/worker`, and `apps/web`
+  - added `.dockerignore` and `scripts/docker/push-images.sh` for one-command registry publishing
+  - added npm script `docker:push:apps` and README guidance for publishing `dockermajor/little-legend-{api,worker,web}`
+  - tech stack updated (`docs/runbooks/tech-stack.md`) to document optional container packaging workflow
 
 ## Child-Director Foundation Slice (2026-03-09)
 

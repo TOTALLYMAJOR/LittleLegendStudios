@@ -18,6 +18,7 @@ For ownership rules and anti-duplication policy across docs, use [docs/runbooks/
 - Worker: BullMQ + Redis (`apps/worker`)
 - Shared domain: TypeScript package (`packages/shared`)
 - Infra dev deps: Postgres + Redis (`infra/docker-compose.yml`)
+- Container packaging: Dockerfiles for `apps/web`, `apps/api`, and `apps/worker` + image publish script `npm run docker:push:apps`
 
 ## Quick Start
 
@@ -40,6 +41,7 @@ Optional flags:
 - `SKIP_INFRA=1 npm run dev:boot`
 - `SKIP_INSTALL=1 npm run dev:boot`
 - `SKIP_MIGRATE=1 npm run dev:boot`
+- `POSTGRES_IMAGE=dockermajor/postgres:16 REDIS_IMAGE=dockermajor/redis:7 npm run dev:boot` (optional image override; defaults remain `postgres:16` and `redis:7`)
 
 If port `3000` is already in use, run the web app on another port:
 - `WEB_PORT=3001 WEB_APP_BASE_URL=http://localhost:3001 npm run dev:boot`
@@ -60,6 +62,10 @@ cp .env.example .env
 ```bash
 docker compose -f infra/docker-compose.yml up -d --remove-orphans
 ```
+
+Compose image refs are configurable via `.env`:
+- `POSTGRES_IMAGE` (default `postgres:16`)
+- `REDIS_IMAGE` (default `redis:7`)
 
 3. Install dependencies:
 
@@ -205,6 +211,24 @@ Operational notes:
 - Railway pre-deploy commands run in a separate container, so use them for migrations only
 - keep `PROVIDER_INTEGRATION_MODE=stub` (and worker provider modes `stub`) for initial UI/staging deploys unless real providers are configured
 - if the web app is already live, run one deployed full order (`create -> upload -> approve -> pay -> render -> deliver`) to confirm finished-video output before calling deployment production-ready
+
+## Docker Registry Publish (Optional)
+
+If you need app containers in a registry (for example Docker Hub), publish all app images with:
+
+```bash
+DOCKER_REPOSITORY=dockermajor npm run docker:push:apps
+```
+
+What it publishes:
+- `dockermajor/little-legend-api`
+- `dockermajor/little-legend-worker`
+- `dockermajor/little-legend-web`
+
+Notes:
+- tags default to `<timestamp>-<git-sha>` and also push `latest`
+- override tag with `IMAGE_TAG=your-tag`
+- skip `latest` by setting `PUSH_LATEST=0`
 
 ## Built Features
 
